@@ -156,6 +156,16 @@ void DOCTOTEXT_CALL doctotext_extractor_params_set_manage_xml_parser(DocToTextEx
  */
 void DOCTOTEXT_CALL doctotext_extractor_params_set_formatting_style(DocToTextExtractorParams* extractor_params, DocToTextFormattingStyle* formatting_style);
 
+typedef const char* (DOCTOTEXT_CALL *doctotext_image_parser_callback)(const char* image_name, const char* image_buffer, size_t image_size, void* user_data);
+
+/**
+ * @brief Sets image parser callback for OCR or external image parsing.
+ * @param extractor_params - object which holds parameters for data extractor
+ * @param callback - function pointer to doctotext_image_parser_callback
+ * @param user_data - user pointer passed to callback
+ */
+void DOCTOTEXT_CALL doctotext_extractor_params_set_image_parser_callback(DocToTextExtractorParams* extractor_params, doctotext_image_parser_callback callback, void* user_data);
+
 /*-------------------------------------------------------------------------------------------------------------------------*/
 
 typedef struct DocToTextException DocToTextException;

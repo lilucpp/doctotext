@@ -13,6 +13,19 @@ namespace doctotext
 	class Metadata;
 
 	/**
+		Image parser callback function pointer.
+		\param image_name name or path of the image in the archive (e.g. "word/media/image1.png")
+		\param image_buffer pointer to raw image bytes in memory
+		\param image_size size in bytes of image_buffer
+		\param user_data user-provided pointer passed in setImageParserCallback
+		\return Extracted plain text (e.g. OCR text) to be inserted in-place into document text
+	**/
+	typedef std::string (*ImageParserCallback)(const std::string& image_name,
+	                                          const char* image_buffer,
+	                                          size_t image_size,
+	                                          void* user_data);
+
+	/**
 		Extracts plain text from documents. In addition it can be used to extract metadata and comments (annotations).
 		Example of usage (extracting plain text):
 		\code
@@ -103,6 +116,13 @@ namespace doctotext
 			void setFormattingStyle(const FormattingStyle& style);
 
 			void setXmlParseMode(XmlParseMode mode);
+
+			/**
+				Sets external image parser callback (for OCR or metadata extraction from embedded images).
+				\param callback function pointer to ImageParserCallback
+				\param user_data optional context pointer passed to callback
+			**/
+			void setImageParserCallback(ImageParserCallback callback, void* user_data = NULL);
 
 			/**
 				Enables or disables managing libxml2 parser by the object.

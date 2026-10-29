@@ -3,6 +3,9 @@
 
 #include <string>
 
+typedef struct _xmlNode xmlNode;
+typedef xmlNode *xmlNodePtr;
+
 class XmlStream
 {
 	private:
@@ -21,6 +24,7 @@ class XmlStream
 		std::string fullName();
 		std::string stringValue();
 		std::string attribute(const std::string& attr_name);
+		xmlNodePtr expand();
 };
 
 #endif

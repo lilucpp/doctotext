@@ -334,3 +334,12 @@ std::string XmlStream::attribute(const std::string& attr_name)
 	xmlFree(attr);
 	return s;
 }
+
+xmlNodePtr XmlStream::expand()
+{
+	if (!impl || !impl->m_reader)
+		return NULL;
+	if (xmlTextReaderNodeType(impl->m_reader) != 1)
+		return NULL;
+	return xmlTextReaderExpand(impl->m_reader);
+}

@@ -73,6 +73,8 @@ struct PlainTextExtractor::Implementation
 	bool m_manage_xml_parser;
 	std::vector<Link> m_links;
 	std::vector<Attachment> m_attachments;
+	ImageParserCallback m_image_callback;
+	void* m_image_user_data;
 	PlainTextExtractor* m_interf;
 
 	bool isRTF(RTFParser& rtf, bool& error, ParserType& parser_type)
@@ -318,6 +320,8 @@ struct PlainTextExtractor::Implementation
 			odfooxml.setLogStream(*m_log_stream);
 		if (!m_manage_xml_parser)
 			odfooxml.setManageXmlParser(false);
+		if (m_image_callback)
+			odfooxml.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using ODF/OOXML parser.\n";
 		text = odfooxml.plainText(m_xml_parse_mode, m_formatting_style);
 		m_links.clear();
@@ -471,6 +475,8 @@ struct PlainTextExtractor::Implementation
 			odfxml.setLogStream(*m_log_stream);
 		if (!m_manage_xml_parser)
 			odfxml.setManageXmlParser(false);
+		if (m_image_callback)
+			odfxml.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using ODFXML parser.\n";
 		text = odfxml.plainText(m_xml_parse_mode, m_formatting_style);
 		m_links.clear();
@@ -616,11 +622,19 @@ PlainTextExtractor::PlainTextExtractor(ParserType parser_type)
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
 	impl->m_manage_xml_parser = true;
+	impl->m_image_callback = NULL;
+	impl->m_image_user_data = NULL;
 }
 
 PlainTextExtractor::~PlainTextExtractor()
 {
 	delete impl;
+}
+
+void PlainTextExtractor::setImageParserCallback(ImageParserCallback callback, void* user_data)
+{
+	impl->m_image_callback = callback;
+	impl->m_image_user_data = user_data;
 }
 
 void PlainTextExtractor::setVerboseLogging(bool verbose)

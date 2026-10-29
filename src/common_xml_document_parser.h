@@ -3,9 +3,13 @@
 
 #include "formatting_style.h"
 #include "link.h"
+#include "plain_text_extractor.h"
 #include <string>
 #include <vector>
 #include <map>
+
+typedef struct _xmlNode xmlNode;
+typedef xmlNode *xmlNodePtr;
 
 namespace doctotext
 {
@@ -124,6 +128,12 @@ class CommonXMLDocumentParser
 		///Cleans up associated data. Call this method in constructor of derived class in case of bad_alloc.
 		void cleanUp();
 
+		void clearImageRelationships();
+		void addImageRelationship(const std::string& id, const std::string& target);
+		void loadRelationshipsFromXml(const std::string& rels_xml, const std::string& base_dir);
+		const std::map<std::string, std::string>& getImageRelationships() const;
+		void extractContentFromDrawingNode(xmlNodePtr node, const DocToTextUnzip* zipfile, std::string& out_text);
+
 	//public interface
 	public:
 		CommonXMLDocumentParser();
@@ -131,6 +141,9 @@ class CommonXMLDocumentParser
 		void setVerboseLogging(bool verbose);
 		void setLogStream(std::ostream& log_stream);
 		void setManageXmlParser(bool manage);
+		void setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data = NULL);
+		doctotext::ImageParserCallback getImageParserCallback() const;
+		void* getImageParserUserData() const;
 		void getLinks(std::vector<Link>& links);
 		virtual std::string plainText(XmlParseMode mode, FormattingStyle& options) = 0;
 		virtual Metadata metaData() = 0;

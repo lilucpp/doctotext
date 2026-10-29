@@ -295,8 +295,7 @@ bool DocToTextUnzip::read(const std::string& file_name, std::string* contents, i
 		int res;
 		while((res = fread(buffer, sizeof(char), (num_of_chars > 0 && num_of_chars < 1024) ? num_of_chars : 1024, f)) > 0)
 		{
-			buffer[res] = '\0';
-			*contents += buffer;
+			contents->append(buffer, res);
 			if (num_of_chars > 0)
 				if (contents->length() >= num_of_chars)
 				{
@@ -337,8 +336,7 @@ bool DocToTextUnzip::read(const std::string& file_name, std::string* contents, i
 	char buffer[1024 + 1];
 	while((res = unzReadCurrentFile(Impl->ArchiveFile, buffer, (num_of_chars > 0 && num_of_chars < 1024) ? num_of_chars : 1024)) > 0)
 	{
-		buffer[res] = '\0';
-		*contents += buffer;
+		contents->append(buffer, res);
 		if (num_of_chars > 0)
 			if (contents->length() >= num_of_chars)
 			{

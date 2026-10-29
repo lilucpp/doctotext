@@ -1,4 +1,4 @@
-CXXFLAGS = -O2 -I../3rdparty/wv2/include -I../3rdparty/unzip101e -I../3rdparty/htmlcxx/include
+CXXFLAGS = -O2 -std=c++14 -I../3rdparty/wv2/include -I../3rdparty/unzip101e -I../3rdparty/htmlcxx/include
 LDFLAGS = ../3rdparty/unzip101e/ioapi.o ../3rdparty/unzip101e/unzip.o
 
 COMMON_OBJECTS = data_stream.o doc_parser.o entities.o exception.o list_style.o rtf_parser.o odf_ooxml_parser.o html_parser.o iwork_parser.o metadata.o misc.o xml_fixer.o doctotext_unzip.o \
@@ -12,7 +12,7 @@ HEADERS = ../version.h data_stream.h doc_parser.h exception.h html_parser.h iwor
 	xml_fixer.h doctotext_unzip.h pdf_parser.h ppt_parser.h xls_parser.h xlsb_parser.h thread_safe_ole_storage.h thread_safe_ole_stream_reader.h txt_parser.h \
 	attachment.h eml_parser.h variant.h doctotext_c_api.h odfxml_parser.h xml_stream.h common_xml_document_parser.h
 
-CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+# CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
 
 ifneq (,$(filter $(ARCH),win32 win64))
 	ifeq ($(ARCH),win32)
@@ -41,7 +41,7 @@ ifneq (,$(filter $(ARCH),win32 win64))
     SHARED = -shared
 else
     EXEEXT =
-    CXXFLAGS += -I`xcrun --show-sdk-path`/usr/include/libxml2  -I../3rdparty/libcharsetdetect/include -I../3rdparty/mimetic/include
+    CXXFLAGS += $(shell pkg-config libxml-2.0 --cflags 2>/dev/null || echo "-I../3rdparty/libxml2/usr/include -I../3rdparty/libxml2/usr/include/libxml2 -I/usr/include/libxml2") -I../3rdparty/libcharsetdetect/include -I../3rdparty/mimetic/include
     SOPRE = lib
     UNAME = $(shell uname)
     ifeq ($(UNAME),Darwin)
@@ -67,7 +67,11 @@ else
         STRIP = strip
         SOEXT = .so
         SHARED = -shared
-        LDFLAGS += -L../3rdparty/mimetic/lib -lmimetic -L../3rdparty/wv2/lib -lwv2 `pkg-config libxml-2.0 --libs` -lz
+        LDFLAGS += -L../3rdparty/mimetic/lib -lmimetic \
+                   -L../3rdparty/wv2/lib -lwv2 \
+                   -L../3rdparty/htmlcxx/lib -lhtmlcxx \
+                   -L../3rdparty/libcharsetdetect/lib -lcharsetdetect \
+                   -L../3rdparty/libxml2/usr/lib/x86_64-linux-gnu -lxml2 -lz
         ifeq ($(ARCH),x86-linux)
             CXXFLAGS += -m32
             LDFLAGS += -m32

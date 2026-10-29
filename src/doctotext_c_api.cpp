@@ -154,6 +154,23 @@ void DOCTOTEXT_CALL doctotext_formatting_style_set_list_prefix(DocToTextFormatti
 	}
 }
 
+struct CImageCallbackWrapperData {
+	doctotext_image_parser_callback c_callback;
+	void* c_user_data;
+};
+
+static std::string c_image_callback_bridge(const std::string& image_name, const char* image_buffer, size_t image_size, void* user_data)
+{
+	CImageCallbackWrapperData* data = static_cast<CImageCallbackWrapperData*>(user_data);
+	if (data && data->c_callback)
+	{
+		const char* res = data->c_callback(image_name.c_str(), image_buffer, image_size, data->c_user_data);
+		if (res != NULL)
+			return std::string(res);
+	}
+	return "";
+}
+
 struct DocToTextExtractorParams
 {
 	bool m_verbose;
@@ -162,6 +179,9 @@ struct DocToTextExtractorParams
 	PlainTextExtractor::ParserType m_parser_type;
 	int m_manage_xml_parser;
 	FormattingStyle m_formatting_style;
+	doctotext_image_parser_callback m_image_callback;
+	void* m_image_user_data;
+	CImageCallbackWrapperData m_wrapper_data;
 
 	DocToTextExtractorParams()
 	{
@@ -169,6 +189,8 @@ struct DocToTextExtractorParams
 		m_xml_parse_mode = PARSE_XML;
 		m_parser_type = PlainTextExtractor::PARSER_AUTO;
 		m_manage_xml_parser = 1;
+		m_image_callback = NULL;
+		m_image_user_data = NULL;
 	}
 };
 
@@ -233,6 +255,12 @@ void DOCTOTEXT_CALL doctotext_extractor_params_set_formatting_style(DocToTextExt
 	catch (std::bad_alloc& ba)
 	{
 	}
+}
+
+void DOCTOTEXT_CALL doctotext_extractor_params_set_image_parser_callback(DocToTextExtractorParams* extractor_params, doctotext_image_parser_callback callback, void* user_data)
+{
+	extractor_params->m_image_callback = callback;
+	extractor_params->m_image_user_data = user_data;
 }
 
 struct DocToTextException
@@ -672,6 +700,12 @@ static void init_extractor(PlainTextExtractor& extractor, DocToTextExtractorPara
 	extractor.setFormattingStyle(extractor_params->m_formatting_style);
 	extractor.setManageXmlParser(extractor_params->m_manage_xml_parser);
 	extractor.setXmlParseMode(extractor_params->m_xml_parse_mode);
+	if (extractor_params->m_image_callback)
+	{
+		extractor_params->m_wrapper_data.c_callback = extractor_params->m_image_callback;
+		extractor_params->m_wrapper_data.c_user_data = extractor_params->m_image_user_data;
+		extractor.setImageParserCallback(&c_image_callback_bridge, &extractor_params->m_wrapper_data);
+	}
 }
 
 static void handle_bad_alloc(DocToTextException** exception)

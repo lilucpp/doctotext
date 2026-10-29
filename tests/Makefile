@@ -58,7 +58,7 @@ else
 endif
 endif
 
-CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+# CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
 
 ifeq ($(WIN),1)
 CXXFLAGS += -I../3rdparty/pthreads/include

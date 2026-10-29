@@ -34,6 +34,7 @@
 
 #include "common_xml_document_parser.h"
 
+#include <cstring>
 #include "doctotext_unzip.h"
 #include <iostream>
 #include <libxml/xmlreader.h>
@@ -57,6 +58,9 @@ struct CommonXMLDocumentParser::Implementation
 	bool m_disabled_text;
 	int m_xml_options;
 	CommonXMLDocumentParser* m_parser;
+	doctotext::ImageParserCallback m_image_callback;
+	void* m_image_user_data;
+	std::map<std::string, std::string> m_image_rels;
 
 	void executeCommand(const std::string& command, XmlStream& xml_stream, XmlParseMode mode,
 						const FormattingStyle& options, const DocToTextUnzip* zipfile, std::string& text,
@@ -339,7 +343,228 @@ class CommonXMLDocumentParser::CommandHandlersSet
 			}
 			text += object_text;
 		}
+
+		static void onODFOOXMLDrawing(CommonXMLDocumentParser& parser, XmlStream& xml_stream, XmlParseMode mode,
+									   const FormattingStyle& options, const DocToTextUnzip* zipfile, std::string& text,
+									   bool& children_processed, std::string& level_suffix, bool first_on_level,
+									   std::vector<Link>& links)
+		{
+			if (parser.getImageParserCallback() == NULL)
+			{
+				children_processed = false;
+				return;
+			}
+
+			if (xml_stream.fullName() == "office:drawing")
+			{
+				// In ODF, office:drawing is the body container; do not intercept it.
+				children_processed = false;
+				return;
+			}
+
+			if (parser.verbose())
+				parser.getLogStream() << "ODFOOXML_DRAWING command.\n";
+
+			xmlNodePtr root_node = xml_stream.expand();
+			if (root_node != NULL)
+			{
+				parser.extractContentFromDrawingNode(root_node, zipfile, text);
+			}
+			children_processed = true;
+		}
 };
+
+static std::string normalizeZipPath(const std::string& path)
+{
+	std::vector<std::string> parts;
+	std::string cur;
+	for (size_t i = 0; i <= path.size(); ++i)
+	{
+		if (i == path.size() || path[i] == '/')
+		{
+			if (cur == "." || cur.empty())
+			{
+				// skip
+			}
+			else if (cur == "..")
+			{
+				if (!parts.empty())
+					parts.pop_back();
+			}
+			else
+			{
+				parts.push_back(cur);
+			}
+			cur.clear();
+		}
+		else
+		{
+			cur += path[i];
+		}
+	}
+	std::string res;
+	for (size_t i = 0; i < parts.size(); ++i)
+	{
+		if (i > 0)
+			res += "/";
+		res += parts[i];
+	}
+	return res;
+}
+
+void CommonXMLDocumentParser::extractContentFromDrawingNode(xmlNodePtr node, const DocToTextUnzip* zipfile, std::string& out_text)
+{
+	if (!node)
+		return;
+
+	for (xmlNodePtr cur = node; cur; cur = cur->next)
+	{
+		if (cur->type == XML_ELEMENT_NODE)
+		{
+			const char* tag_name = (const char*)cur->name;
+			if (tag_name == NULL)
+				continue;
+
+			if (strcmp(tag_name, "blip") == 0)
+			{
+				xmlChar* embed = xmlGetProp(cur, (xmlChar*)"embed");
+				if (!embed)
+					embed = xmlGetProp(cur, (xmlChar*)"id");
+				if (embed)
+				{
+					std::string rId = (char*)embed;
+					xmlFree(embed);
+					const std::map<std::string, std::string>& rels = getImageRelationships();
+					std::map<std::string, std::string>::const_iterator it = rels.find(rId);
+					if (it != rels.end() && zipfile != NULL && impl->m_image_callback != NULL)
+					{
+						std::string img_data;
+						if (zipfile->read(it->second, &img_data))
+						{
+							std::string parsed = impl->m_image_callback(it->second, img_data.data(), img_data.size(), impl->m_image_user_data);
+							if (!parsed.empty())
+							{
+								if (!out_text.empty() && out_text[out_text.size() - 1] != '\n')
+									out_text += '\n';
+								out_text += parsed;
+								if (out_text[out_text.size() - 1] != '\n')
+									out_text += '\n';
+							}
+						}
+					}
+				}
+			}
+			else if (strcmp(tag_name, "imagedata") == 0)
+			{
+				xmlChar* id = xmlGetProp(cur, (xmlChar*)"id");
+				if (!id)
+					id = xmlGetProp(cur, (xmlChar*)"embed");
+				if (id)
+				{
+					std::string rId = (char*)id;
+					xmlFree(id);
+					const std::map<std::string, std::string>& rels = getImageRelationships();
+					std::map<std::string, std::string>::const_iterator it = rels.find(rId);
+					if (it != rels.end() && zipfile != NULL && impl->m_image_callback != NULL)
+					{
+						std::string img_data;
+						if (zipfile->read(it->second, &img_data))
+						{
+							std::string parsed = impl->m_image_callback(it->second, img_data.data(), img_data.size(), impl->m_image_user_data);
+							if (!parsed.empty())
+							{
+								if (!out_text.empty() && out_text[out_text.size() - 1] != '\n')
+									out_text += '\n';
+								out_text += parsed;
+								if (out_text[out_text.size() - 1] != '\n')
+									out_text += '\n';
+							}
+						}
+					}
+				}
+			}
+			else if (strcmp(tag_name, "image") == 0)
+			{
+				// ODF <draw:image xlink:href="Pictures/..." />
+				xmlChar* href = xmlGetProp(cur, (xmlChar*)"href");
+				if (href)
+				{
+					std::string path = (char*)href;
+					xmlFree(href);
+					if (path.length() >= 2 && path[0] == '.' && path[1] == '/')
+						path = path.substr(2);
+					if (zipfile != NULL && impl->m_image_callback != NULL)
+					{
+						std::string img_data;
+						if (zipfile->read(path, &img_data))
+						{
+							std::string parsed = impl->m_image_callback(path, img_data.data(), img_data.size(), impl->m_image_user_data);
+							if (!parsed.empty())
+							{
+								if (!out_text.empty() && out_text[out_text.size() - 1] != '\n')
+									out_text += '\n';
+								out_text += parsed;
+								if (out_text[out_text.size() - 1] != '\n')
+									out_text += '\n';
+							}
+						}
+					}
+				}
+			}
+			else if (strcmp(tag_name, "t") == 0)
+			{
+				xmlChar* val = xmlNodeListGetString(cur->doc, cur->children, 1);
+				if (val != NULL)
+				{
+					out_text += (char*)val;
+					xmlFree(val);
+				}
+			}
+			else if (strcmp(tag_name, "p") == 0)
+			{
+				if (!out_text.empty() && out_text[out_text.size() - 1] != '\n')
+					out_text += '\n';
+			}
+			else if (strcmp(tag_name, "br") == 0)
+			{
+				out_text += '\n';
+			}
+			else if (strcmp(tag_name, "tab") == 0)
+			{
+				out_text += '\t';
+			}
+
+			// Traverse children
+			extractContentFromDrawingNode(cur->children, zipfile, out_text);
+		}
+	}
+}
+
+void CommonXMLDocumentParser::loadRelationshipsFromXml(const std::string& rels_xml, const std::string& base_dir)
+{
+	XmlStream xml_stream(rels_xml, manageXmlParser(), getXmlOptions());
+	if (!xml_stream)
+		return;
+	xml_stream.levelDown();
+	while (xml_stream)
+	{
+		if (xml_stream.name() == "Relationship")
+		{
+			std::string id = xml_stream.attribute("Id");
+			std::string target = xml_stream.attribute("Target");
+			if (!id.empty() && !target.empty())
+			{
+				std::string full_path;
+				if (target[0] == '/')
+					full_path = target.substr(1);
+				else
+					full_path = base_dir + target;
+				addImageRelationship(id, normalizeZipPath(full_path));
+			}
+		}
+		xml_stream.next();
+	}
+}
 
 void CommonXMLDocumentParser::registerODFOOXMLCommandHandler(const std::string& xml_tag, CommandHandler handler)
 {
@@ -563,6 +788,8 @@ CommonXMLDocumentParser::CommonXMLDocumentParser()
 		impl->m_verbose_logging = false;
 		impl->m_disabled_text = false;
 		impl->m_xml_options = 0;
+		impl->m_image_callback = NULL;
+		impl->m_image_user_data = NULL;
 		impl->m_parser = this;
 
 		registerODFOOXMLCommandHandler("text", &CommandHandlersSet::onODFOOXMLText);
@@ -578,6 +805,12 @@ CommonXMLDocumentParser::CommonXMLDocumentParser()
 		registerODFOOXMLCommandHandler("line-break", &CommandHandlersSet::onODFLineBreak);
 		registerODFOOXMLCommandHandler("h", &CommandHandlersSet::onODFHeading);
 		registerODFOOXMLCommandHandler("object", &CommandHandlersSet::onODFObject);
+		registerODFOOXMLCommandHandler("drawing", &CommandHandlersSet::onODFOOXMLDrawing);
+		registerODFOOXMLCommandHandler("pict", &CommandHandlersSet::onODFOOXMLDrawing);
+		registerODFOOXMLCommandHandler("pic", &CommandHandlersSet::onODFOOXMLDrawing);
+		registerODFOOXMLCommandHandler("image", &CommandHandlersSet::onODFOOXMLDrawing);
+		registerODFOOXMLCommandHandler("blip", &CommandHandlersSet::onODFOOXMLDrawing);
+		registerODFOOXMLCommandHandler("imagedata", &CommandHandlersSet::onODFOOXMLDrawing);
 	}
 	catch (std::bad_alloc& ba)
 	{
@@ -621,4 +854,35 @@ void CommonXMLDocumentParser::getLinks(std::vector<Link>& links)
 bool CommonXMLDocumentParser::error()
 {
 	return impl->m_error;
+}
+
+void CommonXMLDocumentParser::setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data)
+{
+	impl->m_image_callback = callback;
+	impl->m_image_user_data = user_data;
+}
+
+doctotext::ImageParserCallback CommonXMLDocumentParser::getImageParserCallback() const
+{
+	return impl->m_image_callback;
+}
+
+void* CommonXMLDocumentParser::getImageParserUserData() const
+{
+	return impl->m_image_user_data;
+}
+
+void CommonXMLDocumentParser::clearImageRelationships()
+{
+	impl->m_image_rels.clear();
+}
+
+void CommonXMLDocumentParser::addImageRelationship(const std::string& id, const std::string& target)
+{
+	impl->m_image_rels[id] = target;
+}
+
+const std::map<std::string, std::string>& CommonXMLDocumentParser::getImageRelationships() const
+{
+	return impl->m_image_rels;
 }

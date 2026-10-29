@@ -389,6 +389,12 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		}
 		for (int i = 1; zipfile.read("ppt/slides/slide" + int_to_str(i) + ".xml", &content) && i < 2500; i++)
 		{
+			string slide_rels;
+			clearImageRelationships();
+			if (zipfile.read("ppt/slides/_rels/slide" + int_to_str(i) + ".xml.rels", &slide_rels))
+			{
+				loadRelationshipsFromXml(slide_rels, "ppt/slides/");
+			}
 			string slide_text;
 			if (!extractText(content, mode, options, &zipfile, slide_text, getInnerLinks()))
 			{
@@ -449,6 +455,12 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		}
 		for (int i = 1; zipfile.read("xl/worksheets/sheet" + int_to_str(i) + ".xml", &content); i++)
 		{
+			string sheet_rels;
+			clearImageRelationships();
+			if (zipfile.read("xl/worksheets/_rels/sheet" + int_to_str(i) + ".xml.rels", &sheet_rels))
+			{
+				loadRelationshipsFromXml(sheet_rels, "xl/worksheets/");
+			}
 			string sheet_text;
 			if (!extractText(content, mode, options, &zipfile, sheet_text, getInnerLinks()))
 			{
@@ -462,6 +474,16 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 	}
 	else
 	{
+		clearImageRelationships();
+		size_t last_slash = main_file_name.find_last_of('/');
+		string base_dir = (last_slash == string::npos) ? "" : main_file_name.substr(0, last_slash + 1);
+		string rels_file = (last_slash == string::npos) ? ("_rels/" + main_file_name + ".rels")
+		                                                : (base_dir + "_rels/" + main_file_name.substr(last_slash + 1) + ".rels");
+		string rels_content;
+		if (zipfile.read(rels_file, &rels_content))
+		{
+			loadRelationshipsFromXml(rels_content, base_dir);
+		}
 		if (!zipfile.read(main_file_name, &content))
 		{
 			getLogStream() << "Error reading " << main_file_name << endl;
