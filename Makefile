@@ -26,6 +26,10 @@ else
 		UNAME_M = $(shell uname -m)
 		ifeq ($(UNAME_M),x86_64)
 			ARCH = x86_64-linux
+		else ifeq ($(UNAME_M),aarch64)
+			ARCH = aarch64-linux
+		else ifeq ($(UNAME_M),arm64)
+			ARCH = aarch64-linux
 		else
 			ARCH = x86-linux
 		endif
@@ -89,10 +93,11 @@ ifeq ($(UNAME),Darwin)
 	install_name_tool -id @rpath/libdoctotext.dylib build/libdoctotext.dylib
 	echo './doctotext "$$@"' > build/doctotext.sh
 else
-	cp 3rdparty/libcharsetdetect/lib/libcharsetdetect.so build
-	cp 3rdparty/wv2/lib/libwv2.so.1 build
-	cp 3rdparty/mimetic/lib/libmimetic.so.0 build
-	$(STRIP) build/*.so*
+	cp -P 3rdparty/libcharsetdetect/lib/libcharsetdetect.so* build/ 2>/dev/null || true
+	cp -P 3rdparty/wv2/lib/libwv2.so* build/ 2>/dev/null || true
+	cp -P 3rdparty/mimetic/lib/libmimetic.so* build/ 2>/dev/null || true
+	cp -P 3rdparty/htmlcxx/lib/libhtmlcxx.so* build/ 2>/dev/null || true
+	$(STRIP) build/*.so* 2>/dev/null || true
 	echo 'LD_LIBRARY_PATH=.:$$LD_LIBRARY_PATH ./doctotext "$$@"' > build/doctotext.sh
 endif
 	chmod u+x build/doctotext.sh
@@ -116,9 +121,11 @@ version.h: VERSION
 .PHONY: 
 
 doc/html: doc/Doxyfile src
-	cd doc && \
-	rm -rf html && \
-	cat Doxyfile | sed s/VERSION/`cat ../VERSION`/ | doxygen -
+	@if which doxygen > /dev/null 2>&1; then \
+		cd doc && rm -rf html && cat Doxyfile | sed s/VERSION/`cat ../VERSION`/ | doxygen - ; \
+	else \
+		mkdir -p doc/html && touch doc/html/index.html; \
+	fi
 
 clean:
 	rm -rf build

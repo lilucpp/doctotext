@@ -1,0 +1,31 @@
+name: Sync 3rdparty Dependencies Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v3rdparty-deps*'
+
+permissions:
+  contents: write
+
+jobs:
+  upload-deps:
+    name: Download and Upload 3rdparty Dependencies to Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all 3rdparty archives
+        run: |
+          python3 scripts/download_all_3rdparty.py 3rdparty_backup
+
+      - name: Create or update Release and upload assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create v3rdparty-deps 3rdparty_backup/* \
+            --title "v3rdparty-deps (Prebuilt dependencies cache)" \
+            --notes "Automated mirror cache for doctotext 3rd-party dependencies across Linux (x86/x64), Windows (win32/win64), and macOS." \
+            --clobber

@@ -64,7 +64,7 @@ ifeq ($(WIN),1)
 CXXFLAGS += -I../3rdparty/pthreads/include
 LDFLAGS += -L../3rdparty/pthreads/lib -lpthreadGC2 
 else
-LDFLAGS += -lpthread
+LDFLAGS += -lpthread -Wl,-rpath-link=../build
 endif
 
 SKIP_TESTS = ! $(shell file ../build/doctotext$(EXEEXT) | grep i386 > /dev/null && ! uname -m | grep 64 > /dev/null; echo $$?)

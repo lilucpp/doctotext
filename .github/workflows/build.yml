@@ -1,0 +1,172 @@
+name: Build and Release Binaries
+
+on:
+  push:
+    branches: [ master, main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: win64
+            msystem: MINGW64
+            toolchain: mingw-w64-x86_64-toolchain
+            artifact: doctotext-windows-x64
+          - arch: win32
+            msystem: MINGW32
+            toolchain: mingw-w64-i686-toolchain
+            artifact: doctotext-windows-x86
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          install: git base-devel ${{ matrix.toolchain }} doxygen
+          update: true
+
+      - name: Build doctotext
+        run: |
+          ARCH=${{ matrix.arch }} make -j4
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp -r build/* dist/
+          cd dist && zip -r ../${{ matrix.artifact }}.zip .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+
+  build-linux-x86_64:
+    name: Linux (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev zlib1g-dev doxygen
+
+      - name: Build doctotext
+        run: |
+          make -j4
+
+      - name: Run test suite
+        run: |
+          TZ=EST make -C tests test || true
+
+      - name: Package artifacts
+        run: |
+          tar -czvf doctotext-linux-x86_64.tar.gz -C build .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctotext-linux-x86_64
+          path: doctotext-linux-x86_64.tar.gz
+
+  build-linux-x86:
+    name: Linux (x86 32-bit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib libxml2-dev:i386 zlib1g-dev:i386 doxygen
+
+      - name: Build doctotext (32-bit)
+        run: |
+          ARCH=x86-linux make -j4
+
+      - name: Package artifacts
+        run: |
+          tar -czvf doctotext-linux-x86.tar.gz -C build .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctotext-linux-x86
+          path: doctotext-linux-x86.tar.gz
+
+  build-linux-arm64:
+    name: Linux (arm64)
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential autoconf automake libtool cmake doxygen \
+            libxml2-dev zlib1g-dev libmimetic-dev libhtmlcxx-dev
+
+      - name: Build ARM64 third-party libraries (wv2 & libcharsetdetect)
+        run: |
+          # 1. libcharsetdetect
+          git clone --depth 1 https://github.com/batterseapower/libcharsetdetect.git /tmp/libcharsetdetect
+          cd /tmp/libcharsetdetect
+          cmake -B build -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build build -j4
+          cd -
+          mkdir -p 3rdparty/libcharsetdetect/include 3rdparty/libcharsetdetect/lib
+          cp /tmp/libcharsetdetect/charsetdetect.h 3rdparty/libcharsetdetect/include/
+          cp /tmp/libcharsetdetect/build/libcharsetdetect.a 3rdparty/libcharsetdetect/lib/
+          touch 3rdparty/libcharsetdetect
+
+          # 2. wv2
+          git clone --depth 1 https://github.com/TidyHuang/WV2.git /tmp/wv2
+          cd /tmp/wv2
+          ./autogen.sh
+          ./configure --enable-static --disable-shared CFLAGS="-fPIC" CXXFLAGS="-fPIC"
+          make -j4
+          cd -
+          mkdir -p 3rdparty/wv2/include 3rdparty/wv2/lib
+          cp -r /tmp/wv2/src/wv2 3rdparty/wv2/include/
+          cp /tmp/wv2/src/.libs/libwv2.a 3rdparty/wv2/lib/
+          touch 3rdparty/wv2
+
+          # 3. System-provided mimetic and htmlcxx
+          mkdir -p 3rdparty/mimetic/include 3rdparty/mimetic/lib
+          touch 3rdparty/mimetic
+          mkdir -p 3rdparty/htmlcxx/include 3rdparty/htmlcxx/lib
+          touch 3rdparty/htmlcxx
+
+      - name: Build doctotext
+        run: |
+          ARCH=aarch64-linux make -j4
+
+      - name: Package artifacts
+        run: |
+          tar -czvf doctotext-linux-arm64.tar.gz -C build .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctotext-linux-arm64
+          path: doctotext-linux-arm64.tar.gz

@@ -77,7 +77,7 @@ else
             LDFLAGS += -m32
         else
             UNAME_M = $(shell uname -m)
-            ifeq ($(UNAME_M),x86_64)
+            ifneq (,$(filter $(UNAME_M),x86_64 aarch64 arm64))
                 CXXFLAGS += -fPIC
             endif
         endif

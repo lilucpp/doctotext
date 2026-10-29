@@ -20,3 +20,6 @@ tests/log.txt
 3rdparty/unzip101e/
 3rdparty/wv2/
 
+doc/html/
+3rdparty_backup/
+3rdparty_backup.tar.gz

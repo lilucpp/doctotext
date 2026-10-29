@@ -45,6 +45,12 @@ else
 		ifeq ($(UNAME_M),x86_64)
 			ARCH = x86_64-linux
 			ARCH_FLAGS = -fPIC
+		else ifeq ($(UNAME_M),aarch64)
+			ARCH = aarch64-linux
+			ARCH_FLAGS = -fPIC
+		else ifeq ($(UNAME_M),arm64)
+			ARCH = aarch64-linux
+			ARCH_FLAGS = -fPIC
 		else
 			ARCH = x86-linux
 			ARCH_FLAGS =
@@ -56,6 +62,19 @@ endif
 endif
 
 pwd = $(shell pwd)
+
+MIRROR_BASE ?= https://github.com/lilucpp/doctotext/releases/download/v3rdparty-deps
+SILVER_BASE ?= http://silvercoders.com/download/3rdparty
+
+define download_dep
+	@if [ ! -f $(1) ]; then \
+		echo "Downloading $(1)..."; \
+		curl -s -f -L -A "Mozilla/5.0 (X11; Linux x86_64)" --retry 2 "$(MIRROR_BASE)/$(1)" -o $(1) || \
+		curl -s -f -L -A "Mozilla/5.0 (X11; Linux x86_64)" --retry 2 "$(SILVER_BASE)/$(1)" -o $(1) || \
+		wget -q --user-agent="Mozilla/5.0 (X11; Linux x86_64)" "$(SILVER_BASE)/$(1)" || \
+		(echo "Error: Failed to download $(1) from all sources!" && exit 1); \
+	fi
+endef
 
 ifeq ($(WIN),1)
 
@@ -71,8 +90,9 @@ pthreads: pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2
 	touch pthreads
 	
 pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2:
-	wget http://silvercoders.com/download/3rdparty/pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2
-	wget http://silvercoders.com/download/3rdparty/pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2.sha1
+	$(call download_dep,$@)
+pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2.sha1:
+	$(call download_dep,$@)
 
 libiconv: libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2
 	sha1sum -c libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2.sha1
@@ -80,8 +100,9 @@ libiconv: libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2
 	touch libiconv
 
 libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2:
-	wget http://silvercoders.com/download/3rdparty/libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2
-	wget http://silvercoders.com/download/3rdparty/libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2.sha1
+	$(call download_dep,$@)
+libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2.sha1:
+	$(call download_dep,$@)
 
 zlib: zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2
 	sha1sum -c zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2.sha1
@@ -89,8 +110,9 @@ zlib: zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2
 	touch zlib
 
 zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2:
-	wget http://silvercoders.com/download/3rdparty/zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2
-	wget http://silvercoders.com/download/3rdparty/zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2.sha1
+	$(call download_dep,$@)
+zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2.sha1:
+	$(call download_dep,$@)
 
 libxml2: libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2
 	sha1sum -c libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2.sha1
@@ -98,8 +120,9 @@ libxml2: libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2
 	touch libxml2
 
 libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2:
-	wget http://silvercoders.com/download/3rdparty/libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2
-	wget http://silvercoders.com/download/3rdparty/libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2.sha1
+	$(call download_dep,$@)
+libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2.sha1:
+	$(call download_dep,$@)
 
 endif
 
@@ -119,12 +142,14 @@ wv2: $(wv2_deps) wv2-$(WV2_VERSION)-$(ARCH).tar.bz2 wv2-$(WV2_VERSION)-private_h
 	touch wv2
 
 wv2-$(WV2_VERSION)-$(ARCH).tar.bz2:
-	$(WGET) http://silvercoders.com/download/3rdparty/wv2-$(WV2_VERSION)-$(ARCH).tar.bz2
-	$(WGET) http://silvercoders.com/download/3rdparty/wv2-$(WV2_VERSION)-$(ARCH).tar.bz2.sha1
+	$(call download_dep,$@)
+wv2-$(WV2_VERSION)-$(ARCH).tar.bz2.sha1:
+	$(call download_dep,$@)
 
 wv2-$(WV2_VERSION)-private_headers.tar.bz2:
-	$(WGET) http://silvercoders.com/download/3rdparty/wv2-$(WV2_VERSION)-private_headers.tar.bz2
-	$(WGET) http://silvercoders.com/download/3rdparty/wv2-$(WV2_VERSION)-private_headers.tar.bz2.sha1
+	$(call download_dep,$@)
+wv2-$(WV2_VERSION)-private_headers.tar.bz2.sha1:
+	$(call download_dep,$@)
 
 htmlcxx: htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2
 	sha1sum -c htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2.sha1
@@ -132,8 +157,9 @@ htmlcxx: htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2
 	touch htmlcxx
 
 htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2:
-	$(WGET) http://silvercoders.com/download/3rdparty/htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2
-	$(WGET) http://silvercoders.com/download/3rdparty/htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2.sha1
+	$(call download_dep,$@)
+htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2.sha1:
+	$(call download_dep,$@)
 	
 libcharsetdetect: libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2
 	sha1sum -c libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2.sha1
@@ -141,8 +167,9 @@ libcharsetdetect: libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2
 	touch libcharsetdetect
 	
 libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2:
-	$(WGET) http://silvercoders.com/download/3rdparty/libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2
-	$(WGET) http://silvercoders.com/download/3rdparty/libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2.sha1
+	$(call download_dep,$@)
+libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2.sha1:
+	$(call download_dep,$@)
 
 ifeq ($(ARCH),win32)
 mimetic: mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2
@@ -151,8 +178,9 @@ mimetic: mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2
 	touch mimetic
 
 mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2:
-	$(WGET) http://silvercoders.com/download/3rdparty/mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2
-	$(WGET) http://silvercoders.com/download/3rdparty/mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2.sha1
+	$(call download_dep,$@)
+mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2.sha1:
+	$(call download_dep,$@)
 else
 mimetic: mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2
 	sha1sum -c mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2.sha1
@@ -160,8 +188,9 @@ mimetic: mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2
 	touch mimetic
 
 mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2:
-	$(WGET) http://silvercoders.com/download/3rdparty/mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2
-	$(WGET) http://silvercoders.com/download/3rdparty/mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2.sha1
+	$(call download_dep,$@)
+mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2.sha1:
+	$(call download_dep,$@)
 endif
 
 unzip: unzip101e/unzip.o
@@ -179,7 +208,12 @@ unzip101e/.unpacked: unzip101e.zip
 	touch unzip101e/.unpacked
 
 unzip101e.zip:
-	wget http://www.winimage.com/zLibDll/unzip101e.zip
+	@if [ ! -f unzip101e.zip ]; then \
+		echo "Downloading unzip101e.zip..."; \
+		curl -s -f -L -A "Mozilla/5.0" --retry 2 "$(MIRROR_BASE)/unzip101e.zip" -o unzip101e.zip || \
+		curl -s -f -L -A "Mozilla/5.0" --retry 2 "http://www.winimage.com/zLibDll/unzip101e.zip" -o unzip101e.zip || \
+		wget -q "http://www.winimage.com/zLibDll/unzip101e.zip"; \
+	fi
 	
 cmapresources_korean$(KOREAN_CMAP_VERSION).tar.z:
 	$(WGET) http://downloads.sourceforge.net/project/cmap.adobe/cmapresources_korean$(KOREAN_CMAP_VERSION).tar.z
