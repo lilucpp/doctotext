@@ -126,6 +126,28 @@ libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2.sha1:
 
 endif
 
+ifeq ($(ARCH),aarch64-linux)
+
+wv2:
+	@echo "Using pre-configured wv2 for aarch64"
+	touch wv2
+
+htmlcxx:
+	@echo "Using system htmlcxx for aarch64"
+	mkdir -p htmlcxx/include htmlcxx/lib
+	touch htmlcxx
+
+libcharsetdetect:
+	@echo "Using pre-configured libcharsetdetect for aarch64"
+	touch libcharsetdetect
+
+mimetic:
+	@echo "Using system mimetic for aarch64"
+	mkdir -p mimetic/include mimetic/lib
+	touch mimetic
+
+else
+
 ifeq ($(WIN),1)
 wv2_deps = libiconv
 else
@@ -191,6 +213,8 @@ mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2:
 	$(call download_dep,$@)
 mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2.sha1:
 	$(call download_dep,$@)
+endif
+
 endif
 
 unzip: unzip101e/unzip.o
