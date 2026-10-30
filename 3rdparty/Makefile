@@ -79,9 +79,9 @@ endef
 ifeq ($(WIN),1)
 
 ifeq ($(ARCH),win32)
-	CC = i686-w64-mingw32-gcc
+	CC ?= gcc
 else
-	CC = x86_64-w64-mingw32-gcc
+	CC ?= gcc
 endif
 
 pthreads: pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2 pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2.sha1
@@ -221,10 +221,10 @@ unzip: unzip101e/unzip.o
 
 ifeq ($(WIN),1)
 unzip101e/unzip.o: zlib unzip101e/.unpacked
-	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="-O2 -std=gnu89 -Wno-error -I../zlib/include" unzip.o ioapi.o iowin32.o
+	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="-O2 -std=gnu89 -w -I../zlib/include" unzip.o ioapi.o iowin32.o
 else
 unzip101e/unzip.o: unzip101e/.unpacked
-	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="$(ARCH_FLAGS) -O2 -std=gnu89 -Wno-error" unzip.o ioapi.o
+	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="$(ARCH_FLAGS) -O2 -std=gnu89 -w" unzip.o ioapi.o
 endif
 
 unzip101e/.unpacked: unzip101e.zip

@@ -17,13 +17,11 @@ CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
 endif
 
 ifneq (,$(filter $(ARCH),win32 win64))
+	STRIP ?= strip
+	CXX ?= g++
 	ifeq ($(ARCH),win32)
-		STRIP = i686-w64-mingw32-strip
-		CXX = i686-w64-mingw32-g++
 		LIBDIR = lib
 	else
-		STRIP = strip
-		CXX = x86_64-w64-mingw32-g++
 		LIBDIR = lib64
 	endif
     EXEEXT = .exe

@@ -1,9 +1,5 @@
 ifneq (,$(filter $(ARCH),win32 win64))
-	ifeq ($(ARCH),win32)
-		STRIP = i686-w64-mingw32-strip
-	else
-		STRIP = strip
-	endif
+	STRIP ?= strip
 	EXEEXT=.exe
 	SOPRE =
 	SOEXT = .dll
@@ -75,14 +71,22 @@ ifeq ($(WIN),1)
 	cp 3rdparty/zlib/bin/zlib1.dll build
 	cp 3rdparty/wv2/bin/libwv2-1.dll build
 	IFS=: && for f in $$PATH; do \
-		if test -f "$$f/libgcc_s_sjlj-1.dll"; then \
-			cp "$$f/libgcc_s_sjlj-1.dll" build/; \
-			break; \
-		fi \
+		for dll in "$$f"/libgcc_s_*.dll; do \
+			if test -f "$$dll"; then \
+				cp "$$dll" build/; \
+				break 2; \
+			fi \
+		done \
 	done
 	IFS=: && for f in $$PATH; do \
 		if test -f "$$f/libstdc++-6.dll"; then \
 			cp "$$f/libstdc++-6.dll" build/; \
+			break; \
+		fi \
+	done
+	IFS=: && for f in $$PATH; do \
+		if test -f "$$f/libwinpthread-1.dll"; then \
+			cp "$$f/libwinpthread-1.dll" build/; \
 			break; \
 		fi \
 	done
