@@ -12,7 +12,9 @@ HEADERS = ../version.h data_stream.h doc_parser.h exception.h html_parser.h iwor
 	xml_fixer.h doctotext_unzip.h pdf_parser.h ppt_parser.h xls_parser.h xlsb_parser.h thread_safe_ole_storage.h thread_safe_ole_stream_reader.h txt_parser.h \
 	attachment.h eml_parser.h variant.h doctotext_c_api.h odfxml_parser.h xml_stream.h common_xml_document_parser.h
 
-# CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+ifneq ($(ARCH),aarch64-linux)
+CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+endif
 
 ifneq (,$(filter $(ARCH),win32 win64))
 	ifeq ($(ARCH),win32)
@@ -41,7 +43,9 @@ ifneq (,$(filter $(ARCH),win32 win64))
     SHARED = -shared
 else
     EXEEXT =
-    CXXFLAGS += $(shell pkg-config libxml-2.0 --cflags 2>/dev/null || echo "-I../3rdparty/libxml2/usr/include -I../3rdparty/libxml2/usr/include/libxml2 -I/usr/include/libxml2") -I../3rdparty/libcharsetdetect/include -I../3rdparty/mimetic/include
+    XML2_CFLAGS ?= $(shell pkg-config libxml-2.0 --cflags 2>/dev/null || echo "-I../3rdparty/libxml2/usr/include -I../3rdparty/libxml2/usr/include/libxml2 -I/usr/include/libxml2")
+    XML2_LIBS ?= $(shell pkg-config libxml-2.0 --libs 2>/dev/null || echo "-lxml2")
+    CXXFLAGS += $(XML2_CFLAGS) -I../3rdparty/libcharsetdetect/include -I../3rdparty/mimetic/include
     SOPRE = lib
     UNAME = $(shell uname)
     ifeq ($(UNAME),Darwin)
@@ -71,7 +75,7 @@ else
                    -L../3rdparty/wv2/lib -lwv2 \
                    -L../3rdparty/htmlcxx/lib -lhtmlcxx \
                    -L../3rdparty/libcharsetdetect/lib -lcharsetdetect \
-                   -L../3rdparty/libxml2/usr/lib/x86_64-linux-gnu -lxml2 -lz
+                   -L../3rdparty/libxml2/usr/lib/x86_64-linux-gnu -L../3rdparty/libxml2/usr/lib $(XML2_LIBS) -lz
         ifeq ($(ARCH),x86-linux)
             CXXFLAGS += -m32
             LDFLAGS += -m32

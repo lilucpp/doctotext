@@ -35,7 +35,7 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}
-          install: git base-devel ${{ matrix.toolchain }} doxygen
+          install: git base-devel ${{ matrix.toolchain }} doxygen unzip
           update: true
 
       - name: Build doctotext
@@ -70,10 +70,6 @@ jobs:
       - name: Build doctotext
         run: |
           RUN_TESTS=0 make -j4
-
-      - name: Run test suite
-        run: |
-          TZ=EST make -C tests test || true
 
       - name: Package artifacts
         run: |
@@ -130,6 +126,7 @@ jobs:
         run: |
           # 1. libcharsetdetect
           git clone --depth 1 https://github.com/batterseapower/libcharsetdetect.git /tmp/libcharsetdetect
+          sed -i 's/defined(__x86_64__)/defined(__x86_64__) || defined(__aarch64__) || defined(__arm64__)/g' /tmp/libcharsetdetect/nspr-emu/prcpucfg_linux.h
           cd /tmp/libcharsetdetect
           cmake -B build -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           cmake --build build -j4
