@@ -197,10 +197,10 @@ unzip: unzip101e/unzip.o
 
 ifeq ($(WIN),1)
 unzip101e/unzip.o: zlib unzip101e/.unpacked
-	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS=-I../zlib/include unzip.o ioapi.o iowin32.o
+	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="-O2 -std=gnu89 -Wno-error -I../zlib/include" unzip.o ioapi.o iowin32.o
 else
 unzip101e/unzip.o: unzip101e/.unpacked
-	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="$(ARCH_FLAGS)" unzip.o ioapi.o
+	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="$(ARCH_FLAGS) -O2 -std=gnu89 -Wno-error" unzip.o ioapi.o
 endif
 
 unzip101e/.unpacked: unzip101e.zip

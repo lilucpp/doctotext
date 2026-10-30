@@ -133,7 +133,7 @@ jobs:
           cd -
           mkdir -p 3rdparty/libcharsetdetect/include 3rdparty/libcharsetdetect/lib
           cp /tmp/libcharsetdetect/charsetdetect.h 3rdparty/libcharsetdetect/include/
-          cp /tmp/libcharsetdetect/build/libcharsetdetect.a 3rdparty/libcharsetdetect/lib/
+          find /tmp/libcharsetdetect -name "libcharsetdetect.*" -exec cp -a {} 3rdparty/libcharsetdetect/lib/ \;
           touch 3rdparty/libcharsetdetect
 
           # 2. wv2
