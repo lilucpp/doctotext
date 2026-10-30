@@ -335,6 +335,8 @@ struct PlainTextExtractor::Implementation
 			xls.setVerboseLogging(true);
 		if (m_log_stream != &std::cerr)
 			xls.setLogStream(*m_log_stream);
+		if (m_image_callback)
+			xls.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using XLS parser.\n";
 		text = xls.plainText(m_formatting_style);
 		m_links.clear();
@@ -349,6 +351,8 @@ struct PlainTextExtractor::Implementation
 		if (m_log_stream != &std::cerr)
 			doc.setLogStream(*m_log_stream);
 		*m_log_stream << "Using DOC parser.\n";
+		if (m_image_callback)
+			doc.setImageParserCallback(m_image_callback, m_image_user_data);
 		text = doc.plainText(m_formatting_style);
 		m_links.clear();
 		doc.getLinks(m_links);
@@ -361,6 +365,8 @@ struct PlainTextExtractor::Implementation
 			ppt.setVerboseLogging(true);
 		if (m_log_stream != &std::cerr)
 			ppt.setLogStream(*m_log_stream);
+		if (m_image_callback)
+			ppt.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using PPT parser.\n";
 		text = ppt.plainText(m_formatting_style);
 		m_links.clear();

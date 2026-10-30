@@ -82,6 +82,8 @@ struct PPTParser::Implementation
 	std::ostream* m_log_stream;
 	const char* m_buffer;
 	size_t m_buffer_size;
+	doctotext::ImageParserCallback m_image_callback;
+	void* m_image_user_data;
 
 	U16 getU16LittleEndian(std::vector<unsigned char>::const_iterator buffer)
 	{
@@ -302,6 +304,8 @@ PPTParser::PPTParser(const std::string& file_name)
 	impl->m_log_stream = &std::cerr;
 	impl->m_buffer = NULL;
 	impl->m_buffer_size = 0;
+	impl->m_image_callback = NULL;
+	impl->m_image_user_data = NULL;
 }
 
 PPTParser::PPTParser(const char *buffer, size_t size)
@@ -313,11 +317,19 @@ PPTParser::PPTParser(const char *buffer, size_t size)
 	impl->m_log_stream = &std::cerr;
 	impl->m_buffer = buffer;
 	impl->m_buffer_size = size;
+	impl->m_image_callback = NULL;
+	impl->m_image_user_data = NULL;
 }
 
 PPTParser::~PPTParser()
 {
 	delete impl;
+}
+
+void PPTParser::setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data)
+{
+	impl->m_image_callback = callback;
+	impl->m_image_user_data = user_data;
 }
 
 void PPTParser::setVerboseLogging(bool verbose)
@@ -357,6 +369,85 @@ bool PPTParser::isPPT()
 void PPTParser::getLinks(std::vector<Link>& links)
 {
 	#warning TODO: Implement this functionality.
+}
+
+static void parse_ppt_pictures(ThreadSafeOLEStorage& storage, doctotext::ImageParserCallback callback, void* user_data, std::ostream& log_stream, std::string& text)
+{
+	if (!callback)
+		return;
+	AbstractOLEStreamReader* reader = storage.createStreamReader("Pictures");
+	if (!reader)
+		return;
+
+	size_t sz = reader->size();
+	if (sz < 8)
+	{
+		delete reader;
+		return;
+	}
+
+	std::vector<uint8_t> data(sz);
+	if (!reader->read(data.data(), sz))
+	{
+		delete reader;
+		return;
+	}
+	delete reader;
+
+	int img_count = 0;
+	for (size_t i = 0; i + 8 <= sz; )
+	{
+		uint16_t ver_inst = data[i] | (data[i+1] << 8);
+		uint16_t rec_type = data[i+2] | (data[i+3] << 8);
+		uint32_t rec_len = data[i+4] | (data[i+5] << 8) | (data[i+6] << 16) | (data[i+7] << 24);
+
+		if (rec_len == 0 || i + 8 + rec_len > sz)
+			break;
+
+		// Escher Blip record types: 0xF018 to 0xF02A
+		if (rec_type >= 0xF018 && rec_type <= 0xF02A)
+		{
+			size_t header_skip = 17;
+			if (rec_len >= 33 + 4)
+			{
+				if (memcmp(&data[i + 8 + 33], "\x89PNG", 4) == 0 ||
+				    (data[i + 8 + 33] == 0xFF && data[i + 8 + 34] == 0xD8) ||
+				    memcmp(&data[i + 8 + 33], "BM", 2) == 0)
+				{
+					header_skip = 33;
+				}
+			}
+
+			if (rec_len > header_skip)
+			{
+				size_t img_size = rec_len - header_skip;
+				const uint8_t* img_bytes = &data[i + 8 + header_skip];
+
+				std::string ext = "png";
+				if (img_size >= 4 && memcmp(img_bytes, "\x89PNG", 4) == 0)
+					ext = "png";
+				else if (img_size >= 3 && img_bytes[0] == 0xFF && img_bytes[1] == 0xD8)
+					ext = "jpg";
+				else if (img_size >= 2 && memcmp(img_bytes, "BM", 2) == 0)
+					ext = "bmp";
+				else if (rec_type == 0xF01D || rec_type == 0xF01F || rec_type == 0xF029)
+					ext = "jpg";
+
+				img_count++;
+				std::string img_name = "ppt/media/image" + std::to_string(img_count) + "." + ext;
+				std::string parsed = callback(img_name, reinterpret_cast<const char*>(img_bytes), img_size, user_data);
+				if (!parsed.empty())
+				{
+					if (!text.empty() && text[text.size() - 1] != '\n')
+						text += "\n";
+					text += parsed;
+					if (text[text.size() - 1] != '\n')
+						text += "\n";
+				}
+			}
+		}
+		i += 8 + rec_len;
+	}
 }
 
 std::string PPTParser::plainText(const FormattingStyle& formatting)
@@ -414,6 +505,7 @@ std::string PPTParser::plainText(const FormattingStyle& formatting)
 	}
 	impl->parsePPT(*reader, text);
 	delete reader;
+	parse_ppt_pictures(*storage, impl->m_image_callback, impl->m_image_user_data, *impl->m_log_stream, text);
 	delete storage;
 	return text;
 }

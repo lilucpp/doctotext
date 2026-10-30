@@ -88,4 +88,6 @@ std::string int_to_str(int i);
 
 int str_to_int(const std::string& s);
 
+std::string normalizeZipPath(const std::string& path);
+
 #endif

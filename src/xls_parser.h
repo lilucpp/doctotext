@@ -9,6 +9,10 @@
 namespace doctotext
 {
 	struct FormattingStyle;
+	typedef std::string (*ImageParserCallback)(const std::string& image_name,
+	                                          const char* image_buffer,
+	                                          size_t image_size,
+	                                          void* user_data);
 }
 class ThreadSafeOLEStorage;
 
@@ -26,6 +30,7 @@ class XLSParser
 		~XLSParser();
 		void setVerboseLogging(bool verbose);
 		void setLogStream(std::ostream& log_stream);
+		void setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data = NULL);
 		bool isXLS();
 		void getLinks(std::vector<Link>& links);
 		std::string plainText(const FormattingStyle& formatting);

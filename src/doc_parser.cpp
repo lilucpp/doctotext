@@ -316,6 +316,162 @@ static bool parse_comments(const Parser* parser, std::ostream& log_stream, std::
 	return true;
 }
 
+struct DocEmbeddedImage
+{
+	uint32_t fc;
+	uint32_t cp;
+	std::string name;
+	std::vector<char> data;
+	bool emitted;
+};
+
+static bool parse_images(const Parser* parser, std::ostream& log_stream, std::vector<DocEmbeddedImage>& images)
+{
+	if (parser->fib().fcPlcspaMom == 0 || parser->fib().lcbPlcspaMom < 4)
+	{
+		log_stream << "No main document shapes/images (PlcspaMom empty).\n";
+		return true;
+	}
+
+	AbstractOLEStreamReader* reader = parser->m_storage->createStreamReader("WordDocument");
+	if (!reader)
+	{
+		log_stream << "Error opening WordDocument stream for image extraction.\n";
+		return false;
+	}
+
+	const Parser9x* parser9 = dynamic_cast<const Parser9x*>(parser);
+	if (!parser9)
+	{
+		delete reader;
+		return false;
+	}
+
+	AbstractOLEStreamReader* table_reader = parser->m_storage->createStreamReader(parser9->tableStream());
+	if (!table_reader)
+	{
+		log_stream << "Error opening table stream for image extraction.\n";
+		delete reader;
+		return false;
+	}
+
+	// 1. Read Blip Store Entries (msofbtBSE) from fcDggInfo
+	struct BlipEntry {
+		uint8_t format_type;
+		uint32_t size;
+		uint32_t foDelay;
+	};
+	std::vector<BlipEntry> blips;
+
+	U32 dgg_offset = parser->fib().fcDggInfo;
+	U32 dgg_len = parser->fib().lcbDggInfo;
+	if (dgg_len > 0)
+	{
+		table_reader->seek(dgg_offset);
+		std::vector<uint8_t> dgg(dgg_len);
+		if (table_reader->read(dgg.data(), dgg_len))
+		{
+			for (size_t i = 0; i + 8 <= dgg.size(); )
+			{
+				uint16_t ver_inst = dgg[i] | (dgg[i+1] << 8);
+				uint16_t rec_type = dgg[i+2] | (dgg[i+3] << 8);
+				uint32_t rec_len = dgg[i+4] | (dgg[i+5] << 8) | (dgg[i+6] << 16) | (dgg[i+7] << 24);
+				uint16_t ver = ver_inst & 0x0F;
+
+				if (rec_type == 0xF007) // msofbtBSE
+				{
+					if (i + 8 + 36 <= dgg.size())
+					{
+						BlipEntry be;
+						be.format_type = dgg[i + 8];
+						be.size = *reinterpret_cast<const uint32_t*>(&dgg[i + 8 + 20]);
+						be.foDelay = *reinterpret_cast<const uint32_t*>(&dgg[i + 8 + 28]);
+						blips.push_back(be);
+					}
+					i += 8 + rec_len;
+				}
+				else if (ver == 0x0F)
+				{
+					i += 8;
+				}
+				else
+				{
+					i += 8 + rec_len;
+				}
+			}
+		}
+	}
+
+	// 2. Read CPs from PlcspaMom
+	U32 spa_offset = parser->fib().fcPlcspaMom;
+	U32 spa_len = parser->fib().lcbPlcspaMom;
+	std::vector<uint32_t> cps;
+	if (spa_len >= 4)
+	{
+		table_reader->seek(spa_offset);
+		size_t n = (spa_len - 4) / 30;
+		for (size_t i = 0; i < n; ++i)
+		{
+			uint32_t cp = table_reader->readU32();
+			cps.push_back(cp);
+		}
+	}
+
+	delete table_reader;
+
+	// 3. Read image raw bytes from WordDocument stream at foDelay
+	size_t num_images = std::min(cps.size(), blips.size());
+	for (size_t i = 0; i < num_images; ++i)
+	{
+		uint32_t fo = blips[i].foDelay;
+		if (fo + 8 > reader->size())
+			continue;
+
+		reader->seek(fo);
+		uint16_t ver_inst = reader->readU16();
+		uint16_t rec_type = reader->readU16();
+		uint32_t rec_len = reader->readU32();
+
+		uint16_t inst = ver_inst >> 4;
+		size_t header_skip = 17;
+		if (inst == 0x6E1 || inst == 0x46B || inst == 0x6E3)
+			header_skip = 33;
+
+		if (rec_len > header_skip && fo + 8 + header_skip < reader->size())
+		{
+			size_t img_size = rec_len - header_skip;
+			reader->seek(fo + 8 + header_skip);
+			DocEmbeddedImage img;
+			img.cp = cps[i];
+			img.emitted = false;
+			img.data.resize(img_size);
+			reader->read(reinterpret_cast<uint8_t*>(img.data.data()), img_size);
+
+			std::string ext = "png";
+			if (blips[i].format_type == 5 || (img_size > 3 && (uint8_t)img.data[0] == 0xFF && (uint8_t)img.data[1] == 0xD8))
+				ext = "jpg";
+			else if (blips[i].format_type == 6 || (img_size > 8 && memcmp(img.data.data(), "\x89PNG", 4) == 0))
+				ext = "png";
+			else if (blips[i].format_type == 7 || (img_size > 2 && memcmp(img.data.data(), "BM", 2) == 0))
+				ext = "bmp";
+
+			img.name = "word/media/image" + std::to_string(images.size() + 1) + "." + ext;
+
+			U32 stream_offset = 0;
+			if (cp_to_stream_offset(parser, log_stream, img.cp, stream_offset))
+				img.fc = stream_offset;
+			else
+				img.fc = 0;
+
+			images.push_back(img);
+			log_stream << "Extracted doc image " << img.name << " at CP " << img.cp << " (FC " << img.fc << "), size " << img.data.size() << " bytes.\n";
+		}
+	}
+
+	delete reader;
+	return true;
+}
+
 static std::string format_comment(const std::string& author, const std::string& text)
 {
 	std::string comment = "\n[[[COMMENT BY " + author + "]]]\n" + text;
@@ -337,11 +493,17 @@ class DocToTextTextHandler : public TextHandler
 		bool m_comments_parsed;
 		std::vector<Comment> m_comments;
 		U32 m_prev_par_fc;
+		doctotext::ImageParserCallback m_image_callback;
+		void* m_image_user_data;
+		bool m_images_parsed;
+		std::vector<DocEmbeddedImage> m_images;
 
 	public:
 		DocToTextTextHandler(const Parser* parser, UString* text, CurrentState* curr_state,
-				const FormattingStyle& formatting, bool verbose_logging, std::ostream& log_stream)
-			: m_parser(parser), m_curr_state(curr_state), m_comments_parsed(false), m_prev_par_fc(0)
+				const FormattingStyle& formatting, bool verbose_logging, std::ostream& log_stream,
+				doctotext::ImageParserCallback image_callback = NULL, void* image_user_data = NULL)
+			: m_parser(parser), m_curr_state(curr_state), m_comments_parsed(false), m_prev_par_fc(0),
+			  m_image_callback(image_callback), m_image_user_data(image_user_data), m_images_parsed(false)
 		{
 			Text = text;
 			m_curr_state = curr_state;
@@ -367,10 +529,11 @@ class DocToTextTextHandler : public TextHandler
 		{
 			if (((Parser9x*)m_parser)->m_currentParagraph->size() > 0)
 			{
+				U32 curr_par_fc = ((Parser9x*)m_parser)->m_currentParagraph->back().m_startFC;
 				if (m_comments_parsed)
 				{
 					for (int i = 0; i < m_comments.size(); i++)
-					if (m_comments[i].fc >= m_prev_par_fc && m_comments[i].fc < ((Parser9x*)m_parser)->m_currentParagraph->back().m_startFC)
+					if (m_comments[i].fc >= m_prev_par_fc && m_comments[i].fc < curr_par_fc)
 						(*Text) += utf8_to_ustring(format_comment(m_comments[i].author, m_comments[i].text));
 				}
 				else
@@ -381,6 +544,30 @@ class DocToTextTextHandler : public TextHandler
 						m_comments.clear();
 					}
 					m_comments_parsed = true;
+				}
+
+				if (m_image_callback)
+				{
+					if (!m_images_parsed)
+					{
+						parse_images(m_parser, *m_log_stream, m_images);
+						m_images_parsed = true;
+					}
+					for (size_t i = 0; i < m_images.size(); i++)
+					{
+						if (!m_images[i].emitted && m_images[i].fc <= curr_par_fc)
+						{
+							std::string parsed = m_image_callback(m_images[i].name, m_images[i].data.data(), m_images[i].data.size(), m_image_user_data);
+							if (!parsed.empty())
+							{
+								if ((*Text).length() > 0 && (*Text)[(*Text).length() - 1].unicode() != '\n')
+									(*Text) += UString("\n");
+								(*Text) += utf8_to_ustring(parsed);
+								(*Text) += UString("\n");
+							}
+							m_images[i].emitted = true;
+						}
+					}
 				}
 			}
 			if (m_curr_state->table.in_table && (!paragraphProperties->pap().fInTable))
@@ -519,6 +706,30 @@ class DocToTextTextHandler : public TextHandler
 				for (int i = 0; i < m_comments.size(); i++)
 					if (m_comments[i].fc >= m_prev_par_fc)
 						(*Text) += utf8_to_ustring(format_comment(m_comments[i].author, m_comments[i].text));
+
+			if (m_image_callback)
+			{
+				if (!m_images_parsed)
+				{
+					parse_images(m_parser, *m_log_stream, m_images);
+					m_images_parsed = true;
+				}
+				for (size_t i = 0; i < m_images.size(); i++)
+				{
+					if (!m_images[i].emitted)
+					{
+						std::string parsed = m_image_callback(m_images[i].name, m_images[i].data.data(), m_images[i].data.size(), m_image_user_data);
+						if (!parsed.empty())
+						{
+							if ((*Text).length() > 0 && (*Text)[(*Text).length() - 1].unicode() != '\n')
+								(*Text) += UString("\n");
+							(*Text) += utf8_to_ustring(parsed);
+							(*Text) += UString("\n");
+						}
+						m_images[i].emitted = true;
+					}
+				}
+			}
 		}
 };
 
@@ -601,6 +812,8 @@ struct DOCParser::Implementation
 	bool m_verbose_logging;
 	std::ostream* m_log_stream;
 	std::streambuf* m_cerr_buf_backup;
+	doctotext::ImageParserCallback m_image_callback;
+	void* m_image_user_data;
 
 	void modifyCerr()
 	{
@@ -636,6 +849,8 @@ DOCParser::DOCParser(const std::string& file_name)
         impl->m_log_stream = &std::cerr;
         impl->m_buffer = NULL;
         impl->m_buffer_size = 0;
+        impl->m_image_callback = NULL;
+        impl->m_image_user_data = NULL;
     } catch (std::bad_alloc &ba) {
         if (impl) {
             delete impl;
@@ -656,6 +871,8 @@ DOCParser::DOCParser(const char *buffer, size_t size)
         impl->m_log_stream = &std::cerr;
         impl->m_buffer = buffer;
         impl->m_buffer_size = size;
+        impl->m_image_callback = NULL;
+        impl->m_image_user_data = NULL;
     } catch (std::bad_alloc &ba) {
         if (impl) {
             delete impl;
@@ -671,6 +888,12 @@ DOCParser::~DOCParser()
         delete impl;
         impl = NULL;
     }
+}
+
+void DOCParser::setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data)
+{
+	impl->m_image_callback = callback;
+	impl->m_image_user_data = user_data;
 }
 
 void DOCParser::setVerboseLogging(bool verbose)
@@ -797,7 +1020,8 @@ std::string DOCParser::plainText(const FormattingStyle& formatting)
 	}
 	UString text;
 	DocToTextTextHandler text_handler(parser, &text, &curr_state, formatting,
-		impl->m_verbose_logging, *impl->m_log_stream);
+		impl->m_verbose_logging, *impl->m_log_stream,
+		impl->m_image_callback, impl->m_image_user_data);
 	parser->setTextHandler(&text_handler);
 	DocToTextTableHandler table_handler(&text, &curr_state.table);
 	parser->setTableHandler(&table_handler);

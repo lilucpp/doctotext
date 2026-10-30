@@ -457,9 +457,29 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		{
 			string sheet_rels;
 			clearImageRelationships();
+			std::vector<string> drawing_files;
 			if (zipfile.read("xl/worksheets/_rels/sheet" + int_to_str(i) + ".xml.rels", &sheet_rels))
 			{
 				loadRelationshipsFromXml(sheet_rels, "xl/worksheets/");
+				XmlStream rel_stream(sheet_rels, manageXmlParser(), getXmlOptions());
+				if (rel_stream)
+				{
+					rel_stream.levelDown();
+					while (rel_stream)
+					{
+						if (rel_stream.name() == "Relationship")
+						{
+							string rtype = rel_stream.attribute("Type");
+							string rtarget = rel_stream.attribute("Target");
+							if (rtype.find("/drawing") != string::npos && !rtarget.empty())
+							{
+								string full_target = (rtarget[0] == '/') ? rtarget.substr(1) : ("xl/worksheets/" + rtarget);
+								drawing_files.push_back(normalizeZipPath(full_target));
+							}
+						}
+						rel_stream.next();
+					}
+				}
 			}
 			string sheet_text;
 			if (!extractText(content, mode, options, &zipfile, sheet_text, getInnerLinks()))
@@ -468,6 +488,36 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 				setError(true);
 				zipfile.close();
 				return "";
+			}
+			for (size_t d = 0; d < drawing_files.size(); ++d)
+			{
+				string drawing_content;
+				if (zipfile.read(drawing_files[d], &drawing_content))
+				{
+					size_t last_slash = drawing_files[d].find_last_of('/');
+					string d_base = (last_slash == string::npos) ? "" : drawing_files[d].substr(0, last_slash + 1);
+					string d_name = (last_slash == string::npos) ? drawing_files[d] : drawing_files[d].substr(last_slash + 1);
+					string d_rels_path = d_base + "_rels/" + d_name + ".rels";
+					string d_rels_content;
+					clearImageRelationships();
+					if (zipfile.read(d_rels_path, &d_rels_content))
+					{
+						loadRelationshipsFromXml(d_rels_content, d_base);
+					}
+					string drawing_text;
+					xmlDocPtr ddoc = xmlReadMemory(drawing_content.c_str(), drawing_content.size(), "drawing.xml", NULL, getXmlOptions());
+					if (ddoc != NULL)
+					{
+						extractContentFromDrawingNode(ddoc->children, &zipfile, drawing_text);
+						xmlFreeDoc(ddoc);
+						if (!drawing_text.empty())
+						{
+							if (!sheet_text.empty() && sheet_text[sheet_text.size() - 1] != '\n')
+								sheet_text += "\n";
+							sheet_text += drawing_text;
+						}
+					}
+				}
 			}
 			text += sheet_text;
 		}

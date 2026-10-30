@@ -102,6 +102,8 @@ struct XLSParser::Implementation
 	int m_last_string_formula_col;
 	std::set<int> m_defined_num_format_ids;
 	int m_last_row, m_last_col;
+	doctotext::ImageParserCallback m_image_callback;
+	void* m_image_user_data;
 
 	U16 getU16LittleEndian(std::vector<unsigned char>::const_iterator buffer)
 	{
@@ -641,6 +643,83 @@ struct XLSParser::Implementation
 		return true;
 	}  
 
+	void extract_xls_drawing_images(const std::vector<uint8_t>& dgg_data, std::string& text)
+	{
+		if (!m_image_callback || dgg_data.size() < 8)
+			return;
+
+		int img_count = 0;
+		for (size_t i = 0; i + 8 <= dgg_data.size(); )
+		{
+			uint16_t ver_inst = dgg_data[i] | (dgg_data[i+1] << 8);
+			uint16_t rec_type = dgg_data[i+2] | (dgg_data[i+3] << 8);
+			uint32_t rec_len = dgg_data[i+4] | (dgg_data[i+5] << 8) | (dgg_data[i+6] << 16) | (dgg_data[i+7] << 24);
+			uint16_t ver = ver_inst & 0x0F;
+
+			if (rec_type == 0xF007) // msofbtBSE
+			{
+				if (i + 8 + 36 + 8 <= dgg_data.size())
+				{
+					size_t blip_offset = i + 8 + 36;
+					uint16_t b_rec_type = dgg_data[blip_offset+2] | (dgg_data[blip_offset+3] << 8);
+					uint32_t b_rec_len = dgg_data[blip_offset+4] | (dgg_data[blip_offset+5] << 8) |
+					                     (dgg_data[blip_offset+6] << 16) | (dgg_data[blip_offset+7] << 24);
+
+					if (b_rec_type >= 0xF018 && b_rec_type <= 0xF02A && blip_offset + 8 + b_rec_len <= dgg_data.size())
+					{
+						size_t header_skip = 17;
+						if (b_rec_len >= 33 + 4)
+						{
+							if (memcmp(&dgg_data[blip_offset + 8 + 33], "\x89PNG", 4) == 0 ||
+							    (dgg_data[blip_offset + 8 + 33] == 0xFF && dgg_data[blip_offset + 8 + 34] == 0xD8) ||
+							    memcmp(&dgg_data[blip_offset + 8 + 33], "BM", 2) == 0)
+							{
+								header_skip = 33;
+							}
+						}
+
+						if (b_rec_len > header_skip)
+						{
+							size_t img_size = b_rec_len - header_skip;
+							const uint8_t* img_bytes = &dgg_data[blip_offset + 8 + header_skip];
+
+							std::string ext = "png";
+							if (img_size >= 4 && memcmp(img_bytes, "\x89PNG", 4) == 0)
+								ext = "png";
+							else if (img_size >= 3 && img_bytes[0] == 0xFF && img_bytes[1] == 0xD8)
+								ext = "jpg";
+							else if (img_size >= 2 && memcmp(img_bytes, "BM", 2) == 0)
+								ext = "bmp";
+							else if (b_rec_type == 0xF01D || b_rec_type == 0xF01F || b_rec_type == 0xF029)
+								ext = "jpg";
+
+							img_count++;
+							std::string img_name = "xl/media/image" + std::to_string(img_count) + "." + ext;
+							std::string parsed = m_image_callback(img_name, reinterpret_cast<const char*>(img_bytes), img_size, m_image_user_data);
+							if (!parsed.empty())
+							{
+								if (!text.empty() && text[text.size() - 1] != '\n')
+									text += "\n";
+								text += parsed;
+								if (text[text.size() - 1] != '\n')
+									text += "\n";
+							}
+						}
+					}
+				}
+				i += 8 + rec_len;
+			}
+			else if (ver == 0x0F) // container
+			{
+				i += 8;
+			}
+			else
+			{
+				i += 8 + rec_len;
+			}
+		}
+	}
+
 	void parseXLS(ThreadSafeOLEStreamReader& reader, std::string& text)
 	{
 		m_xf_records.clear();
@@ -780,24 +859,26 @@ struct XLSParser::Implementation
 			return;
 		}
 		bool eof_rec_found = false;
+		std::vector<uint8_t> dgg_buf;
+		bool in_dgg = false;
 		while (read_status)
 		{
 			U16 rec_type;
 			if (!reader.readU16(rec_type))
 			{
 				*m_log_stream << reader.getLastError() << "\n";
-				return;
+				break;
 			}
 			if (oleEof(reader))
 			{
 				processRecord(XLS_EOF, std::vector<unsigned char>(), text);
-				return;
+				break;
 			}
 			U16 rec_len;
 			if (!reader.readU16(rec_len))
 			{
 				*m_log_stream << reader.getLastError() << "\n";
-				return;
+				break;
 			}
 			if (rec_len > 0)
 			{
@@ -806,17 +887,36 @@ struct XLSParser::Implementation
 			}
 			else
 				rec.clear();
+
+			if (rec_type == 0x00EB) // MSODRAWINGGROUP
+			{
+				in_dgg = true;
+				dgg_buf.insert(dgg_buf.end(), rec.begin(), rec.end());
+			}
+			else if (in_dgg && rec_type == 0x003C) // CONTINUE
+			{
+				dgg_buf.insert(dgg_buf.end(), rec.begin(), rec.end());
+			}
+			else if (in_dgg)
+			{
+				in_dgg = false;
+			}
+
 			if (eof_rec_found)
 			{
 				if (rec_type != XLS_BOF)
 					break;
 			}
 			if (!processRecord(rec_type, rec, text))
-				return;
+				break;
 			if (rec_type == XLS_EOF)
 				eof_rec_found = true;
 			else
 				eof_rec_found = false;	
+		}
+		if (!dgg_buf.empty() && m_image_callback)
+		{
+			extract_xls_drawing_images(dgg_buf, text);
 		}
 	}
 };
@@ -831,6 +931,8 @@ XLSParser::XLSParser(const std::string& file_name)
 	impl->m_log_stream = &std::cerr;
 	impl->m_buffer = NULL;
 	impl->m_buffer_size = 0;
+	impl->m_image_callback = NULL;
+	impl->m_image_user_data = NULL;
 }
 
 XLSParser::XLSParser(const char *buffer, size_t size)
@@ -843,11 +945,19 @@ XLSParser::XLSParser(const char *buffer, size_t size)
 	impl->m_log_stream = &std::cerr;
 	impl->m_buffer = buffer;
 	impl->m_buffer_size = size;
+	impl->m_image_callback = NULL;
+	impl->m_image_user_data = NULL;
 }
 
 XLSParser::~XLSParser()
 {
 	delete impl;
+}
+
+void XLSParser::setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data)
+{
+	impl->m_image_callback = callback;
+	impl->m_image_user_data = user_data;
 }
 
 void XLSParser::setVerboseLogging(bool verbose)

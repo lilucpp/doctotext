@@ -374,44 +374,6 @@ class CommonXMLDocumentParser::CommandHandlersSet
 		}
 };
 
-static std::string normalizeZipPath(const std::string& path)
-{
-	std::vector<std::string> parts;
-	std::string cur;
-	for (size_t i = 0; i <= path.size(); ++i)
-	{
-		if (i == path.size() || path[i] == '/')
-		{
-			if (cur == "." || cur.empty())
-			{
-				// skip
-			}
-			else if (cur == "..")
-			{
-				if (!parts.empty())
-					parts.pop_back();
-			}
-			else
-			{
-				parts.push_back(cur);
-			}
-			cur.clear();
-		}
-		else
-		{
-			cur += path[i];
-		}
-	}
-	std::string res;
-	for (size_t i = 0; i < parts.size(); ++i)
-	{
-		if (i > 0)
-			res += "/";
-		res += parts[i];
-	}
-	return res;
-}
-
 void CommonXMLDocumentParser::extractContentFromDrawingNode(xmlNodePtr node, const DocToTextUnzip* zipfile, std::string& out_text)
 {
 	if (!node)
