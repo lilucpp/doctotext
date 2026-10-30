@@ -111,7 +111,6 @@ jobs:
   build-linux-arm64:
     name: Linux (arm64)
     runs-on: ubuntu-24.04-arm
-    continue-on-error: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -174,3 +173,25 @@ jobs:
         with:
           name: doctotext-linux-arm64
           path: doctotext-linux-arm64.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-linux-x86_64, build-linux-x86, build-linux-arm64]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+          generate_release_notes: true
