@@ -58,6 +58,8 @@ build: version.h src doc/html
 	$(MAKE) -C 3rdparty libcharsetdetect
 	$(MAKE) -C 3rdparty mimetic
 ifeq ($(WIN),1)
+	$(MAKE) -C 3rdparty libiconv
+	$(MAKE) -C 3rdparty zlib
 	$(MAKE) -C 3rdparty pthreads
 	$(MAKE) -C 3rdparty libxml2
 endif

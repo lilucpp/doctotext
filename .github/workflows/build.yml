@@ -47,7 +47,7 @@ jobs:
         run: |
           mkdir -p dist
           cp -r build/* dist/
-          cd dist && zip -r ../${{ matrix.artifact }}.zip .
+          cd dist && (zip -r ../${{ matrix.artifact }}.zip . || 7z a -tzip ../${{ matrix.artifact }}.zip .)
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -65,7 +65,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxml2-dev zlib1g-dev doxygen
+          sudo apt-get install -y build-essential pkg-config libxml2-dev zlib1g-dev doxygen
 
       - name: Build doctotext
         run: |
@@ -96,7 +96,7 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib g++-multilib libxml2-dev:i386 zlib1g-dev:i386 doxygen
+          sudo apt-get install -y build-essential pkg-config gcc-multilib g++-multilib libxml2-dev:i386 zlib1g-dev:i386 doxygen
 
       - name: Build doctotext (32-bit)
         run: |
@@ -142,7 +142,7 @@ jobs:
           # 2. wv2
           git clone --depth 1 https://github.com/TidyHuang/WV2.git /tmp/wv2
           cd /tmp/wv2
-          ./autogen.sh || autoreconf -fi
+          chmod +x configure
           ./configure --enable-static --disable-shared CFLAGS="-fPIC" CXXFLAGS="-fPIC"
           make -j4
           cd -
@@ -150,7 +150,7 @@ jobs:
           cp -r /tmp/wv2/src/wv2/* 3rdparty/wv2/include/wv2/ || cp -r /tmp/wv2/src/*.h 3rdparty/wv2/include/wv2/ || true
           cp /tmp/wv2/src/.libs/libwv2.a 3rdparty/wv2/lib/
           # pull private headers from release mirror
-          curl -s -f -L https://github.com/lilucpp/doctotext/releases/download/v3rdparty-deps/wv2-0.2.3_patched_4-private_headers.tar.bz2 | tar -xj -C 3rdparty/wv2/include/wv2/ || true
+          curl -s -f -L https://github.com/lilucpp/doctotext/releases/download/v3rdparty-deps/wv2-0.2.3_patched_4-private_headers.tar.bz2 | tar -xj --strip-components=1 -C 3rdparty/wv2/include/wv2/ || true
           touch 3rdparty/wv2
 
           # 3. System-provided mimetic and htmlcxx
