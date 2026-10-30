@@ -119,7 +119,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential autoconf automake libtool libtool-bin pkg-config cmake doxygen \
+          sudo apt-get install -y build-essential autoconf automake autotools-dev libtool libtool-bin pkg-config cmake doxygen \
             libxml2-dev zlib1g-dev libmimetic-dev libhtmlcxx-dev
 
       - name: Build ARM64 third-party libraries (wv2 & libcharsetdetect)
@@ -140,6 +140,11 @@ jobs:
           git clone --depth 1 https://github.com/TidyHuang/WV2.git /tmp/wv2
           cd /tmp/wv2
           chmod +x configure
+          cp -f /usr/share/misc/config.guess config.guess || true
+          cp -f /usr/share/misc/config.sub config.sub || true
+          sed -i 's/x86_64:Linux:\*:\*)/x86_64:Linux:\*:\* | aarch64:Linux:\*:\* | arm64:Linux:\*:\*)/g' config.guess || true
+          sed -i 's/i\*86 | x86_64)/i*86 | x86_64 | aarch64 | arm64)/g' config.sub || true
+          sed -i 's/| x86-\* | x86_64-\*/| x86-* | x86_64-* | aarch64-* | arm64-*/g' config.sub || true
           ./configure --enable-static --disable-shared CFLAGS="-fPIC" CXXFLAGS="-fPIC"
           make -j4
           cd -
