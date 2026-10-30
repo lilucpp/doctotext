@@ -31,13 +31,14 @@ ifneq (,$(filter $(ARCH),win32 win64))
     LDFLAGS += ../3rdparty/unzip101e/iowin32.o \
         -L../3rdparty/wv2/$(LIBDIR) -lwv2 \
         -L../3rdparty/htmlcxx/$(LIBDIR) -lhtmlcxx \
-        -L../3rdparty/libiconv/$(LIBDIR) -liconv \
-        -L../3rdparty/libxml2/$(LIBDIR) -llibxml2 \
-        -L../3rdparty/zlib/lib -lz \
         -L../3rdparty/libcharsetdetect/lib -lcharsetdetect \
+        -L../3rdparty/mimetic/lib -lmimetic \
+        -L../3rdparty/libxml2/$(LIBDIR) -lxml2 \
+        -L../3rdparty/libiconv/$(LIBDIR) -liconv \
+        -L../3rdparty/zlib/lib -lz \
         -L../3rdparty/pthreads/$(LIBDIR) -lpthreadGC2 \
-        -L../3rdparty/mimetic/lib -lmimetic
-    LDFLAGS += -Wl,--out-implib,libdoctotext.a,--allow-multiple-definition
+        -ladvapi32 -lws2_32 -lole32 -loleaut32 -luuid -Wl,--allow-multiple-definition
+    DLL_LDFLAGS = -Wl,--out-implib,libdoctotext.a
     SHARED = -shared
 else
     EXEEXT =
@@ -99,7 +100,7 @@ doctotext$(EXEEXT): $(OBJECTS)
 	$(STRIP) doctotext$(EXEEXT)
 
 $(SOPRE)doctotext$(SOEXT): $(LIB_OBJECTS)
-	$(CXX) $(SHARED) -o $(SOPRE)doctotext$(SOEXT) $(LIB_OBJECTS) $(LDFLAGS)
+	$(CXX) $(SHARED) -o $(SOPRE)doctotext$(SOEXT) $(LIB_OBJECTS) $(LDFLAGS) $(DLL_LDFLAGS)
 	$(STRIP) $(SOPRE)doctotext$(SOEXT)
 
 $(ALL_OBJECTS): %.o: %.cpp $(HEADERS)
