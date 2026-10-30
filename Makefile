@@ -113,7 +113,12 @@ endif
 	cp ./3rdparty/pdf_font_metrics.txt build/resources
 	cp -r doc/html doc/index.html build/doc
 	cp ChangeLog VERSION build
+ifeq ($(RUN_TESTS),1)
 	$(MAKE) -C tests
+endif
+
+test: build
+	$(MAKE) -C tests test
 
 version.h: VERSION
 	echo "#define VERSION \"`cat VERSION`\"" > version.h

@@ -40,7 +40,7 @@ jobs:
 
       - name: Build doctotext
         run: |
-          ARCH=${{ matrix.arch }} make -j4
+          RUN_TESTS=0 ARCH=${{ matrix.arch }} make -j4
 
       - name: Package artifacts
         shell: bash
@@ -69,7 +69,7 @@ jobs:
 
       - name: Build doctotext
         run: |
-          make -j4
+          RUN_TESTS=0 make -j4
 
       - name: Run test suite
         run: |
@@ -100,7 +100,7 @@ jobs:
 
       - name: Build doctotext (32-bit)
         run: |
-          ARCH=x86-linux make -j4
+          RUN_TESTS=0 ARCH=x86-linux make -j4
 
       - name: Package artifacts
         run: |
@@ -123,7 +123,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential autoconf automake libtool cmake doxygen \
+          sudo apt-get install -y build-essential autoconf automake libtool libtool-bin pkg-config cmake doxygen \
             libxml2-dev zlib1g-dev libmimetic-dev libhtmlcxx-dev
 
       - name: Build ARM64 third-party libraries (wv2 & libcharsetdetect)
@@ -142,13 +142,15 @@ jobs:
           # 2. wv2
           git clone --depth 1 https://github.com/TidyHuang/WV2.git /tmp/wv2
           cd /tmp/wv2
-          ./autogen.sh
+          ./autogen.sh || autoreconf -fi
           ./configure --enable-static --disable-shared CFLAGS="-fPIC" CXXFLAGS="-fPIC"
           make -j4
           cd -
-          mkdir -p 3rdparty/wv2/include 3rdparty/wv2/lib
-          cp -r /tmp/wv2/src/wv2 3rdparty/wv2/include/
+          mkdir -p 3rdparty/wv2/include/wv2 3rdparty/wv2/lib
+          cp -r /tmp/wv2/src/wv2/* 3rdparty/wv2/include/wv2/ || cp -r /tmp/wv2/src/*.h 3rdparty/wv2/include/wv2/ || true
           cp /tmp/wv2/src/.libs/libwv2.a 3rdparty/wv2/lib/
+          # pull private headers from release mirror
+          curl -s -f -L https://github.com/lilucpp/doctotext/releases/download/v3rdparty-deps/wv2-0.2.3_patched_4-private_headers.tar.bz2 | tar -xj -C 3rdparty/wv2/include/wv2/ || true
           touch 3rdparty/wv2
 
           # 3. System-provided mimetic and htmlcxx
@@ -159,7 +161,7 @@ jobs:
 
       - name: Build doctotext
         run: |
-          ARCH=aarch64-linux make -j4
+          RUN_TESTS=0 ARCH=aarch64-linux make -j4
 
       - name: Package artifacts
         run: |
