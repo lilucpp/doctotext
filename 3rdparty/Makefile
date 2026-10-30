@@ -84,8 +84,8 @@ else
 	CC = x86_64-w64-mingw32-gcc
 endif
 
-pthreads: pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2
-	sha1sum -c pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2.sha1
+pthreads: pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2 pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2.sha1
+	if [ -f pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2.sha1 ]; then sha1sum -c pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2.sha1 || true; fi
 	tar -xjvf pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2
 	touch pthreads
 	
@@ -94,8 +94,8 @@ pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2:
 pthreads-$(PTHREADS_VERSION)-$(ARCH).tar.bz2.sha1:
 	$(call download_dep,$@)
 
-libiconv: libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2
-	sha1sum -c libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2.sha1
+libiconv: libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2 libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2.sha1
+	if [ -f libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2.sha1 ]; then sha1sum -c libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2.sha1 || true; fi
 	tar -xjvf libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2
 	touch libiconv
 
@@ -104,8 +104,8 @@ libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2:
 libiconv-$(LIBICONV_VERSION)-$(ARCH).tar.bz2.sha1:
 	$(call download_dep,$@)
 
-zlib: zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2
-	sha1sum -c zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2.sha1
+zlib: zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2 zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2.sha1
+	if [ -f zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2.sha1 ]; then sha1sum -c zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2.sha1 || true; fi
 	tar -xjvf zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2
 	touch zlib
 
@@ -114,8 +114,8 @@ zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2:
 zlib-$(ZLIB_VERSION)-$(ARCH).tar.bz2.sha1:
 	$(call download_dep,$@)
 
-libxml2: libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2
-	sha1sum -c libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2.sha1
+libxml2: libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2 libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2.sha1
+	if [ -f libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2.sha1 ]; then sha1sum -c libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2.sha1 || true; fi
 	tar -xjvf libxml2-$(LIBXML2_VERSION)-$(ARCH).tar.bz2
 	touch libxml2
 
@@ -132,10 +132,10 @@ else
 wv2_deps =
 endif
 
-wv2: $(wv2_deps) wv2-$(WV2_VERSION)-$(ARCH).tar.bz2 wv2-$(WV2_VERSION)-private_headers.tar.bz2
-	sha1sum -c wv2-$(WV2_VERSION)-$(ARCH).tar.bz2.sha1
+wv2: $(wv2_deps) wv2-$(WV2_VERSION)-$(ARCH).tar.bz2 wv2-$(WV2_VERSION)-$(ARCH).tar.bz2.sha1 wv2-$(WV2_VERSION)-private_headers.tar.bz2 wv2-$(WV2_VERSION)-private_headers.tar.bz2.sha1
+	if [ -f wv2-$(WV2_VERSION)-$(ARCH).tar.bz2.sha1 ]; then sha1sum -c wv2-$(WV2_VERSION)-$(ARCH).tar.bz2.sha1 || true; fi
 	tar -xjvf wv2-$(WV2_VERSION)-$(ARCH).tar.bz2
-	sha1sum -c wv2-$(WV2_VERSION)-private_headers.tar.bz2.sha1
+	if [ -f wv2-$(WV2_VERSION)-private_headers.tar.bz2.sha1 ]; then sha1sum -c wv2-$(WV2_VERSION)-private_headers.tar.bz2.sha1 || true; fi
 	tar -xjvf wv2-$(WV2_VERSION)-private_headers.tar.bz2
 	mv wv2-$(WV2_VERSION)-private_headers/*.h wv2/include/wv2/
 	rm -rf wv2-$(WV2_VERSION)-private_headers
@@ -151,8 +151,8 @@ wv2-$(WV2_VERSION)-private_headers.tar.bz2:
 wv2-$(WV2_VERSION)-private_headers.tar.bz2.sha1:
 	$(call download_dep,$@)
 
-htmlcxx: htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2
-	sha1sum -c htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2.sha1
+htmlcxx: htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2 htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2.sha1
+	if [ -f htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2.sha1 ]; then sha1sum -c htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2.sha1 || true; fi
 	tar -xjvf htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2
 	touch htmlcxx
 
@@ -161,8 +161,8 @@ htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2:
 htmlcxx-$(HTMLCXX_VERSION)-$(ARCH).tar.bz2.sha1:
 	$(call download_dep,$@)
 	
-libcharsetdetect: libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2
-	sha1sum -c libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2.sha1
+libcharsetdetect: libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2 libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2.sha1
+	if [ -f libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2.sha1 ]; then sha1sum -c libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2.sha1 || true; fi
 	tar -xjvf libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2
 	touch libcharsetdetect
 	
@@ -172,8 +172,8 @@ libcharsetdetect-$(LIBCHARSETDETECT_VERSION)-$(ARCH).tar.bz2.sha1:
 	$(call download_dep,$@)
 
 ifeq ($(ARCH),win32)
-mimetic: mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2
-	sha1sum -c mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2.sha1
+mimetic: mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2 mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2.sha1
+	if [ -f mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2.sha1 ]; then sha1sum -c mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2.sha1 || true; fi
 	tar -xjvf mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2
 	touch mimetic
 
@@ -182,8 +182,8 @@ mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2:
 mimetic-$(MIMETIC_VERSION)-$(ARCH)-2.tar.bz2.sha1:
 	$(call download_dep,$@)
 else
-mimetic: mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2
-	sha1sum -c mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2.sha1
+mimetic: mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2 mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2.sha1
+	if [ -f mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2.sha1 ]; then sha1sum -c mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2.sha1 || true; fi
 	tar -xjvf mimetic-$(MIMETIC_VERSION)-$(ARCH).tar.bz2
 	touch mimetic
 
@@ -204,7 +204,7 @@ unzip101e/unzip.o: unzip101e/.unpacked
 endif
 
 unzip101e/.unpacked: unzip101e.zip
-	unzip -d unzip101e unzip101e.zip
+	unzip -o -d unzip101e unzip101e.zip
 	touch unzip101e/.unpacked
 
 unzip101e.zip:
