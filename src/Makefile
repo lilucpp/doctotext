@@ -4,6 +4,11 @@ LDFLAGS = ../3rdparty/unzip101e/ioapi.o ../3rdparty/unzip101e/unzip.o
 COMMON_OBJECTS = data_stream.o doc_parser.o entities.o exception.o list_style.o rtf_parser.o odf_ooxml_parser.o html_parser.o iwork_parser.o metadata.o misc.o xml_fixer.o doctotext_unzip.o \
 	oshared.o pdf_parser.o plain_text_extractor.o ppt_parser.o xls_parser.o xlsb_parser.o thread_safe_ole_storage.o thread_safe_ole_stream_reader.o txt_parser.o \
 	attachment.o eml_parser.o variant.o link.o odfxml_parser.o common_xml_document_parser.o xml_stream.o
+
+ifneq (,$(filter $(ARCH),win32 win64))
+COMMON_OBJECTS += sjlj_compat.o
+endif
+
 OBJECTS = doctotext.o $(COMMON_OBJECTS)
 LIB_OBJECTS = doctotext_c_api.o $(COMMON_OBJECTS)
 ALL_OBJECTS = doctotext.o doctotext_c_api.o $(COMMON_OBJECTS)
