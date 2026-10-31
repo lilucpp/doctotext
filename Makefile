@@ -126,6 +126,9 @@ endif
 test: build
 	$(MAKE) -C tests test
 
+test_img: build
+	$(MAKE) -C tests test_img
+
 version.h: VERSION
 	echo "#define VERSION \"`cat VERSION`\"" > version.h
 

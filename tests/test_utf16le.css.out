@@ -1,0 +1,6 @@
+﻿/* 样式表：UTF-16LE 带BOM测试 */
+.footer {
+    text-align: center;
+    content: "版权所有 2026";
+}
+

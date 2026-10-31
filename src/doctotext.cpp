@@ -72,6 +72,8 @@ static void help()
 	printf("--pdf\ttry to parse as PDF document first.\n");
 	printf("--eml\ttry to parse as EML document first.\n");
 	printf("--odfxml\ttry to parse as ODFXML (Open Document Flat XML) document first.\n");
+	printf("--txt\ttry to parse as plain text document first.\n");
+	printf("--image\ttry to parse as image document first.\n");
 	printf("--fix-xml\ttry to fix corrupted xml files (ODF, OOXML)\n");
 	printf("--strip-xml\tstrip xml tags instead of parsing them (ODF, OOXML)\n");
 	printf("--unzip-cmd=[COMMAND]\tuse COMMAND to unzip files from archives (ODF, OOXML)\n"
@@ -141,6 +143,10 @@ int main(int argc, char* argv[])
 			parser_type = PlainTextExtractor::PARSER_PDF;
 		if (arg.find("--eml", 0) != -1)
 			parser_type = PlainTextExtractor::PARSER_EML;
+		if (arg.find("--txt", 0) != -1)
+			parser_type = PlainTextExtractor::PARSER_TXT;
+		if (arg.find("--image", 0) != -1)
+			parser_type = PlainTextExtractor::PARSER_IMAGE;
 
 		if(arg.find("table-style=", 0) != -1)
 		{

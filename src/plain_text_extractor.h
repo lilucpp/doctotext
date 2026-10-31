@@ -74,7 +74,8 @@ namespace doctotext
 				PARSER_PDF,
 				PARSER_TXT,
 				PARSER_EML,
-				PARSER_ODFXML
+				PARSER_ODFXML,
+				PARSER_IMAGE
 			};
 
 			/**

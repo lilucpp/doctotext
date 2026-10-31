@@ -38,15 +38,50 @@ This repository includes significant modernizations, architectural fixes, and ma
 
 ---
 
-## 📄 Supported Formats
+## 📄 Supported Formats & Architecture Support Matrix
 
-| Category | Formats |
-| :--- | :--- |
-| **Microsoft Office Binary** | DOC, XLS, XLSB, PPT |
-| **Office Open XML (OOXML)** | DOCX, XLSX, PPTX |
-| **OpenDocument Format (ODF)**| ODT, ODS, ODP, ODG, FODP, FODS, FODT |
-| **iWork** | PAGES, NUMBERS, KEYNOTE |
-| **Others** | PDF, RTF, HTML, EML (Email), TXT |
+DocToText 支持丰富的办公文档原生解析、纯文本及编程脚本降级解析，并通过外部回调支持图像与内嵌图像 OCR 提取。
+
+### 1. 原生办公与复合文档格式（自动探测解析）
+
+| 类别 | 支持格式 | 说明 |
+| :--- | :--- | :--- |
+| **Microsoft Office 经典二进制** | `doc`, `xls`, `xlsb`, `ppt` | 完整支持 OLE 复合流与 BIFF/XLSB 结构，支持内嵌图片提取回调 |
+| **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | 完整支持文档正文、表格，支持内嵌图片提取回调 |
+| **OpenDocument 格式 (ODF)** | `odt`, `ods`, `odp`, `odg`<br>`fodt`, `fods`, `fodp`, `fodg` | 完整支持标准 ZIP 打包版与 Flat XML 纯文本版，支持内嵌图片提取回调 |
+| **苹果办公套件 (Apple iWork)** | `pages`, `numbers`, `key`, `keynote` | 完整解析归档包与 `index.xml` |
+| **便携式文档 (PDF)** | `pdf` (常规文字排版) | 原生内置 PDFParser 提取排版文字 |
+| **网页与富文本文档** | `html`, `htm`, `rtf` | 自动剔除标签与格式控制符，提取纯文本与超链接 |
+| **电子邮件格式 (Email)** | `eml` (RFC 822) | 完整解析邮件头、正文与附件元信息 |
+
+### 2. 图像解析与 OCR 回调（统一回调机制）
+
+支持将复合文档中的**内嵌图片**或**独立图像文件**统一路由至外接 OCR 解析器：
+
+| 类别 | 支持格式 | 处理机制 |
+| :--- | :--- | :--- |
+| **独立图像格式** | `jpg`, `jpeg`, `png`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | 内部自动识别图片文件头与魔数，自动调用 `ImageParserCallback` 并将 OCR 文本直接返回 |
+| **文档内嵌图片** | DOC, PPT, XLS, DOCX, PPTX, XLSX, ODP, ODS 等内嵌图像 | 解析正文时自动提取二进制图片流，触发回调就地（In-Place）嵌入 OCR 文字 |
+
+### 3. 编程源码、标记语言与结构化配置（显式指定 `PARSER_TXT` 降级支持）
+
+此类格式为纯文本及其衍生语法，通过显式指定 `PARSER_TXT`（或命令行 `--txt`）可完美提取文本，内置 `libcharsetdetect` 引擎支持 **UTF-8、GBK / GB18030、UTF-16LE（带BOM）等多编码自动探测**：
+
+* **层叠样式表 (CSS)**：`css`（已验证多编码中文支持）
+* **编程语言与脚本**：`c`, `cpp`, `cc`, `cxx`, `h`, `hpp`, `hxx`, `py`, `java`, `go`, `rs`, `js`, `ts`, `jsx`, `tsx`, `sh`, `bat`, `cmd`, `ps1`, `sql`, `php`, `rb`, `swift`, `kt`, `scala`, `lua`, `r`, `pl`, `perl`, `asm`, `cmake`, `cs`, `d`, `pas`, `tcl` 等
+* **标记语言与结构化表格**：`xml`, `xsd`, `xsl`, `csv`
+* **结构化数据与配置文件**：`json`, `yml`, `yaml`, `toml`, `ini`, `conf`, `cfg`
+* **纯文本文档与日志**：`txt`, `text`, `md`, `markdown`, `log`
+
+### 4. 路线图与规划中 (TODO)
+
+- [ ] **扫描版纯图片 PDF**：目前原生 PDFParser 仅提取文字指令流，纯扫描版 PDF 暂无法抽取内嵌图片进行 OCR，计划增加 PDF XObject 图像提取并接入 `ImageParserCallback`。
+- [ ] **归档压缩格式文本扫描**：`zip`, `tar`, `gz`, `7z`, `rar` 目前仅供内部解压 docx/odf 容器，后续计划支持直接读取压缩包内包含的文档内容。
+
+### 5. 暂不支持的私有/专有格式
+
+* **邮件私有数据库**：`pst`, `ost`（属 Outlook 专有复杂数据库）
+* **医疗专有格式**：`dcm`（DICOM 医学成像）
 
 ---
 
@@ -181,6 +216,22 @@ Install dependencies via Homebrew:
 brew install doxygen libffi zlib xz gcc
 make -j$(sysctl -n hw.ncpu)
 ```
+
+---
+
+### 4. Running Tests
+
+- **Run Standard Unit Tests**:
+  ```bash
+  make test
+  ```
+  Runs full test suites across binary/XML/ODF/CSS-TXT formats.
+
+- **Run Image & Embedded Image OCR Tests**:
+  ```bash
+  make test_img
+  ```
+  Parses all standalone images, documents with embedded pictures, and scanned PDFs under [`tests_img/`](file:///home/peanut/project/doctotext/tests_img), printing in-place OCR extraction results.
 
 ---
 

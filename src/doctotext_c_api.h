@@ -27,6 +27,9 @@ typedef int doctotext_parser_type;
 #define DOCTOTEXT_PARSER_XLSB 8
 #define DOCTOTEXT_PARSER_PDF 9
 #define DOCTOTEXT_PARSER_TXT 10
+#define DOCTOTEXT_PARSER_EML 11
+#define DOCTOTEXT_PARSER_ODFXML 12
+#define DOCTOTEXT_PARSER_IMAGE 13
 
 typedef int doctotext_xml_parse_mode;
 

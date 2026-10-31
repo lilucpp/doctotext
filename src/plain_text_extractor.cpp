@@ -48,6 +48,7 @@
 #include <iostream>
 #include <stdio.h>
 #include <sstream>
+#include <fstream>
 #include <sys/stat.h>
 #include <time.h>
 #ifdef WIN32
@@ -697,6 +698,10 @@ PlainTextExtractor::ParserType PlainTextExtractor::parserTypeByFileExtension(con
 		parser_type = PARSER_EML;
 	else if (ext == "fodp" || ext == "fodt" || ext == "fods" || ext == "fodg")
 		parser_type = PARSER_ODFXML;
+	else if (ext == "jpg" || ext == "jpeg" || ext == "png" || ext == "webp" ||
+	         ext == "bmp" || ext == "tiff" || ext == "tif" || ext == "jfif" ||
+	         ext == "pnm" || ext == "gif")
+		parser_type = PARSER_IMAGE;
 	return parser_type;
 }
 
@@ -705,10 +710,52 @@ PlainTextExtractor::ParserType PlainTextExtractor::parserTypeByFileExtension(con
 	return parserTypeByFileExtension(std::string(file_name));
 }
 
+static bool isImageBytes(const char* buffer, size_t size)
+{
+	if (size < 4)
+		return false;
+	const unsigned char* b = reinterpret_cast<const unsigned char*>(buffer);
+	// PNG: 89 50 4E 47 0D 0A 1A 0A
+	if (size >= 8 && b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G' &&
+	    b[4] == 0x0D && b[5] == 0x0A && b[6] == 0x1A && b[7] == 0x0A)
+		return true;
+	// JPEG: FF D8 FF
+	if (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF)
+		return true;
+	// GIF: GIF87a or GIF89a
+	if (size >= 6 && b[0] == 'G' && b[1] == 'I' && b[2] == 'F' && b[3] == '8' && (b[4] == '7' || b[4] == '9') && b[5] == 'a')
+		return true;
+	// BMP: BM
+	if (b[0] == 'B' && b[1] == 'M')
+		return true;
+	// WEBP: RIFF .... WEBP
+	if (size >= 12 && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F' &&
+	    b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P')
+		return true;
+	// TIFF: II*\0 or MM\0*
+	if ((b[0] == 'I' && b[1] == 'I' && b[2] == 0x2A && b[3] == 0x00) ||
+	    (b[0] == 'M' && b[1] == 'M' && b[2] == 0x00 && b[3] == 0x2A))
+		return true;
+	return false;
+}
+
 bool PlainTextExtractor::parserTypeByFileContent(const std::string& file_name, ParserType& parser_type)
 {
 	bool error = false;
 	*impl->m_log_stream << "Trying to detect document format by its content.\n";
+
+	std::ifstream probe_fs(file_name.c_str(), std::ios::binary);
+	if (probe_fs)
+	{
+		char probe_buf[32];
+		probe_fs.read(probe_buf, sizeof(probe_buf));
+		size_t nread = probe_fs.gcount();
+		if (isImageBytes(probe_buf, nread))
+		{
+			parser_type = PARSER_IMAGE;
+			return true;
+		}
+	}
 
 	RTFParser rtf(file_name);
 	if (impl->isRTF(rtf, error, parser_type))
@@ -785,6 +832,12 @@ bool PlainTextExtractor::parserTypeByFileContent(const char* buffer, size_t size
 {
 	bool error = false;
 	*impl->m_log_stream << "Trying to detect document format by its content.\n";
+
+	if (isImageBytes(buffer, size))
+	{
+		parser_type = PARSER_IMAGE;
+		return true;
+	}
 
 	RTFParser rtf(buffer, size);
 	if (impl->isRTF(rtf, error, parser_type))
@@ -992,6 +1045,27 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 			error = impl->parseODFXML(odfxml, text);
 			break;
 		}
+		case PARSER_IMAGE:
+		{
+			if (impl->m_image_callback)
+			{
+				std::ifstream ifs(file_name.c_str(), std::ios::binary);
+				if (!ifs)
+				{
+					error = true;
+					break;
+				}
+				std::vector<char> img_buf((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+				text = impl->m_image_callback(file_name, img_buf.data(), img_buf.size(), impl->m_image_user_data);
+				error = false;
+			}
+			else
+			{
+				*impl->m_log_stream << "Image format detected, but no ImageParserCallback set.\n";
+				error = true;
+			}
+			break;
+		}
 	}
 
 	if (error && fallback)
@@ -1094,6 +1168,20 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 		{
 			ODFXMLParser odfxml(buffer, size);
 			error = impl->parseODFXML(odfxml, text);
+			break;
+		}
+		case PARSER_IMAGE:
+		{
+			if (impl->m_image_callback)
+			{
+				text = impl->m_image_callback("image_buffer", buffer, size, impl->m_image_user_data);
+				error = false;
+			}
+			else
+			{
+				*impl->m_log_stream << "Image format detected, but no ImageParserCallback set.\n";
+				error = true;
+			}
 			break;
 		}
 	}

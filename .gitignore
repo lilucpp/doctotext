@@ -12,6 +12,8 @@ tests/c_api_test
 tests/cpp_api_test
 tests/multithreading_test
 tests/read_from_buffer_test
+tests/test_img_runner
+tests/test_img_runner.exe
 tests/log.txt
 3rdparty/htmlcxx/
 3rdparty/libcharsetdetect/

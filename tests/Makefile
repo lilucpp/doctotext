@@ -1,3 +1,5 @@
+export TZ ?= America/New_York
+
 ifneq (,$(filter $(ARCH),win32 win64))
 	EXEC = PATH="$$PATH:../build" &&
 	TIME_EXEC = time $(EXEC)
@@ -25,7 +27,7 @@ ifeq ($(ARCH),x86-linux)
 	SOEXT = .so
 	FILE_OWNER = stat -c %U
 	ARCH_FLAGS = -m32
-	EXEC = $(LIB_PATH)
+	EXEC = TZ=America/New_York $(LIB_PATH)
 	TIME_EXEC = $(LIB_PATH) time
 	CC = gcc
 	CXX = g++
@@ -52,13 +54,15 @@ else
 		CXX = g++
 		STRIP = strip
 	endif
-	EXEC = $(LIB_PATH)
+	EXEC = TZ=America/New_York $(LIB_PATH)
 	TIME_EXEC = $(LIB_PATH) time
 	WIN = 0
 endif
 endif
 
-# CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+ifneq ($(ARCH),aarch64-linux)
+CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
+endif
 
 ifeq ($(WIN),1)
 CXXFLAGS += -I../3rdparty/pthreads/include
@@ -111,6 +115,15 @@ else
 	@for f in gb18030_without_bom.text utf16_with_bom.text; do \
 		echo TESTING $$f; \
 		if ! $(EXEC) ../build/doctotext $$f | tr -d '\r' | diff -u - $$f.out; then \
+			exit 1; \
+		fi; \
+	done
+	@echo
+	@echo TESTING CSS TXT-FALLBACK AND MULTI-ENCODING...
+	@echo
+	@for f in test_utf8.css test_gbk.css test_utf16le.css; do \
+		echo TESTING $$f; \
+		if ! $(EXEC) ../build/doctotext --txt $$f | tr -d '\r' | diff -u - $$f.out; then \
 			exit 1; \
 		fi; \
 	done
@@ -245,8 +258,14 @@ multithreading_test$(EXEEXT): multithreading_test.cpp ../build/plain_text_extrac
 	$(STRIP) multithreading_test$(EXEEXT)
 
 read_from_buffer_test$(EXEEXT): read_from_buffer_test.cpp ../build/plain_text_extractor.h ../build/metadata.h ../build/$(SOPRE)doctotext$(SOEXT)
-	$(LIB_PATH) $(CXX) -o read_from_buffer_test$(EXEEXT) read_from_buffer_test.cpp -L../build/ -ldoctotext $(LDFAGS) $(CXXFLAGS) $(ARCH_FLAGS)
+	$(LIB_PATH) $(CXX) -o read_from_buffer_test$(EXEEXT) read_from_buffer_test.cpp -L../build/ -ldoctotext $(LDFLAGS) $(CXXFLAGS) $(ARCH_FLAGS)
 	$(STRIP) read_from_buffer_test$(EXEEXT)
 
+test_img_runner$(EXEEXT): test_img_runner.cpp ../build/plain_text_extractor.h ../build/$(SOPRE)doctotext$(SOEXT)
+	$(LIB_PATH) $(CXX) -o test_img_runner$(EXEEXT) test_img_runner.cpp -I../src -I../build -L../build/ -ldoctotext $(LDFLAGS) $(CXXFLAGS) $(ARCH_FLAGS)
+
+test_img: test_img_runner$(EXEEXT)
+	$(EXEC) ./test_img_runner$(EXEEXT) ../tests_img
+
 clean:
-	rm -f c_api_test c_api_test.exe cpp_api_test cpp_api_test.exe multithreading_test multithreading_test.exe read_from_buffer_test read_from_buffer_test.exe
+	rm -f c_api_test c_api_test.exe cpp_api_test cpp_api_test.exe multithreading_test multithreading_test.exe read_from_buffer_test read_from_buffer_test.exe test_img_runner test_img_runner.exe
