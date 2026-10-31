@@ -36,6 +36,8 @@
 
 #include "exception.h"
 #include <iostream>
+#include <fstream>
+#include "charsetdetect.h"
 #include "metadata.h"
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +47,29 @@ using namespace doctotext;
 
 extern "C"
 {
+
+const char* DOCTOTEXT_CALL doctotext_parser_type_name(doctotext_parser_type parser_type)
+{
+	switch (parser_type)
+	{
+		case DOCTOTEXT_PARSER_AUTO: return "AUTO";
+		case DOCTOTEXT_PARSER_RTF: return "RTF";
+		case DOCTOTEXT_PARSER_ODF_OOXML: return "ODF_OOXML";
+		case DOCTOTEXT_PARSER_XLS: return "XLS";
+		case DOCTOTEXT_PARSER_DOC: return "DOC";
+		case DOCTOTEXT_PARSER_PPT: return "PPT";
+		case DOCTOTEXT_PARSER_HTML: return "HTML";
+		case DOCTOTEXT_PARSER_IWORK: return "IWORK";
+		case DOCTOTEXT_PARSER_XLSB: return "XLSB";
+		case DOCTOTEXT_PARSER_PDF: return "PDF";
+		case DOCTOTEXT_PARSER_TXT: return "TXT";
+		case DOCTOTEXT_PARSER_EML: return "EML";
+		case DOCTOTEXT_PARSER_ODFXML: return "ODFXML";
+		case DOCTOTEXT_PARSER_IMAGE: return "IMAGE";
+		case DOCTOTEXT_PARSER_ARCHIVE: return "ARCHIVE";
+		default: return "UNKNOWN";
+	}
+}
 
 #warning TODO: FILE structure (outside doctotext library) cannot be used, because of the cross-compilers problems \
 (for example, MinGW with MSVC). Either file descriptors dont work. For now we only support logging to the external file.\
@@ -992,6 +1017,38 @@ int DOCTOTEXT_CALL doctotext_parser_type_by_file_content_from_buffer(const char*
 	{
 		return 0;
 	}
+}
+
+const char* DOCTOTEXT_CALL doctotext_detect_encoding(const char* buffer, size_t size)
+{
+	if (!buffer || size == 0)
+		return "UTF-8";
+
+	csd_t detector = csd_open();
+	if (detector == (csd_t)-1)
+		return "UTF-8";
+
+	csd_consider(detector, buffer, (int)size);
+	const char* res = csd_close(detector);
+	return res ? res : "ASCII";
+}
+
+const char* DOCTOTEXT_CALL doctotext_detect_file_encoding(const char* file_name)
+{
+	if (!file_name)
+		return NULL;
+
+	std::ifstream fs(file_name, std::ios::binary);
+	if (!fs)
+		return NULL;
+
+	char sample[16384];
+	fs.read(sample, sizeof(sample));
+	size_t nread = fs.gcount();
+	if (nread == 0)
+		return "UTF-8";
+
+	return doctotext_detect_encoding(sample, nread);
 }
 
 }

@@ -1,217 +1,275 @@
-# DocToText (Enhanced Fork)
+# DocToText
+
+[English](README.md) | [简体中文](README_zh.md)
 
 [![Release](https://img.shields.io/github/v/release/lilucpp/doctotext?include_prereleases)](https://github.com/lilucpp/doctotext/releases)
 [![Build and Release](https://github.com/lilucpp/doctotext/actions/workflows/build.yml/badge.svg)](https://github.com/lilucpp/doctotext/actions/workflows/build.yml)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](COPYING.GPL)
 
-An enhanced, cross-platform fork of **DocToText** (originally developed by SILVERCODERS and previously maintained by lithiumFlower). 
-
-DocToText is a powerful C/C++ library and command-line utility for extracting plain text, metadata, and annotations from dozens of document formats (Word, Excel, PowerPoint, RTF, OpenDocument, PDF, and more).
+DocToText is a compact, high-performance C/C++ library and command-line utility for extracting plain text, annotations, and metadata from diverse document formats—including Microsoft Office (DOC, DOCX, XLS, XLSX, PPT, PPTX), OpenDocument (ODT, ODS, ODP), PDF, RTF, HTML, iWork, source code, and images.
 
 ---
 
-## 🌟 Key Improvements over Upstream (`lithiumFlower/doctotext`)
+## Architecture & Engineering Highlights
 
-This repository includes significant modernizations, architectural fixes, and major feature additions compared to the upstream:
-
-### 1. 🖼️ Embedded Image Extraction & In-Place Callback
-- **Multi-Format Image Extraction**: Added support for extracting embedded images from **DOC, PPT, XLS, XLSX, and DOCX** documents.
-- **Custom Callback Hooks**: Introduced `ImageParserCallback` in both C++ and C APIs. You can now register a callback function that receives the raw image bytes (`image_buffer`, `image_size`, `image_name`) in real-time.
-- **In-Place OCR / Content Injection**: Text returned by the callback (e.g. from an OCR engine like Tesseract or PaddleOCR) is automatically inserted into the extracted plain text stream at the exact image position.
-
-### 2. 🌐 Modern Cross-Platform & Architecture Support
-- **Linux ARM64 / aarch64**: Fully ported to ARM64, including modernized `config.guess` / `config.sub`, patching `libcharsetdetect` and `wv2` for 64-bit ARM Linux.
-- **Modern Windows MinGW-w64**:
-  - Implemented SJLJ exception unwinding stubs (`src/sjlj_compat.cpp`) allowing modern GCC/MinGW toolchains to link smoothly with precompiled legacy libraries without symbol conflicts.
-  - Fixed Windows link flags (`-lxml2`, missing system libraries `ws2_32`, `ole32`, etc.).
-  - Produced separate DLL import libraries and standalone runtime bundles.
-- **Linux Multi-Arch (x86_64, x86, ARM64)**: Cleaned build scripts and resolved system package prerequisite issues.
-
-### 3. 📦 Resilient 3rdparty Dependency Management
-- **Dual-Source Fallback**: Automated fallback to GitHub Release mirrors (`v3rdparty-deps`) if the upstream third-party URLs are unavailable or broken.
-- **Checksum Verification**: Added SHA1 integrity verification with automatic retry and error resilience.
-- **Automated Download Script**: Added `scripts/download_all_3rdparty.py` for one-step dependency preparation.
-
-### 4. 🚀 Modern CI/CD Workflows & Automated Releases
-- **Matrix Builds**: GitHub Actions CI workflow covering Windows (x86/x64), Linux (x86_64/x86/ARM64).
-- **Automated Packaging**: Automatically builds relocatable archives with proper `$ORIGIN` / `@rpath` configurations on every release tag.
+- **Decoupled OCR via Streaming Callbacks**  
+  Rather than bundling heavyweight neural network runtimes, DocToText utilizes an inversion-of-control pattern via `ImageParserCallback`. When embedded graphics (in Word, Excel, PowerPoint, or ODF) or standalone images are encountered, raw image buffers are dispatched directly to the host application's callback (e.g., Tesseract, ONNX Runtime, PaddleOCR, or vision APIs). The recognized text is seamlessly stitched back into the document stream in-place.
+- **Unified Extraction Pipeline**  
+  Combines specialized native parsers for legacy OLE2 compound files (BIFF, WordDocument streams), OpenXML packaging, ODF XML trees, and PDF content streams with an encoding-agnostic text fallback layer that leverages `libcharsetdetect` for automatic character set detection (UTF-8, GBK / GB18030, UTF-16LE).
+- **C ABI First: Maximum Interoperability**  
+  The pure **C API** (`doctotext_c_api.h`) is the **primary recommended interface**. On Windows where shared libraries may be compiled via MinGW-w64 GCC, consuming C++ interfaces across different compilers (such as MSVC) frequently introduces runtime ABI and STL layout incompatibilities. The C API provides standard C linkage (`__cdecl`), ensuring seamless integration across MSVC, GCC, Clang, C#, Python, Go, and Rust.
+- **Relocatable, Zero-Configuration Deployment**  
+  Binaries and shared libraries are linked with `$ORIGIN` runpaths on Linux and standard adjacent DLL search order on Windows. Artifacts function out-of-the-box in containerized and bare-metal environments without root privileges or `LD_LIBRARY_PATH` configuration.
 
 ---
 
-## 📄 Supported Formats & Architecture Support Matrix
+## Format Support Matrix
 
-DocToText 支持丰富的办公文档原生解析、纯文本及编程脚本降级解析，并通过外部回调支持图像与内嵌图像 OCR 提取。
+### Compound & Structured Documents
 
-### 1. 原生办公与复合文档格式（自动探测解析）
+| Format Family | Extensions | Parser Engine | In-Place Embedded Images | Metadata & Notes |
+| :--- | :--- | :--- | :---: | :---: |
+| **Microsoft Office (Legacy)** | `doc`, `xls`, `xlsb`, `ppt` | Native OLE2 / BIFF | Yes | Yes |
+| **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | Native XML / Unzip | Yes | Yes |
+| **OpenDocument (ODF)** | `odt`, `ods`, `odp`, `odg`, `fodt`, `fods`, `fodp` | Native XML / ZIP / Flat | Yes | Yes |
+| **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | Native Package Parser | - | Text only |
+| **Portable Document Format** | `pdf` (Typeset text) | Native PDFParser | - | Text only |
+| **Web & Rich Text** | `html`, `htm`, `rtf` | HTML / RTF Parser | - | Hyperlinks |
+| **Email Message** | `eml` (RFC 822) | Mimetic MIME Parser | - | Headers & Parts |
 
-| 类别 | 支持格式 | 说明 |
+### Standalone Images (via OCR Callback)
+
+| Category | Supported Formats | Detection Method |
 | :--- | :--- | :--- |
-| **Microsoft Office 经典二进制** | `doc`, `xls`, `xlsb`, `ppt` | 完整支持 OLE 复合流与 BIFF/XLSB 结构，支持内嵌图片提取回调 |
-| **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | 完整支持文档正文、表格，支持内嵌图片提取回调 |
-| **OpenDocument 格式 (ODF)** | `odt`, `ods`, `odp`, `odg`<br>`fodt`, `fods`, `fodp`, `fodg` | 完整支持标准 ZIP 打包版与 Flat XML 纯文本版，支持内嵌图片提取回调 |
-| **苹果办公套件 (Apple iWork)** | `pages`, `numbers`, `key`, `keynote` | 完整解析归档包与 `index.xml` |
-| **便携式文档 (PDF)** | `pdf` (常规文字排版) | 原生内置 PDFParser 提取排版文字 |
-| **网页与富文本文档** | `html`, `htm`, `rtf` | 自动剔除标签与格式控制符，提取纯文本与超链接 |
-| **电子邮件格式 (Email)** | `eml` (RFC 822) | 完整解析邮件头、正文与附件元信息 |
+| **Raster Images** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | Magic byte header sniffing & file extension |
 
-### 2. 图像解析与 OCR 回调（统一回调机制）
+### Plain Text, Source Code & Data (Explicit `--txt` / `PARSER_TXT`)
 
-支持将复合文档中的**内嵌图片**或**独立图像文件**统一路由至外接 OCR 解析器：
+Provides automatic multi-encoding detection (UTF-8, GBK, GB18030, UTF-16LE):
+* **Stylesheets & Markup**: `css`, `xml`, `xsd`, `xsl`, `csv`
+* **Configuration**: `json`, `yaml`, `yml`, `toml`, `ini`, `conf`, `cfg`
+* **Code & Scripts**: `c`, `cpp`, `h`, `hpp`, `py`, `java`, `go`, `rs`, `js`, `ts`, `sh`, `bat`, `cmd`, `ps1`, `sql`, `php`, `rb`, `swift`, `kt`, `scala`, `lua`, `r`, `pl`, `asm`, `cmake`, `cs`, `d`, etc.
+* **Text & Documentation**: `txt`, `text`, `md`, `markdown`, `log`
 
-| 类别 | 支持格式 | 处理机制 |
-| :--- | :--- | :--- |
-| **独立图像格式** | `jpg`, `jpeg`, `png`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | 内部自动识别图片文件头与魔数，自动调用 `ImageParserCallback` 并将 OCR 文本直接返回 |
-| **文档内嵌图片** | DOC, PPT, XLS, DOCX, PPTX, XLSX, ODP, ODS 等内嵌图像 | 解析正文时自动提取二进制图片流，触发回调就地（In-Place）嵌入 OCR 文字 |
+### Archive Formats (Format Sniffing & Type Identification)
 
-### 3. 编程源码、标记语言与结构化配置（显式指定 `PARSER_TXT` 降级支持）
-
-此类格式为纯文本及其衍生语法，通过显式指定 `PARSER_TXT`（或命令行 `--txt`）可完美提取文本，内置 `libcharsetdetect` 引擎支持 **UTF-8、GBK / GB18030、UTF-16LE（带BOM）等多编码自动探测**：
-
-* **层叠样式表 (CSS)**：`css`（已验证多编码中文支持）
-* **编程语言与脚本**：`c`, `cpp`, `cc`, `cxx`, `h`, `hpp`, `hxx`, `py`, `java`, `go`, `rs`, `js`, `ts`, `jsx`, `tsx`, `sh`, `bat`, `cmd`, `ps1`, `sql`, `php`, `rb`, `swift`, `kt`, `scala`, `lua`, `r`, `pl`, `perl`, `asm`, `cmake`, `cs`, `d`, `pas`, `tcl` 等
-* **标记语言与结构化表格**：`xml`, `xsd`, `xsl`, `csv`
-* **结构化数据与配置文件**：`json`, `yml`, `yaml`, `toml`, `ini`, `conf`, `cfg`
-* **纯文本文档与日志**：`txt`, `text`, `md`, `markdown`, `log`
-
-### 4. 路线图与规划中 (TODO)
-
-- [ ] **扫描版纯图片 PDF**：目前原生 PDFParser 仅提取文字指令流，纯扫描版 PDF 暂无法抽取内嵌图片进行 OCR，计划增加 PDF XObject 图像提取并接入 `ImageParserCallback`。
-- [ ] **归档压缩格式文本扫描**：`zip`, `tar`, `gz`, `7z`, `rar` 目前仅供内部解压 docx/odf 容器，后续计划支持直接读取压缩包内包含的文档内容。
-
-### 5. 暂不支持的私有/专有格式
-
-* **邮件私有数据库**：`pst`, `ost`（属 Outlook 专有复杂数据库）
-* **医疗专有格式**：`dcm`（DICOM 医学成像）
+| Category | Supported Extensions | Sniffing Method | Status |
+| :--- | :--- | :--- | :--- |
+| **Compressed Archives** | `zip`, `tar`, `gz`, `tgz`, `7z`, `rar`, `bz2`, `xz` | Binary magic bytes (PK, ustar, 1F8B, BZh, 7z, Rar!, etc.) | Format sniffing supported (`PARSER_ARCHIVE`); recursive content extraction planned |
 
 ---
 
-## 💻 Quickstart & API Usage
+## API Usage & Code Samples
 
-### C++ API Example (with Image Callback)
+> **Recommendation**: Use the **C API** (`doctotext_c_api.h`) for production systems and cross-compiler environments (e.g., MinGW-built DLL called from MSVC applications).
+
+### 1. Basic File Extraction (C API - Recommended)
+
+```c
+#include <stdio.h>
+#include <doctotext/doctotext_c_api.h>
+
+int main()
+{
+    DocToTextExtractorParams* params = doctotext_create_extractor_params();
+    DocToTextException* error = NULL;
+
+    // Process file (auto-detects format)
+    DocToTextExtractedData* data = doctotext_process_file("sample.docx", params, &error);
+
+    if (data) {
+        const char* text = doctotext_extracted_data_get_text(data);
+        printf("Extracted Text:\n%s\n", text);
+        doctotext_free_extracted_data(data);
+    } else if (error) {
+        size_t count = doctotext_exception_error_messages_count(error);
+        for (size_t i = 0; i < count; ++i) {
+            fprintf(stderr, "Error: %s\n", doctotext_exception_get_error_message(error, i));
+        }
+        doctotext_free_exception(error);
+    }
+
+    doctotext_free_extractor_params(params);
+    return 0;
+}
+```
+
+### 2. In-Memory Buffer Extraction (C API)
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <doctotext/doctotext_c_api.h>
+
+void extract_from_memory(const char* buffer, size_t size)
+{
+    DocToTextExtractorParams* params = doctotext_create_extractor_params();
+    DocToTextException* error = NULL;
+
+    DocToTextExtractedData* data = doctotext_process_file_from_buffer(buffer, size, params, &error);
+    if (data) {
+        printf("%s\n", doctotext_extracted_data_get_text(data));
+        doctotext_free_extracted_data(data);
+    }
+    if (error) doctotext_free_exception(error);
+    doctotext_free_extractor_params(params);
+}
+```
+
+### 3. In-Place OCR Callback for Images (C API)
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <doctotext/doctotext_c_api.h>
+
+// Invoked for standalone images or graphics embedded in DOCX/PPTX/XLSX/ODF
+const char* ocr_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
+{
+    printf("[Image Dispatched] %s (%zu bytes)\n", image_name, size);
+    // Forward buffer to local Tesseract, ONNX Runtime, or external OCR service:
+    return "[OCR TEXT: Simulated recognition]";
+}
+
+int main()
+{
+    DocToTextExtractorParams* params = doctotext_create_extractor_params();
+    doctotext_extractor_params_set_image_parser_callback(params, ocr_callback, NULL);
+
+    DocToTextExtractedData* data = doctotext_process_file("embedded_presentation.pptx", params, NULL);
+    if (data) {
+        printf("%s\n", doctotext_extracted_data_get_text(data));
+        doctotext_free_extracted_data(data);
+    }
+    doctotext_free_extractor_params(params);
+    return 0;
+}
+```
+
+### 4. Metadata Extraction (C API)
+
+```c
+#include <stdio.h>
+#include <doctotext/doctotext_c_api.h>
+
+int main()
+{
+    DocToTextExtractorParams* params = doctotext_create_extractor_params();
+    DocToTextMetadata* meta = doctotext_extract_metadata("report.pdf", params, NULL);
+
+    if (meta) {
+        printf("Author: %s\n", doctotext_metadata_author(meta));
+        printf("Page Count: %zu\n", doctotext_metadata_pages_count(meta));
+        printf("Word Count: %zu\n", doctotext_metadata_words_count(meta));
+        doctotext_free_metadata(meta);
+    }
+    doctotext_free_extractor_params(params);
+    return 0;
+}
+```
+
+### 5. File Format Sniffing & Character Encoding Detection (C API)
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <doctotext/doctotext_c_api.h>
+
+int main()
+{
+    // A. File type detection via short-circuit binary header sniffing
+    doctotext_parser_type parser_type = DOCTOTEXT_PARSER_AUTO;
+    if (doctotext_parser_type_by_file_content("unknown_document.dat", &parser_type)) {
+        printf("Detected document format type ID: %d\n", parser_type);
+    }
+
+    // B. Standalone character encoding detection
+    // Recommended sample buffer size: 4 KB to 16 KB (fast ~0.04ms with >99% confidence)
+    const char* sample_text = "中文编码测试文本，自动检测编码。";
+    const char* enc = doctotext_detect_encoding(sample_text, strlen(sample_text));
+    printf("Detected memory buffer encoding: %s\n", enc);
+
+    // C. File character encoding detection (automatically samples the initial 16 KB)
+    const char* file_enc = doctotext_detect_file_encoding("legacy_script.css");
+    printf("Detected file encoding: %s\n", file_enc ? file_enc : "Unknown");
+
+    return 0;
+}
+```
+
+### 6. C++ API (Alternative)
 
 ```cpp
 #include <iostream>
 #include <string>
 #include <doctotext/plain_text_extractor.h>
 
-// Optional callback for OCR or image processing
-std::string my_image_callback(const std::string& image_name,
-                              const char* image_buffer,
-                              size_t image_size,
-                              void* user_data)
-{
-    std::cout << "[Image Found] " << image_name << " (" << image_size << " bytes)" << std::endl;
-    // Call OCR engine here, or return placeholder/extracted text:
-    return "[IMAGE_TEXT: Extracted from " + image_name + "]";
-}
-
 int main()
 {
     doctotext::PlainTextExtractor extractor;
-    
-    // Register image callback
-    extractor.setImageParserCallback(my_image_callback, nullptr);
-
     std::string text;
-    if (extractor.processFile("sample.docx", text))
-    {
-        std::cout << "Extracted Document Text:\n" << text << std::endl;
+
+    if (extractor.processFile("document.docx", text)) {
+        std::cout << text << std::endl;
     }
     return 0;
 }
 ```
 
-### C API Example
-
-```c
-#include <stdio.h>
-#include <doctotext/doctotext_c_api.h>
-
-const char* c_image_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
-{
-    // Return OCR text or NULL
-    return "[OCR TEXT]";
-}
-
-int main()
-{
-    DocToTextExtractorParams* params = doctotext_extractor_params_new();
-    doctotext_extractor_params_set_image_parser_callback(params, c_image_callback, NULL);
-
-    DocToTextException* error = NULL;
-    char* text = doctotext_process_file("sample.xlsx", params, &error);
-
-    if (text) {
-        printf("%s\n", text);
-        doctotext_free_text_buffer(text);
-    }
-    doctotext_extractor_params_free(params);
-    return 0;
-}
-```
-
-### Command Line Interface (CLI)
+### 6. Command-Line Interface (CLI)
 
 ```bash
-# Basic extraction
-./doctotext sample.doc
+# Extract text to standard output
+./doctotext sample.docx
 
-# Extract metadata
-./doctotext --metadata sample.docx
+# Parse code, CSS, or plain text with automatic encoding detection
+./doctotext --txt app.css
 
-# Extract comments / annotations
-./doctotext --annotations sample.odt
+# Extract metadata or embedded annotations
+./doctotext --metadata paper.pdf
+./doctotext --annotations review.odt
+
+# Unix stream processing pipeline
+./doctotext report.doc | grep -i "confidential" | head -n 10
 ```
 
 ---
 
-## 🔨 Building from Source
+## Building from Source
 
-### 1. Linux (Ubuntu / Debian)
+### Linux (Ubuntu / Debian)
 
-#### Prerequisites (x86_64)
+Install build prerequisites:
 ```bash
-sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libxml2-dev zlib1g-dev doxygen
-```
+# x86_64
+sudo apt-get update && sudo apt-get install -y build-essential pkg-config libxml2-dev zlib1g-dev doxygen
 
-#### Prerequisites (ARM64 / aarch64)
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake doxygen \
+# ARM64 / aarch64
+sudo apt-get update && sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake doxygen \
   libxml2-dev zlib1g-dev libmimetic-dev libhtmlcxx-dev libgsf-1-dev libglib2.0-dev
 ```
 
-#### Build
+Build:
 ```bash
 make -j$(nproc)
 ```
-The output binaries and libraries will be placed under the `build/` directory.
+Outputs (`doctotext`, `libdoctotext.so`, headers) are placed in `build/`.
 
----
+### Windows (MSYS2 + MinGW-w64)
 
-### 2. Windows (MSYS2 + MinGW-w64)
+From an MSYS2 MinGW-w64 shell:
+```bash
+pacman -Syu && pacman -S base-devel git mingw-w64-x86_64-toolchain doxygen unzip
 
-1. Open **MSYS2 MinGW 64-bit** or **32-bit** shell.
-2. Install dependencies:
-   ```bash
-   pacman -Syu
-   pacman -S base-devel git mingw-w64-x86_64-toolchain doxygen unzip
-   ```
-3. Build:
-   ```bash
-   # For 64-bit Windows:
-   ARCH=win64 make -j4
+# 64-bit Windows:
+ARCH=win64 make -j4
 
-   # For 32-bit Windows:
-   ARCH=win32 make -j4
-   ```
+# 32-bit Windows:
+ARCH=win32 make -j4
+```
 
----
+### macOS
 
-### 3. macOS
-
-Install dependencies via Homebrew:
 ```bash
 brew install doxygen libffi zlib xz gcc
 make -j$(sysctl -n hw.ncpu)
@@ -219,35 +277,26 @@ make -j$(sysctl -n hw.ncpu)
 
 ---
 
-### 4. Running Tests
+## Verification & Testing
 
-- **Run Standard Unit Tests**:
+- **Regression Unit Tests**:
   ```bash
   make test
   ```
-  Runs full test suites across binary/XML/ODF/CSS-TXT formats.
+  Executes regression suites across binary OLE, OOXML, ODF, and multi-encoding plain text files.
 
-- **Run Image & Embedded Image OCR Tests**:
+- **OCR & Image Extraction Tests**:
   ```bash
   make test_img
   ```
-  Parses all standalone images, documents with embedded pictures, and scanned PDFs under [`tests_img/`](file:///home/peanut/project/doctotext/tests_img), printing in-place OCR extraction results.
+  Parses documents with embedded images, standalone picture files (PNG, JPEG, WebP, BMP, TIFF, GIF), and scanned PDFs under `tests_img/`, printing in-place OCR extraction results.
 
 ---
 
-## 📦 Relocatable Binaries and Shared Libraries
+## License & Credits
 
-DocToText binaries and libraries are compiled to be fully relocatable:
-- **Windows**: Search path naturally resolves adjacent DLLs.
-- **Linux**: Configured with `rpath=$ORIGIN`, meaning all dependent shared libraries placed in the same folder are automatically resolved without requiring `LD_LIBRARY_PATH` or root installation.
-- **macOS**: Configured with `@rpath` and `@loader_path`.
-
----
-
-## 📜 License & Credits
-
-- Originally created by **[SILVERCODERS](http://silvercoders.com/)** (2006–2013).
-- Maintained and modernized by **lithiumFlower** (2020–2022).
+- Originally developed by **[SILVERCODERS](http://silvercoders.com/)** (2006–2013).
+- Modernized and maintained by **lithiumFlower** (2020–2022).
 - Enhanced and maintained by **[lilucpp](https://github.com/lilucpp)** (2025–present).
 
-This project is licensed under the **GNU General Public License version 2 (GPL-2.0)**. See [COPYING.GPL](COPYING.GPL) for details.
+Licensed under the **GNU General Public License version 2 (GPL-2.0)**. See [COPYING.GPL](COPYING.GPL).

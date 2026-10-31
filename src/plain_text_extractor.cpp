@@ -702,6 +702,10 @@ PlainTextExtractor::ParserType PlainTextExtractor::parserTypeByFileExtension(con
 	         ext == "bmp" || ext == "tiff" || ext == "tif" || ext == "jfif" ||
 	         ext == "pnm" || ext == "gif")
 		parser_type = PARSER_IMAGE;
+	else if (ext == "zip" || ext == "tar" || ext == "gz" || ext == "tgz" ||
+	         ext == "7z" || ext == "rar" || ext == "bz2" || ext == "tbz2" ||
+	         ext == "xz" || ext == "txz" || ext == "z")
+		parser_type = PARSER_ARCHIVE;
 	return parser_type;
 }
 
@@ -736,6 +740,44 @@ static bool isImageBytes(const char* buffer, size_t size)
 	if ((b[0] == 'I' && b[1] == 'I' && b[2] == 0x2A && b[3] == 0x00) ||
 	    (b[0] == 'M' && b[1] == 'M' && b[2] == 0x00 && b[3] == 0x2A))
 		return true;
+	return false;
+}
+
+static bool isArchiveBytes(const char* buffer, size_t size)
+{
+	if (size < 2)
+		return false;
+	const unsigned char* b = reinterpret_cast<const unsigned char*>(buffer);
+
+	// GZIP: 1F 8B
+	if (b[0] == 0x1F && b[1] == 0x8B)
+		return true;
+
+	// BZIP2: 42 5A 68 ('BZh')
+	if (size >= 3 && b[0] == 0x42 && b[1] == 0x5A && b[2] == 0x68)
+		return true;
+
+	// ZIP: 50 4B (PK\x03\x04 or PK\x05\x06 or PK\x07\x08)
+	if (size >= 4 && b[0] == 0x50 && b[1] == 0x4B &&
+	    ((b[2] == 0x03 && b[3] == 0x04) || (b[2] == 0x05 && b[3] == 0x06) || (b[2] == 0x07 && b[3] == 0x08)))
+		return true;
+
+	// 7-Zip: 37 7A BC AF 27 1C
+	if (size >= 6 && b[0] == 0x37 && b[1] == 0x7A && b[2] == 0xBC && b[3] == 0xAF && b[4] == 0x27 && b[5] == 0x1C)
+		return true;
+
+	// RAR: 52 61 72 21 1A 07
+	if (size >= 7 && b[0] == 0x52 && b[1] == 0x61 && b[2] == 0x72 && b[3] == 0x21 && b[4] == 0x1A && b[5] == 0x07)
+		return true;
+
+	// XZ: FD 37 7A 58 5A 00
+	if (size >= 6 && b[0] == 0xFD && b[1] == 0x37 && b[2] == 0x7A && b[3] == 0x58 && b[4] == 0x5A && b[5] == 0x00)
+		return true;
+
+	// TAR: "ustar" at offset 257
+	if (size >= 262 && memcmp(buffer + 257, "ustar", 5) == 0)
+		return true;
+
 	return false;
 }
 
@@ -824,6 +866,21 @@ bool PlainTextExtractor::parserTypeByFileContent(const std::string& file_name, P
 	else if (error)
 		return false;
 
+	{
+		std::ifstream archive_fs(file_name.c_str(), std::ios::binary);
+		if (archive_fs)
+		{
+			char archive_buf[512];
+			archive_fs.read(archive_buf, sizeof(archive_buf));
+			size_t nread = archive_fs.gcount();
+			if (isArchiveBytes(archive_buf, nread))
+			{
+				parser_type = PARSER_ARCHIVE;
+				return true;
+			}
+		}
+	}
+
 	*impl->m_log_stream << "No maching parser found.\n";
 	return false;
 }
@@ -905,6 +962,12 @@ bool PlainTextExtractor::parserTypeByFileContent(const char* buffer, size_t size
 		return true;
 	else if (error)
 		return false;
+
+	if (isArchiveBytes(buffer, size))
+	{
+		parser_type = PARSER_ARCHIVE;
+		return true;
+	}
 
 	*impl->m_log_stream << "No maching parser found.\n";
 	return false;
@@ -1066,6 +1129,12 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 			}
 			break;
 		}
+		case PARSER_ARCHIVE:
+		{
+			*impl->m_log_stream << "Archive format detected (ZIP/TAR/GZ/7Z/RAR/BZ2/XZ). Archive content text extraction is not yet supported.\n";
+			error = true;
+			break;
+		}
 	}
 
 	if (error && fallback)
@@ -1182,6 +1251,12 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 				*impl->m_log_stream << "Image format detected, but no ImageParserCallback set.\n";
 				error = true;
 			}
+			break;
+		}
+		case PARSER_ARCHIVE:
+		{
+			*impl->m_log_stream << "Archive format detected (ZIP/TAR/GZ/7Z/RAR/BZ2/XZ). Archive content text extraction is not yet supported.\n";
+			error = true;
 			break;
 		}
 	}

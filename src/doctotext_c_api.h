@@ -30,6 +30,12 @@ typedef int doctotext_parser_type;
 #define DOCTOTEXT_PARSER_EML 11
 #define DOCTOTEXT_PARSER_ODFXML 12
 #define DOCTOTEXT_PARSER_IMAGE 13
+#define DOCTOTEXT_PARSER_ARCHIVE 14
+
+/**
+ * @brief Returns human-readable name for given parser type ID (e.g. "PDF", "OOXML", "ARCHIVE", "IMAGE").
+ */
+const char* DOCTOTEXT_CALL doctotext_parser_type_name(doctotext_parser_type parser_type);
 
 typedef int doctotext_xml_parse_mode;
 
@@ -607,6 +613,24 @@ int DOCTOTEXT_CALL doctotext_parser_type_by_file_content(const char *file_name, 
  * @return 0 if something goes wrong, 1 otherwise
  */
 int DOCTOTEXT_CALL doctotext_parser_type_by_file_content_from_buffer(const char* buffer, size_t size, doctotext_parser_type* parser_type);
+
+/**
+ * @brief Detects character encoding of a given text buffer.
+ * Uses the integrated Mozilla Universal Charset Detector (libcharsetdetect).
+ * @param buffer - memory buffer containing text data
+ * @param size - size of the buffer in bytes (recommended: 4KB - 16KB for optimal performance and confidence)
+ * @return Detected encoding string (e.g. "UTF-8", "GB18030", "UTF-16LE", "Shift_JIS", "windows-1252", "ASCII").
+ * Returns "UTF-8" or "ASCII" if indeterminate.
+ */
+const char* DOCTOTEXT_CALL doctotext_detect_encoding(const char* buffer, size_t size);
+
+/**
+ * @brief Detects character encoding of a file on disk.
+ * Samples the initial bytes (up to 16KB) to determine the encoding efficiently without reading the entire file.
+ * @param file_name - path to the file
+ * @return Detected encoding string, or NULL if file cannot be opened/read.
+ */
+const char* DOCTOTEXT_CALL doctotext_detect_file_encoding(const char* file_name);
 
 #ifdef __cplusplus
 }
