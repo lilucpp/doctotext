@@ -36,6 +36,9 @@
 
 #include "data_stream.h"
 #include "exception.h"
+#include <cmath>
+#include <cstdint>
+#include <stdint.h>
 #include <iostream>
 #include <list>
 #include <map>
@@ -924,7 +927,6 @@ struct PDFParser::Implementation
 				Tc,
 				Tw,
 				Ts,
-				#warning TODO: Add support for operator "Do".
 				Do,
 				usecmap,
 				begincidrange,
@@ -3265,6 +3267,167 @@ struct PDFParser::Implementation
 							obj = NULL;
 							ex.appendError("Error while creating object from stream");
 							throw;
+						}
+					}
+
+				public:
+					void getRawData(std::vector<char>& raw_data)
+					{
+						raw_data.resize(m_size);
+						if (m_size == 0)
+							return;
+						size_t current_pos = m_reader->tell();
+						if (!m_reader->seek(m_position, SEEK_SET))
+							throw doctotextex::CustomException("Cannot get raw stream data: cant seek to position " + uint_to_string(m_position));
+						if (!m_reader->read(&raw_data[0], 1, m_size))
+							throw doctotextex::CustomException("Cannot get raw stream data: cant read " + uint_to_string(m_size) + " bytes");
+						m_reader->seek(current_pos, SEEK_SET);
+					}
+
+					std::string getFilterName()
+					{
+						if (!m_dictionary)
+							return "";
+						PDFName* filter_name = m_dictionary->getObjAsName("Filter");
+						if (filter_name)
+							return (*filter_name)();
+						PDFArray* filter_array = m_dictionary->getObjAsArray("Filter");
+						if (filter_array && filter_array->Size() > 0)
+						{
+							PDFName* n = filter_array->getObjAsName(0);
+							if (n)
+								return (*n)();
+						}
+						return "";
+					}
+
+					bool getDecodedStreamBytes(std::vector<unsigned char>& out_bytes)
+					{
+						out_bytes.clear();
+						try
+						{
+							if (m_is_in_external_file)
+								return false;
+							PDFObject* filter_entry = (*m_dictionary)["Filter"];
+							if (!filter_entry)
+							{
+								out_bytes.resize(m_size);
+								if (m_size == 0)
+									return true;
+								size_t current_pos = m_reader->tell();
+								if (!m_reader->seek(m_position, SEEK_SET))
+									return false;
+								if (!m_reader->read((char*)&out_bytes[0], 1, m_size))
+									return false;
+								m_reader->seek(current_pos, SEEK_SET);
+								return true;
+							}
+							std::vector<PDFName*> filters;
+							std::vector<PDFDictionary*> filter_options;
+							PDFObject* filter_options_entry = (*m_dictionary)["DecodeParms"];
+							if (filter_options_entry)
+							{
+								if (filter_options_entry->isArray())
+								{
+									PDFArray* array_decode_params = filter_options_entry->getArray();
+									for (size_t i = 0; i < array_decode_params->Size(); ++i)
+										filter_options.push_back(array_decode_params->getObjAsDictionary(i));
+								}
+								else
+									filter_options.push_back(filter_options_entry->getDictionary());
+							}
+							else
+								filter_options.push_back(NULL);
+
+							if (filter_entry->isArray())
+							{
+								PDFArray* array_filters = filter_entry->getArray();
+								for (size_t i = 0; i < array_filters->Size(); ++i)
+									filters.push_back(array_filters->getObjAsName(i));
+							}
+							else
+								filters.push_back(filter_entry->getName());
+
+							if (filters.empty())
+								return false;
+							while (filter_options.size() < filters.size())
+								filter_options.push_back(NULL);
+
+							std::vector<unsigned char> stream_first_content(m_size);
+							std::vector<unsigned char> stream_second_content;
+							stream_second_content.reserve(m_size);
+							size_t current_pos = m_reader->tell();
+							if (!m_reader->seek(m_position, SEEK_SET))
+								return false;
+							if (!m_reader->read((char*)&stream_first_content[0], 1, m_size))
+								return false;
+
+							for (size_t i = 0; i < filters.size(); ++i)
+							{
+								if (!filters[i])
+								{
+									m_reader->seek(current_pos, SEEK_SET);
+									return false;
+								}
+								switch (PDFReader::getCompressionCode((*filters[i])()))
+								{
+									case ascii_85:
+									{
+										if (i % 2 == 0)
+											ascii_85_decode(stream_first_content, stream_second_content);
+										else
+											ascii_85_decode(stream_second_content, stream_first_content);
+										break;
+									}
+									case lzw:
+									{
+										if (i % 2 == 0)
+											lzw_decode(stream_first_content, stream_second_content, filter_options[i]);
+										else
+											lzw_decode(stream_second_content, stream_first_content, filter_options[i]);
+										break;
+									}
+									case ascii_hex:
+									{
+										if (i % 2 == 0)
+											ascii_hex_decode(stream_first_content, stream_second_content);
+										else
+											ascii_hex_decode(stream_second_content, stream_first_content);
+										break;
+									}
+									case flat:
+									{
+										if (i % 2 == 0)
+											flat_decode(stream_first_content, stream_second_content, filter_options[i]);
+										else
+											flat_decode(stream_second_content, stream_first_content, filter_options[i]);
+										break;
+									}
+									case rle:
+									{
+										if (i % 2 == 0)
+											run_length_decode(stream_first_content, stream_second_content);
+										else
+											run_length_decode(stream_second_content, stream_first_content);
+										break;
+									}
+									default:
+									{
+										m_reader->seek(current_pos, SEEK_SET);
+										return false;
+									}
+								}
+							}
+							m_reader->seek(current_pos, SEEK_SET);
+							if (filters.size() % 2 == 1)
+								out_bytes.swap(stream_second_content);
+							else
+								out_bytes.swap(stream_first_content);
+							return true;
+						}
+						catch (...)
+						{
+							return false;
 						}
 					}
 			};
@@ -6550,6 +6713,56 @@ struct PDFParser::Implementation
 					return;
 			}
 
+			void addImageText(double x, double y, double w, double h, const std::string& text)
+			{
+				if (text.empty())
+					return;
+				size_t start = 0;
+				while (start < text.size() && (text[start] == '\n' || text[start] == '\r' || text[start] == ' '))
+					++start;
+				size_t end = text.size();
+				while (end > start && (text[end - 1] == '\n' || text[end - 1] == '\r' || text[end - 1] == ' '))
+					--end;
+				if (start >= end)
+					return;
+
+				std::string trimmed = text.substr(start, end - start);
+				std::vector<std::string> lines;
+				std::string cur;
+				for (size_t i = 0; i < trimmed.size(); ++i)
+				{
+					if (trimmed[i] == '\r')
+						continue;
+					if (trimmed[i] == '\n')
+					{
+						if (!cur.empty())
+						{
+							lines.push_back(cur);
+							cur.clear();
+						}
+					}
+					else
+					{
+						cur += trimmed[i];
+					}
+				}
+				if (!cur.empty())
+					lines.push_back(cur);
+
+				if (lines.empty())
+					return;
+
+				double line_h = (h > 0) ? (h / lines.size()) : 14.0;
+				if (line_h < 6.0) line_h = 6.0;
+				if (line_h > 36.0) line_h = 18.0;
+
+				for (size_t i = 0; i < lines.size(); ++i)
+				{
+					double cur_y = (h > 0) ? (y + h - (i + 1) * line_h) : (y - i * line_h);
+					m_text_elements.insert(TextElement(x, cur_y, w, line_h, 6.0, lines[i]));
+				}
+			}
+
 			void getText(std::string& output)
 			{
 				#warning TODO: For now we are sorting strings using their x and y positions. Maybe we should implement better algorithms.
@@ -6622,6 +6835,311 @@ struct PDFParser::Implementation
 	bool m_verbose_logging;
 	std::ostream* m_log_stream;
 	PDFContent m_pdf_content;
+	doctotext::ImageParserCallback m_image_callback;
+	void* m_image_user_data;
+
+	static bool createBMP(const std::vector<unsigned char>& pixels, int width, int height, int bpc, PDFReader::PDFDictionary* dict, std::vector<char>& out_bmp)
+	{
+		if (width <= 0 || height <= 0 || pixels.empty())
+			return false;
+
+		size_t total_pixels = (size_t)width * height;
+		size_t pixel_len = pixels.size();
+
+		if (bpc == 1 || pixel_len == ((size_t)(width + 7) / 8) * height)
+		{
+			size_t src_stride = (width + 7) / 8;
+			size_t dst_stride = ((width + 31) / 32) * 4;
+			size_t pad = dst_stride - src_stride;
+			size_t img_size = dst_stride * height;
+			size_t offset = 14 + 40 + 8;
+			size_t file_size = offset + img_size;
+
+			out_bmp.resize(file_size);
+			unsigned char* out = (unsigned char*)&out_bmp[0];
+
+			out[0] = 'B'; out[1] = 'M';
+			uint32_t fs = (uint32_t)file_size;
+			memcpy(out + 2, &fs, 4);
+			out[6] = 0; out[7] = 0; out[8] = 0; out[9] = 0;
+			uint32_t off = (uint32_t)offset;
+			memcpy(out + 10, &off, 4);
+
+			memset(out + 14, 0, 40);
+			uint32_t biSize = 40;
+			memcpy(out + 14, &biSize, 4);
+			int32_t biW = width, biH = height;
+			memcpy(out + 18, &biW, 4);
+			memcpy(out + 22, &biH, 4);
+			uint16_t biPlanes = 1, biBitCount = 1;
+			memcpy(out + 26, &biPlanes, 2);
+			memcpy(out + 28, &biBitCount, 2);
+			uint32_t biSizeImg = (uint32_t)img_size;
+			memcpy(out + 34, &biSizeImg, 4);
+			uint32_t biClr = 2;
+			memcpy(out + 46, &biClr, 4);
+
+			bool inverted = false;
+			if (dict)
+			{
+				PDFReader::PDFArray* decode_arr = dict->getObjAsArray("Decode");
+				if (decode_arr && decode_arr->Size() >= 2)
+				{
+					PDFReader::PDFNumericInteger* v0 = decode_arr->getObjAsNumericInteger(0);
+					if (v0 && (*v0)() == 1)
+						inverted = true;
+				}
+			}
+			if (!inverted)
+			{
+				out[54] = 0; out[55] = 0; out[56] = 0; out[57] = 0;
+				out[58] = 255; out[59] = 255; out[60] = 255; out[61] = 0;
+			}
+			else
+			{
+				out[54] = 255; out[55] = 255; out[56] = 255; out[57] = 0;
+				out[58] = 0; out[59] = 0; out[60] = 0; out[61] = 0;
+			}
+
+			unsigned char* dst = out + offset;
+			for (int y = height - 1; y >= 0; --y)
+			{
+				size_t src_offset = (size_t)y * src_stride;
+				if (src_offset + src_stride <= pixel_len)
+					memcpy(dst, &pixels[src_offset], src_stride);
+				else
+					memset(dst, 0, src_stride);
+				dst += src_stride;
+				if (pad > 0)
+				{
+					memset(dst, 0, pad);
+					dst += pad;
+				}
+			}
+			return true;
+		}
+		else if (pixel_len >= total_pixels * 3 && (pixel_len < total_pixels * 4 || total_pixels * 3 == pixel_len))
+		{
+			size_t dst_stride = ((width * 3 + 3) / 4) * 4;
+			size_t pad = dst_stride - width * 3;
+			size_t img_size = dst_stride * height;
+			size_t offset = 14 + 40;
+			size_t file_size = offset + img_size;
+
+			out_bmp.resize(file_size);
+			unsigned char* out = (unsigned char*)&out_bmp[0];
+
+			out[0] = 'B'; out[1] = 'M';
+			uint32_t fs = (uint32_t)file_size;
+			memcpy(out + 2, &fs, 4);
+			out[6] = 0; out[7] = 0; out[8] = 0; out[9] = 0;
+			uint32_t off = (uint32_t)offset;
+			memcpy(out + 10, &off, 4);
+
+			memset(out + 14, 0, 40);
+			uint32_t biSize = 40;
+			memcpy(out + 14, &biSize, 4);
+			int32_t biW = width, biH = height;
+			memcpy(out + 18, &biW, 4);
+			memcpy(out + 22, &biH, 4);
+			uint16_t biPlanes = 1, biBitCount = 24;
+			memcpy(out + 26, &biPlanes, 2);
+			memcpy(out + 28, &biBitCount, 2);
+			uint32_t biSizeImg = (uint32_t)img_size;
+			memcpy(out + 34, &biSizeImg, 4);
+
+			unsigned char* dst = out + offset;
+			for (int y = height - 1; y >= 0; --y)
+			{
+				size_t row_start = (size_t)y * width * 3;
+				for (int x = 0; x < width; ++x)
+				{
+					size_t p = row_start + x * 3;
+					if (p + 2 < pixel_len)
+					{
+						*dst++ = pixels[p + 2];
+						*dst++ = pixels[p + 1];
+						*dst++ = pixels[p + 0];
+					}
+					else
+					{
+						*dst++ = 0; *dst++ = 0; *dst++ = 0;
+					}
+				}
+				if (pad > 0)
+				{
+					memset(dst, 0, pad);
+					dst += pad;
+				}
+			}
+			return true;
+		}
+		else if (pixel_len >= total_pixels * 4)
+		{
+			size_t dst_stride = ((width * 3 + 3) / 4) * 4;
+			size_t pad = dst_stride - width * 3;
+			size_t img_size = dst_stride * height;
+			size_t offset = 14 + 40;
+			size_t file_size = offset + img_size;
+
+			out_bmp.resize(file_size);
+			unsigned char* out = (unsigned char*)&out_bmp[0];
+
+			out[0] = 'B'; out[1] = 'M';
+			uint32_t fs = (uint32_t)file_size;
+			memcpy(out + 2, &fs, 4);
+			out[6] = 0; out[7] = 0; out[8] = 0; out[9] = 0;
+			uint32_t off = (uint32_t)offset;
+			memcpy(out + 10, &off, 4);
+
+			memset(out + 14, 0, 40);
+			uint32_t biSize = 40;
+			memcpy(out + 14, &biSize, 4);
+			int32_t biW = width, biH = height;
+			memcpy(out + 18, &biW, 4);
+			memcpy(out + 22, &biH, 4);
+			uint16_t biPlanes = 1, biBitCount = 24;
+			memcpy(out + 26, &biPlanes, 2);
+			memcpy(out + 28, &biBitCount, 2);
+			uint32_t biSizeImg = (uint32_t)img_size;
+			memcpy(out + 34, &biSizeImg, 4);
+
+			unsigned char* dst = out + offset;
+			for (int y = height - 1; y >= 0; --y)
+			{
+				size_t row_start = (size_t)y * width * 4;
+				for (int x = 0; x < width; ++x)
+				{
+					size_t p = row_start + x * 4;
+					if (p + 3 < pixel_len)
+					{
+						unsigned int c = pixels[p + 0];
+						unsigned int m = pixels[p + 1];
+						unsigned int y_c = pixels[p + 2];
+						unsigned int k = pixels[p + 3];
+						unsigned char r = (unsigned char)((255 - c) * (255 - k) / 255);
+						unsigned char g = (unsigned char)((255 - m) * (255 - k) / 255);
+						unsigned char b = (unsigned char)((255 - y_c) * (255 - k) / 255);
+						*dst++ = b;
+						*dst++ = g;
+						*dst++ = r;
+					}
+					else
+					{
+						*dst++ = 0; *dst++ = 0; *dst++ = 0;
+					}
+				}
+				if (pad > 0)
+				{
+					memset(dst, 0, pad);
+					dst += pad;
+				}
+			}
+			return true;
+		}
+		else
+		{
+			size_t dst_stride = ((width + 3) / 4) * 4;
+			size_t pad = dst_stride - width;
+			size_t img_size = dst_stride * height;
+			size_t offset = 14 + 40 + 1024;
+			size_t file_size = offset + img_size;
+
+			out_bmp.resize(file_size);
+			unsigned char* out = (unsigned char*)&out_bmp[0];
+
+			out[0] = 'B'; out[1] = 'M';
+			uint32_t fs = (uint32_t)file_size;
+			memcpy(out + 2, &fs, 4);
+			out[6] = 0; out[7] = 0; out[8] = 0; out[9] = 0;
+			uint32_t off = (uint32_t)offset;
+			memcpy(out + 10, &off, 4);
+
+			memset(out + 14, 0, 40);
+			uint32_t biSize = 40;
+			memcpy(out + 14, &biSize, 4);
+			int32_t biW = width, biH = height;
+			memcpy(out + 18, &biW, 4);
+			memcpy(out + 22, &biH, 4);
+			uint16_t biPlanes = 1, biBitCount = 8;
+			memcpy(out + 26, &biPlanes, 2);
+			memcpy(out + 28, &biBitCount, 2);
+			uint32_t biSizeImg = (uint32_t)img_size;
+			memcpy(out + 34, &biSizeImg, 4);
+			uint32_t biClr = 256;
+			memcpy(out + 46, &biClr, 4);
+
+			unsigned char* pal = out + 54;
+			for (int i = 0; i < 256; ++i)
+			{
+				pal[i * 4 + 0] = (unsigned char)i;
+				pal[i * 4 + 1] = (unsigned char)i;
+				pal[i * 4 + 2] = (unsigned char)i;
+				pal[i * 4 + 3] = 0;
+			}
+
+			unsigned char* dst = out + offset;
+			for (int y = height - 1; y >= 0; --y)
+			{
+				size_t src_offset = (size_t)y * width;
+				if (src_offset + width <= pixel_len)
+					memcpy(dst, &pixels[src_offset], width);
+				else if (src_offset < pixel_len)
+				{
+					size_t avail = pixel_len - src_offset;
+					memcpy(dst, &pixels[src_offset], avail);
+					memset(dst + avail, 0, width - avail);
+				}
+				else
+					memset(dst, 0, width);
+				dst += width;
+				if (pad > 0)
+				{
+					memset(dst, 0, pad);
+					dst += pad;
+				}
+			}
+			return true;
+		}
+	}
+
+	bool extractXObjectImage(PDFReader::PDFStream* stream, const std::string& xobject_name, std::vector<char>& out_image_data, std::string& out_image_name)
+	{
+		if (!stream || !stream->m_dictionary)
+			return false;
+		PDFReader::PDFName* subtype = stream->m_dictionary->getObjAsName("Subtype");
+		if (!subtype || (*subtype)() != "Image")
+			return false;
+
+		std::string filter = stream->getFilterName();
+		if (filter == "DCTDecode")
+		{
+			stream->getRawData(out_image_data);
+			out_image_name = xobject_name + ".jpg";
+			return !out_image_data.empty();
+		}
+		if (filter == "JPXDecode")
+		{
+			stream->getRawData(out_image_data);
+			out_image_name = xobject_name + ".jp2";
+			return !out_image_data.empty();
+		}
+
+		std::vector<unsigned char> decompressed_pixels;
+		if (!stream->getDecodedStreamBytes(decompressed_pixels) || decompressed_pixels.empty())
+			return false;
+
+		int width = stream->m_dictionary->getValAsInteger("Width", 0);
+		int height = stream->m_dictionary->getValAsInteger("Height", 0);
+		int bpc = stream->m_dictionary->getValAsInteger("BitsPerComponent", 8);
+
+		if (createBMP(decompressed_pixels, width, height, bpc, stream->m_dictionary, out_image_data))
+		{
+			out_image_name = xobject_name + ".bmp";
+			return true;
+		}
+		return false;
+	}
 
 	void parseFonts()
 	{
@@ -7298,6 +7816,7 @@ struct PDFParser::Implementation
 					contents.push_back(page_obj->getObjAsStream("Contents"));
 
 				PDFContent::PageText page_text;
+				std::set<std::string> processed_images;
 				for (size_t j = 0; j < contents.size(); ++j)
 				{
 					PDFReader::PDFStream* page_content = contents[j];
@@ -7451,6 +7970,64 @@ struct PDFParser::Implementation
 											page_text.pushState();
 											break;
 										}
+										case PDFReader::Do:
+										{
+											if (!last_name.empty() && m_image_callback)
+											{
+												PDFReader::PDFDictionary* resources = m_pdf_content.m_pages_resources[i];
+												if (!resources)
+													resources = m_pdf_content.m_pages[i]->getObjAsDictionary("Resources");
+												if (resources)
+												{
+													PDFReader::PDFDictionary* xobjects = resources->getObjAsDictionary("XObject");
+													if (xobjects)
+													{
+														PDFReader::PDFStream* img_stream = xobjects->getObjAsStream(last_name);
+														if (img_stream)
+														{
+															std::vector<char> img_bytes;
+															std::string img_filename;
+															if (extractXObjectImage(img_stream, last_name, img_bytes, img_filename))
+															{
+																processed_images.insert(last_name);
+
+																double ctm_x = page_text.m_current_state.m_ctm[4];
+																double ctm_y = page_text.m_current_state.m_ctm[5];
+																double ctm_w = std::sqrt(page_text.m_current_state.m_ctm[0] * page_text.m_current_state.m_ctm[0] +
+																                         page_text.m_current_state.m_ctm[1] * page_text.m_current_state.m_ctm[1]);
+																double ctm_h = std::sqrt(page_text.m_current_state.m_ctm[2] * page_text.m_current_state.m_ctm[2] +
+																                         page_text.m_current_state.m_ctm[3] * page_text.m_current_state.m_ctm[3]);
+
+																bool is_dual_layer_background = false;
+																if (page_text.m_text_elements.size() > 10)
+																{
+																	double page_w = 612.0, page_h = 792.0;
+																	PDFReader::PDFArray* media_box = m_pdf_content.m_pages[i]->getObjAsArray("MediaBox");
+																	if (media_box && media_box->Size() >= 4)
+																	{
+																		page_w = std::abs(media_box->getValAsDouble(2, 612.0) - media_box->getValAsDouble(0, 0.0));
+																		page_h = std::abs(media_box->getValAsDouble(3, 792.0) - media_box->getValAsDouble(1, 0.0));
+																	}
+																	if (ctm_w >= page_w * 0.85 && ctm_h >= page_h * 0.85)
+																		is_dual_layer_background = true;
+																}
+
+																if (!is_dual_layer_background)
+																{
+																	std::string ocr_text = m_image_callback(img_filename, img_bytes.data(), img_bytes.size(), m_image_user_data);
+																	if (!ocr_text.empty())
+																	{
+																		page_text.addImageText(ctm_x, ctm_y, ctm_w, ctm_h, ocr_text);
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+											last_name.clear();
+											break;
+										}
 									}
 									last_numbers.clear();
 									break;
@@ -7489,8 +8066,7 @@ struct PDFParser::Implementation
 								}
 								case PDFReader::name:
 								{
-									if (in_text)
-										last_name = std::string(iterator.getData() + 1, iterator.getDataLength() - 1);
+									last_name = std::string(iterator.getData() + 1, iterator.getDataLength() - 1);
 									break;
 								}
 								case PDFReader::int_numeric:
@@ -7502,6 +8078,39 @@ struct PDFParser::Implementation
 							}
 						}
 						iterator.levelUp();
+					}
+				}
+				if (page_text.m_text_elements.empty() && m_image_callback)
+				{
+					PDFReader::PDFDictionary* resources = m_pdf_content.m_pages_resources[i];
+					if (!resources)
+						resources = m_pdf_content.m_pages[i]->getObjAsDictionary("Resources");
+					if (resources)
+					{
+						PDFReader::PDFDictionary* xobjects = resources->getObjAsDictionary("XObject");
+						if (xobjects)
+						{
+							for (std::map<std::string, PDFReader::PDFObject*>::iterator xit = xobjects->m_objects.begin();
+							     xit != xobjects->m_objects.end(); ++xit)
+							{
+								if (processed_images.find(xit->first) != processed_images.end())
+									continue;
+								PDFReader::PDFStream* img_stream = xobjects->getObjAsStream(xit->first);
+								if (!img_stream)
+									continue;
+								std::vector<char> img_bytes;
+								std::string img_filename;
+								if (extractXObjectImage(img_stream, xit->first, img_bytes, img_filename))
+								{
+									processed_images.insert(xit->first);
+									std::string ocr_text = m_image_callback(img_filename, img_bytes.data(), img_bytes.size(), m_image_user_data);
+									if (!ocr_text.empty())
+									{
+										page_text.addImageText(0, 0, 612.0, 792.0, ocr_text);
+									}
+								}
+							}
+						}
 					}
 				}
 				page_text.getText(text);
@@ -7646,6 +8255,8 @@ PDFParser::PDFParser(const std::string& file_name)
 		impl->m_error = false;
 		impl->m_verbose_logging = false;
 		impl->m_log_stream = &std::cerr;
+		impl->m_image_callback = NULL;
+		impl->m_image_user_data = NULL;
 	}
 	catch (std::bad_alloc& ba)
 	{
@@ -7670,6 +8281,8 @@ PDFParser::PDFParser(const char* buffer, size_t size)
 		impl->m_error = false;
 		impl->m_verbose_logging = false;
 		impl->m_log_stream = &std::cerr;
+		impl->m_image_callback = NULL;
+		impl->m_image_user_data = NULL;
 	}
 	catch (std::bad_alloc& ba)
 	{
@@ -7701,6 +8314,12 @@ void PDFParser::setVerboseLogging(bool verbose)
 void PDFParser::setLogStream(std::ostream& log_stream)
 {
 	impl->m_log_stream = &log_stream;
+}
+
+void PDFParser::setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data)
+{
+	impl->m_image_callback = callback;
+	impl->m_image_user_data = user_data;
 }
 
 bool PDFParser::isPDF()

@@ -132,7 +132,7 @@ test_img: build
 version.h: VERSION
 	echo "#define VERSION \"`cat VERSION`\"" > version.h
 
-.PHONY: 
+.PHONY: build test test_img clean snapshot release snapshot-bin release-bin 
 
 doc/html: doc/Doxyfile src
 	@if which doxygen > /dev/null 2>&1; then \

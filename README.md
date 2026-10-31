@@ -13,7 +13,7 @@ DocToText is a compact, high-performance C/C++ library and command-line utility 
 ## Architecture & Engineering Highlights
 
 - **Decoupled OCR via Streaming Callbacks**  
-  Rather than bundling heavyweight neural network runtimes, DocToText utilizes an inversion-of-control pattern via `ImageParserCallback`. When embedded graphics (in Word, Excel, PowerPoint, or ODF) or standalone images are encountered, raw image buffers are dispatched directly to the host application's callback (e.g., Tesseract, ONNX Runtime, PaddleOCR, or vision APIs). The recognized text is seamlessly stitched back into the document stream in-place.
+  Rather than bundling heavyweight neural network runtimes, DocToText utilizes an inversion-of-control pattern via `ImageParserCallback`. When embedded graphics (in Word, Excel, PowerPoint, ODF, or PDF) or standalone images are encountered, raw image buffers are dispatched directly to the host application's callback (e.g., Tesseract, ONNX Runtime, PaddleOCR, or vision APIs). The recognized text is seamlessly stitched back into the document stream in-place (including exact 2D geometric reading-order placement for PDF pages via CTM transformation matrices, pure scan fallback, and dual-layer searchable PDF deduplication).
 - **Unified Extraction Pipeline**  
   Combines specialized native parsers for legacy OLE2 compound files (BIFF, WordDocument streams), OpenXML packaging, ODF XML trees, and PDF content streams with an encoding-agnostic text fallback layer that leverages `libcharsetdetect` for automatic character set detection (UTF-8, GBK / GB18030, UTF-16LE).
 - **C ABI First: Maximum Interoperability**  
@@ -33,7 +33,7 @@ DocToText is a compact, high-performance C/C++ library and command-line utility 
 | **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | Native XML / Unzip | Yes | Yes |
 | **OpenDocument (ODF)** | `odt`, `ods`, `odp`, `odg`, `fodt`, `fods`, `fodp` | Native XML / ZIP / Flat | Yes | Yes |
 | **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | Native Package Parser | - | Text only |
-| **Portable Document Format** | `pdf` (Typeset text) | Native PDFParser | - | Text only |
+| **Portable Document Format** | `pdf` (Typeset text & Scans) | Native PDFParser | Yes (2D In-Place & Scan Fallback) | Yes |
 | **Web & Rich Text** | `html`, `htm`, `rtf` | HTML / RTF Parser | - | Hyperlinks |
 | **Email Message** | `eml` (RFC 822) | Mimetic MIME Parser | - | Headers & Parts |
 
@@ -123,7 +123,7 @@ void extract_from_memory(const char* buffer, size_t size)
 #include <string.h>
 #include <doctotext/doctotext_c_api.h>
 
-// Invoked for standalone images or graphics embedded in DOCX/PPTX/XLSX/ODF
+// Invoked for standalone images or graphics embedded in PDF/DOCX/PPTX/XLSX/ODF
 const char* ocr_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
 {
     printf("[Image Dispatched] %s (%zu bytes)\n", image_name, size);
@@ -288,6 +288,8 @@ make -j$(sysctl -n hw.ncpu)
 - **OCR & Image Extraction Tests**:
   ```bash
   make test_img
+  # Or test a single document directly:
+  LD_LIBRARY_PATH=./build ./tests/test_img_runner tests_img/embedded_image2.pdf
   ```
   Parses documents with embedded images, standalone picture files (PNG, JPEG, WebP, BMP, TIFF, GIF), and scanned PDFs under `tests_img/`, printing in-place OCR extraction results.
 

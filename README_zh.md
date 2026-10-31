@@ -13,7 +13,7 @@ DocToText 是一个轻量、高性能的 C/C++ 文档正文、元数据及批注
 ## 架构与核心工程设计
 
 - **流式解耦的 OCR 回调机制（Inversion-of-Control）**  
-  不强行捆绑庞大的深度学习推理框架，而是通过 `ImageParserCallback` 提供控制反转接口。在解析复合文档（Word, Excel, PowerPoint, ODF）遇到内嵌图片或处理独立图像时，原始二进制缓冲流直接派发给宿主程序注册的回调函数（可灵活接入本地 Tesseract、ONNX Runtime、PaddleOCR 或云端视觉模型），并将识别文本就地（In-Place）精确缝合回文档正文字符流中。
+  不强行捆绑庞大的深度学习推理框架，而是通过 `ImageParserCallback` 提供控制反转接口。在解析文档（Word, Excel, PowerPoint, ODF 以及 PDF）遇到内嵌图片或处理独立图像时，原始二进制缓冲流直接派发给宿主程序注册的回调函数（可灵活接入本地 Tesseract、ONNX Runtime、PaddleOCR 或云端视觉模型），并将识别文本就地（In-Place）精确缝合回文档正文字符流中。针对 PDF 支持基于 CTM 变换矩阵的空间几何阅读顺序注入、纯扫描件兜底识别与双层可搜索 PDF 去重。
 - **统一多源解析管道**  
   融合了面向经典二进制 OLE2 复合文档（BIFF 流、WordDocument 流）、OpenXML 打包容器、ODF 树形结构与 PDF 页面排版的原生解析引擎，并配备基于 `libcharsetdetect` 的字符集自适应文本降级层，支持自动识别并转换多编码文本（UTF-8, GBK / GB18030, UTF-16LE）。
 - **C 接口优先：兼顾极致跨平台 ABI 稳定性**  
@@ -33,7 +33,7 @@ DocToText 是一个轻量、高性能的 C/C++ 文档正文、元数据及批注
 | **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | 原生 XML / Unzip | 支持 | 支持 |
 | **OpenDocument (ODF)** | `odt`, `ods`, `odp`, `odg`, `fodt`, `fods`, `fodp` | 原生 XML / ZIP / Flat | 支持 | 支持 |
 | **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | 原生 Package 解析 | - | 仅文本 |
-| **便携式文档格式 (PDF)** | `pdf` (排版文字) | 原生 PDFParser | - | 仅文本 |
+| **便携式文档格式 (PDF)** | `pdf` (排版文字与扫描件) | 原生 PDFParser | 支持（几何原位注入与扫描兜底） | 支持 |
 | **网页与富文本** | `html`, `htm`, `rtf` | HTML / RTF Parser | - | 超链接 |
 | **电子邮件格式 (Email)** | `eml` (RFC 822) | Mimetic MIME Parser | - | 邮件头与附件 |
 
@@ -123,7 +123,7 @@ void extract_from_memory(const char* buffer, size_t size)
 #include <string.h>
 #include <doctotext/doctotext_c_api.h>
 
-// 当解析到独立图像或 Word/PPT/Excel/ODF 中的内嵌插图时触发
+// 当解析到独立图像或 PDF/Word/PPT/Excel/ODF 中的内嵌插图时触发
 const char* ocr_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
 {
     printf("[触发图片提取] %s (%zu 字节)\n", image_name, size);
@@ -287,6 +287,8 @@ make -j$(sysctl -n hw.ncpu)
 - **图像与内嵌 OCR 测试**：
   ```bash
   make test_img
+  # 或直接指定单个文档测试：
+  LD_LIBRARY_PATH=./build ./tests/test_img_runner tests_img/embedded_image2.pdf
   ```
   处理 `tests_img/` 目录下的独立图片（PNG, JPEG, WebP, BMP, TIFF, GIF）、内嵌图片复合文档及扫描件，输出实测 OCR 识别结果。
 

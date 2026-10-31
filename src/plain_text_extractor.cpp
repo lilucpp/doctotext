@@ -420,6 +420,8 @@ struct PlainTextExtractor::Implementation
 			pdf.setVerboseLogging(true);
 		if (m_log_stream != &std::cerr)
 			pdf.setLogStream(*m_log_stream);
+		if (m_image_callback)
+			pdf.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using PDF parser.\n";
 		text = pdf.plainText(m_formatting_style);
 		m_links.clear();

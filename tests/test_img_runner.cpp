@@ -64,23 +64,28 @@ int main(int argc, char* argv[])
     std::cout << "  DocToText Image & Embedded Image Test Runner (Target: " << target_dir << ")" << std::endl;
     std::cout << "==========================================================================" << std::endl;
 
-    DIR* dir = opendir(target_dir.c_str());
-    if (!dir) {
-        std::cerr << "Failed to open directory: " << target_dir << std::endl;
-        return 1;
-    }
-
     std::vector<std::string> test_files;
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
-        std::string path = target_dir + "/" + entry->d_name;
-        struct stat st;
-        if (stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
-            test_files.push_back(path);
+    struct stat st;
+    if (stat(target_dir.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+        test_files.push_back(target_dir);
+    } else {
+        DIR* dir = opendir(target_dir.c_str());
+        if (!dir) {
+            std::cerr << "Failed to open directory or file: " << target_dir << std::endl;
+            return 1;
         }
+
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (entry->d_name[0] == '.') continue;
+            std::string path = target_dir + "/" + entry->d_name;
+            struct stat file_st;
+            if (stat(path.c_str(), &file_st) == 0 && S_ISREG(file_st.st_mode)) {
+                test_files.push_back(path);
+            }
+        }
+        closedir(dir);
     }
-    closedir(dir);
 
     PlainTextExtractor extractor;
     extractor.setImageParserCallback(ocr_callback, NULL);
