@@ -23,6 +23,25 @@ DocToText is a compact, high-performance C/C++ library and command-line utility 
 
 ---
 
+## Why This Fork? (Comparison with Upstream)
+
+Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlower (2020–2022), DocToText was a capable document converter. This maintained fork (**v5.1.2+ by [lilucpp](https://github.com/lilucpp)**) elevates it into a modern, production-grade text extraction engine tailored for high-throughput data processing, RAG (Retrieval-Augmented Generation), and search indexing:
+
+| Capability / Feature | Original (SILVERCODERS 0.2.x) | lithiumFlower Fork | **This Fork (lilucpp v5.1.2+)** |
+| :--- | :---: | :---: | :---: |
+| **PDF In-Place Embedded Image Extraction** | ❌ Unsupported (`TODO: Do`) | ❌ Unsupported | **✅ Supported (JPEG, Flate, PNG, BMP)** |
+| **PDF 2D Reading-Order Placement** | ❌ None | ❌ None | **✅ CTM matrix 2D geometric sorting** |
+| **Dual-Layer (Searchable) PDF Deduplication** | ❌ None | ❌ None | **✅ Auto-detects & skips redundant background OCR** |
+| **Pure Scanned PDF Fallback** | ❌ Returns empty text | ❌ Returns empty text | **✅ Auto-dispatches all Image XObjects** |
+| **Standalone Images Parsing** | ❌ Unsupported | ❌ Unsupported | **✅ PNG, JPG, WebP, BMP, TIFF, GIF via OCR** |
+| **Binary Format Sniffing (Magic Bytes)** | ❌ File extension only | ❌ Extension biased | **✅ Deep sniffing (~1.2 µs) + Archive types (ZIP/7Z/TAR/RAR)** |
+| **Character Set Auto-Detection C API** | ❌ Internal only | ❌ Internal only | **✅ Public C API (`libcharsetdetect`)** |
+| **Cross-Compiler C ABI Stability** | ⚠️ STL / ABI breakage (MSVC) | ⚠️ Unstable FFI | **✅ Production-grade C ABI (`__cdecl`), safe for FFI** |
+| **Zero-Config Portable Deployment** | ❌ System install required | ❌ System paths | **✅ Relocatable (`$ORIGIN` & adjacent DLL search)** |
+| **Multi-Platform CI/CD Workflows** | ❌ None | ⚠️ Basic | **✅ Automated GitHub Actions build, test & release** |
+
+---
+
 ## Format Support Matrix
 
 ### Compound & Structured Documents
@@ -216,7 +235,40 @@ int main()
 }
 ```
 
-### 6. Command-Line Interface (CLI)
+### 7. Python Integration for RAG / LLM Pipelines (via `ctypes`)
+
+DocToText can be called directly from Python using the standard library `ctypes` module with **zero third-party dependencies** and native C++ speed (10–50x faster than pure-Python parsers like `pypdf` or `python-docx`):
+
+```python
+import ctypes
+
+# Load native shared library (libdoctotext.so on Linux, doctotext.dll on Windows)
+lib = ctypes.CDLL("./build/libdoctotext.so")
+
+lib.doctotext_create_extractor_params.restype = ctypes.c_void_p
+lib.doctotext_free_extractor_params.argtypes = [ctypes.c_void_p]
+lib.doctotext_process_file.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p]
+lib.doctotext_process_file.restype = ctypes.c_void_p
+lib.doctotext_extracted_data_get_text.argtypes = [ctypes.c_void_p]
+lib.doctotext_extracted_data_get_text.restype = ctypes.c_char_p
+lib.doctotext_free_extracted_data.argtypes = [ctypes.c_void_p]
+
+def extract_document_text(file_path: str) -> str:
+    params = lib.doctotext_create_extractor_params()
+    data = lib.doctotext_process_file(file_path.encode("utf-8"), params, None)
+    text = ""
+    if data:
+        text = lib.doctotext_extracted_data_get_text(data).decode("utf-8", errors="ignore")
+        lib.doctotext_free_extracted_data(data)
+    lib.doctotext_free_extractor_params(params)
+    return text
+
+# Extract text with native speed for LLM embedding, chunking, or search indexing:
+text = extract_document_text("example.docx")  # Also supports .pdf, .xlsx, .pptx, .doc, etc.
+print(text)
+```
+
+### 8. Command-Line Interface (CLI)
 
 ```bash
 # Extract text to standard output
