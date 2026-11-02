@@ -34,7 +34,7 @@ ifneq (,$(filter $(ARCH),win32 win64))
     SOEXT = .dll
     CXXFLAGS += -I../3rdparty/libiconv/include -I../3rdparty/libcharsetdetect/include -I../3rdparty/zlib/include -I../3rdparty/libxml2/include/libxml2 -I../3rdparty/pthreads/include -I../3rdparty/mimetic/include
     LDFLAGS += ../3rdparty/unzip101e/iowin32.o \
-        -L../3rdparty/wv2/$(LIBDIR) -lwv2 \
+        ../3rdparty/wv2/$(LIBDIR)/libwv2.a \
         -L../3rdparty/htmlcxx/$(LIBDIR) -lhtmlcxx \
         -L../3rdparty/libcharsetdetect/lib -lcharsetdetect \
         -L../3rdparty/mimetic/lib -lmimetic \
@@ -42,8 +42,9 @@ ifneq (,$(filter $(ARCH),win32 win64))
         -L../3rdparty/libiconv/$(LIBDIR) -liconv \
         -L../3rdparty/zlib/lib -lz \
         -L../3rdparty/pthreads/$(LIBDIR) -lpthreadGC2 \
-        -ladvapi32 -lws2_32 -lole32 -loleaut32 -luuid -Wl,--allow-multiple-definition
-    DLL_LDFLAGS = -Wl,--out-implib,libdoctotext.a
+        -ladvapi32 -lws2_32 -lole32 -loleaut32 -luuid -Wl,--allow-multiple-definition \
+        -static-libgcc -static-libstdc++
+    DLL_LDFLAGS = -Wl,--out-implib,libdoctotext.a -Wl,--exclude-libs,ALL -Wl,--version-script,doctotext.version
     SHARED = -shared
 else
     EXEEXT =

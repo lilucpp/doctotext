@@ -21,6 +21,15 @@ tests/log.txt
 3rdparty/mimetic/
 3rdparty/unzip101e/
 3rdparty/wv2/
+3rdparty/libiconv/
+3rdparty/pthreads/
+3rdparty/zlib/
+
+src/doctotext
+src/doctotext.exe
+src/libdoctotext.so
+src/doctotext.dll
+src/libdoctotext.a
 
 doc/html/
 3rdparty_backup/
