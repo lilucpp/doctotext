@@ -103,6 +103,7 @@ XmlStream::XmlStream(const std::string &xml, bool manage_xml_parser, int xml_par
 		if (xmlTextReaderRead(impl->m_reader) != 1)
 		{
 			xmlFreeTextReader(impl->m_reader);
+			impl->m_reader = NULL;
 			impl->m_badbit = true;
 			return;
 		}
@@ -113,6 +114,7 @@ XmlStream::XmlStream(const std::string &xml, bool manage_xml_parser, int xml_par
 		if (impl->m_curr_depth == -1)
 		{
 			xmlFreeTextReader(impl->m_reader);
+			impl->m_reader = NULL;
 			impl->m_badbit = true;
 			return;
 		}
