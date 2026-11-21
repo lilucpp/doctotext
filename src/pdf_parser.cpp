@@ -7827,6 +7827,69 @@ struct PDFParser::Implementation
 		}
 	}
 
+	static std::string decode_pdf_string(PDFReader::PDFString* pdf_str)
+	{
+		if (!pdf_str)
+			return "";
+		pdf_str->ConvertToLiteral();
+		const std::string& val = pdf_str->m_value;
+		if (val.size() >= 2 && (unsigned char)val[0] == 0xFE && (unsigned char)val[1] == 0xFF)
+		{
+			std::string utf8;
+			size_t i = 2;
+			while (i + 1 < val.size())
+			{
+				unsigned int ch = ((unsigned char)val[i] << 8) | (unsigned char)val[i + 1];
+				i += 2;
+				if (utf16_unichar_has_4_bytes(ch) && i + 1 < val.size())
+				{
+					unsigned int trail = ((unsigned char)val[i] << 8) | (unsigned char)val[i + 1];
+					ch = (ch << 16) | trail;
+					i += 2;
+				}
+				if (ch != 0)
+					utf8 += unichar_to_utf8(ch);
+			}
+			return utf8;
+		}
+		return val;
+	}
+
+	void parseAnnotations(PDFReader::PDFDictionary* page_obj, std::string& text)
+	{
+		if (!page_obj)
+			return;
+		PDFReader::PDFArray* annots = page_obj->getObjAsArray("Annots");
+		if (!annots)
+			return;
+
+		for (size_t i = 0; i < annots->Size(); ++i)
+		{
+			PDFReader::PDFDictionary* annot_dict = annots->getObjAsDictionary(i);
+			if (!annot_dict)
+				continue;
+
+			std::string subtype = annot_dict->getValAsString("Subtype", "");
+			if (subtype == "Popup")
+				continue;
+
+			PDFReader::PDFString* contents_str = annot_dict->getObjAsString("Contents");
+			if (!contents_str)
+				continue;
+
+			std::string contents = decode_pdf_string(contents_str);
+			if (contents.empty())
+				continue;
+
+			std::string author = decode_pdf_string(annot_dict->getObjAsString("T"));
+
+			if (!author.empty())
+				text += "\nComment [" + author + "]: " + contents + "\n";
+			else
+				text += "\nComment: " + contents + "\n";
+		}
+	}
+
 	void parseText(std::string& text)
 	{
 		for (size_t i = 0; i < m_pdf_content.m_pages.size(); ++i)
@@ -8145,6 +8208,7 @@ struct PDFParser::Implementation
 					}
 				}
 				page_text.getText(text);
+				parseAnnotations(page_obj, text);
 				text += "\n\n";
 			}
 			catch (doctotextex::CustomException& ex)
