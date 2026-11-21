@@ -2878,6 +2878,7 @@ struct PDFParser::Implementation
 						z_stream stream;
 						unsigned char buffer[4096];
 						Predictior* predictor = NULL;
+						bool stream_initialized = false;
 						try
 						{
 							dest.clear();
@@ -2893,6 +2894,7 @@ struct PDFParser::Implementation
 								predictor = NULL;
 								throw doctotextex::CustomException("inflateInit has failed");
 							}
+							stream_initialized = true;
 							int err;
 							int written;
 							stream.avail_in = src.size();
@@ -2909,6 +2911,7 @@ struct PDFParser::Implementation
 									{
 										#warning TODO: Should I ignore this error and continue? One of the files I had was corrupted, but most data was readable.
 										(void)inflateEnd(&stream);
+										stream_initialized = false;
 										if (predictor)
 											delete predictor;
 										predictor = NULL;
@@ -2924,6 +2927,11 @@ struct PDFParser::Implementation
 									}
 									catch (doctotextex::CustomException& ex)
 									{
+										if (stream_initialized)
+										{
+											(void)inflateEnd(&stream);
+											stream_initialized = false;
+										}
 										delete predictor;
 										predictor = NULL;
 										ex.appendError("Error while decoding data by predictor");
@@ -2937,12 +2945,22 @@ struct PDFParser::Implementation
 								}
 							}
 							while (stream.avail_out == 0);
+							if (stream_initialized)
+							{
+								(void)inflateEnd(&stream);
+								stream_initialized = false;
+							}
 							if (predictor)
 								delete predictor;
 							predictor = NULL;
 						}
 						catch (std::bad_alloc& ba)
 						{
+							if (stream_initialized)
+							{
+								(void)inflateEnd(&stream);
+								stream_initialized = false;
+							}
 							if (predictor)
 								delete predictor;
 							predictor = NULL;
@@ -2950,6 +2968,11 @@ struct PDFParser::Implementation
 						}
 						catch (doctotextex::CustomException& ex)
 						{
+							if (stream_initialized)
+							{
+								(void)inflateEnd(&stream);
+								stream_initialized = false;
+							}
 							if (predictor)
 								delete predictor;
 							predictor = NULL;
@@ -3196,7 +3219,11 @@ struct PDFParser::Implementation
 										if (m_stream_iterator.getType() != name)
 											throw doctotextex::CustomException("Error while reading dictionary in stream: key is not a name");
 										std::string name = std::string(m_stream_iterator.getData() + 1, m_stream_iterator.getDataLength() - 1);
-										((PDFDictionary*)obj)->m_objects[name] = createNewObjectFromStream();
+										PDFObject* entry_val = createNewObjectFromStream();
+										PDFDictionary* dict_obj = (PDFDictionary*)obj;
+										if (dict_obj->m_objects.find(name) != dict_obj->m_objects.end())
+											delete dict_obj->m_objects[name];
+										dict_obj->m_objects[name] = entry_val;
 									}
 									m_stream_iterator.levelUp();
 									return obj;
@@ -5101,11 +5128,15 @@ struct PDFParser::Implementation
 						{
 							//xref stream
 							m_data_stream->unGetc(ch);
-							PDFNumericInteger* num_index = readNumeric()->getNumericInteger();
+							PDFObject* num_obj = readNumeric();
+							PDFNumericInteger* num_index = num_obj ? num_obj->getNumericInteger() : NULL;
 							if (!num_index)
+							{
+								delete num_obj;
 								throw doctotextex::CustomException("PDF Reader: Invalid XRef stream");
+							}
 							size_t index = (*num_index)();
-							delete num_index;
+							delete num_obj;
 							//initialize obj:
 							if (m_references.size() < index + 1)
 								m_references.resize(index + 1);

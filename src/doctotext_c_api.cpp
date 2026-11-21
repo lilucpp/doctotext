@@ -582,7 +582,7 @@ struct DocToTextMetadata
 			for (size_t i = 0; i < m_metadata_fields_count; ++i)
 			{
 				if (m_metadata_field_keys[i])
-					delete m_metadata_field_keys[i];
+					free(m_metadata_field_keys[i]);
 			}
 			delete[] m_metadata_field_keys;
 		}
@@ -798,6 +798,8 @@ DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_n
 	}
 	catch (std::bad_alloc& ba)
 	{
+		if (use_file_stream && c_log_stream)
+			fclose(c_log_stream);
 		if (extracted_data)
 			delete extracted_data;
 		if (exception)
@@ -805,6 +807,8 @@ DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_n
 	}
 	catch (doctotextex::CustomException& ex)
 	{
+		if (use_file_stream && c_log_stream)
+			fclose(c_log_stream);
 		if (extracted_data)
 			delete extracted_data;
 		if (exception)
@@ -848,6 +852,8 @@ DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file_from_buffer(const 
 	}
 	catch (std::bad_alloc& ba)
 	{
+		if (use_file_stream && c_log_stream)
+			fclose(c_log_stream);
 		if (extracted_data)
 			delete extracted_data;
 		if (exception)
@@ -855,6 +861,8 @@ DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file_from_buffer(const 
 	}
 	catch (doctotextex::CustomException& ex)
 	{
+		if (use_file_stream && c_log_stream)
+			fclose(c_log_stream);
 		if (extracted_data)
 			delete extracted_data;
 		if (exception)
@@ -896,6 +904,8 @@ DocToTextMetadata* DOCTOTEXT_CALL doctotext_extract_metadata(const char* file_na
 	}
 	catch (std::bad_alloc& ba)
 	{
+		if (use_file_stream && c_log_stream)
+			fclose(c_log_stream);
 		if (extracted_data)
 			delete extracted_data;
 		if (exception)
@@ -903,6 +913,8 @@ DocToTextMetadata* DOCTOTEXT_CALL doctotext_extract_metadata(const char* file_na
 	}
 	catch (doctotextex::CustomException& ex)
 	{
+		if (use_file_stream && c_log_stream)
+			fclose(c_log_stream);
 		if (extracted_data)
 			delete extracted_data;
 		if (exception)
@@ -944,6 +956,8 @@ DocToTextMetadata* DOCTOTEXT_CALL doctotext_extract_metadata_from_buffer(const c
 	}
 	catch (std::bad_alloc& ba)
 	{
+		if (use_file_stream && c_log_stream)
+			fclose(c_log_stream);
 		if (extracted_data)
 			delete extracted_data;
 		if (exception)
@@ -951,6 +965,8 @@ DocToTextMetadata* DOCTOTEXT_CALL doctotext_extract_metadata_from_buffer(const c
 	}
 	catch (doctotextex::CustomException& ex)
 	{
+		if (use_file_stream && c_log_stream)
+			fclose(c_log_stream);
 		if (extracted_data)
 			delete extracted_data;
 		if (exception)
