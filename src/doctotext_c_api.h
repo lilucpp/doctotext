@@ -108,6 +108,13 @@ void DOCTOTEXT_CALL doctotext_formatting_style_set_url_style(DocToTextFormatting
  */
 void DOCTOTEXT_CALL doctotext_formatting_style_set_list_prefix(DocToTextFormattingStyle* formatting_style, const char* prefix);
 
+/**
+ * @brief Enables or disables compact whitespace normalization (collapsing excess justified spaces, trailing line spaces, and blank-line runs)
+ * @param formatting_style - DocToTextFormattingStyle object to configure
+ * @param compact - non-zero to enable compact whitespace normalization, 0 for legacy spacing
+ */
+void DOCTOTEXT_CALL doctotext_formatting_style_set_compact_whitespace(DocToTextFormattingStyle* formatting_style, int compact);
+
 /*-------------------------------------------------------------------------------------------------------------------------*/
 
 typedef struct DocToTextExtractorParams DocToTextExtractorParams;

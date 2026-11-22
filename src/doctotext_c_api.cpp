@@ -179,6 +179,12 @@ void DOCTOTEXT_CALL doctotext_formatting_style_set_list_prefix(DocToTextFormatti
 	}
 }
 
+void DOCTOTEXT_CALL doctotext_formatting_style_set_compact_whitespace(DocToTextFormattingStyle* formatting_style, int compact)
+{
+	if (formatting_style)
+		formatting_style->m_formatting_style.compact_whitespace = (compact != 0);
+}
+
 struct CImageCallbackWrapperData {
 	doctotext_image_parser_callback c_callback;
 	void* c_user_data;

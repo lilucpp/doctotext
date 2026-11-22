@@ -33,6 +33,7 @@
 *****************************************************************************/
 
 #include "pdf_parser.h"
+#include "attachment.h"
 #include "plain_text_extractor.h"
 
 #include "data_stream.h"
@@ -770,9 +771,17 @@ struct PDFParser::Implementation
 				insert(std::pair<std::string, unsigned int>("exclam", 0x21));
 				insert(std::pair<std::string, unsigned int>("exclamdown", 0xC2A1));
 				insert(std::pair<std::string, unsigned int>("f", 0x66));
+				insert(std::pair<std::string, unsigned int>("ff", 0xEFAC80));
+				insert(std::pair<std::string, unsigned int>("f_f", 0xEFAC80));
+				insert(std::pair<std::string, unsigned int>("ffi", 0xEFAC83));
+				insert(std::pair<std::string, unsigned int>("f_f_i", 0xEFAC83));
+				insert(std::pair<std::string, unsigned int>("ffl", 0xEFAC84));
+				insert(std::pair<std::string, unsigned int>("f_f_l", 0xEFAC84));
 				insert(std::pair<std::string, unsigned int>("fi", 0xEFAC81));
+				insert(std::pair<std::string, unsigned int>("f_i", 0xEFAC81));
 				insert(std::pair<std::string, unsigned int>("five", 0x35));
 				insert(std::pair<std::string, unsigned int>("fl", 0xEFAC82));
+				insert(std::pair<std::string, unsigned int>("f_l", 0xEFAC82));
 				insert(std::pair<std::string, unsigned int>("florin", 0xC692));
 				insert(std::pair<std::string, unsigned int>("four", 0x34));
 				insert(std::pair<std::string, unsigned int>("fraction", 0xE281A4));
@@ -7660,12 +7669,282 @@ struct PDFParser::Implementation
 				}
 			}
 
+			struct ColumnStats
+			{
+				size_t chars;
+				size_t count;
+				double min_x;
+				double max_x;
+				double min_y;
+				double max_y;
+
+				ColumnStats()
+					: chars(0), count(0), min_x(1e9), max_x(-1e9), min_y(1e9), max_y(-1e9)
+				{}
+
+				void add(const TextElement& e)
+				{
+					chars += e.m_text.length();
+					++count;
+					if (e.m_x < min_x) min_x = e.m_x;
+					if (e.m_x + e.m_width > max_x) max_x = e.m_x + e.m_width;
+					if (e.m_y < min_y) min_y = e.m_y;
+					if (e.m_y > max_y) max_y = e.m_y;
+				}
+
+				double width() const { return max_x > min_x ? max_x - min_x : 0.0; }
+				double ySpan() const { return max_y > min_y ? max_y - min_y : 0.0; }
+			};
+
+			static bool elementCrossesX(const TextElement& e, double x)
+			{
+				return e.m_x <= x && (e.m_x + e.m_width) >= x;
+			}
+
+			static double findBestVerticalBandForSplit(const std::multiset<TextElement>& elements,
+			                                           const std::vector<double>& splits_x,
+			                                           double min_y, double max_y,
+			                                           double& out_y1, double& out_y2)
+			{
+				std::vector<double> intersecting_ys;
+				for (std::multiset<TextElement>::const_iterator it = elements.begin(); it != elements.end(); ++it)
+				{
+					if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
+						continue;
+					for (size_t s = 0; s < splits_x.size(); ++s)
+					{
+						if (elementCrossesX(*it, splits_x[s]))
+						{
+							intersecting_ys.push_back(it->m_y);
+							break;
+						}
+					}
+				}
+				std::sort(intersecting_ys.begin(), intersecting_ys.end());
+
+				std::vector<double> pts;
+				pts.reserve(intersecting_ys.size() + 2);
+				pts.push_back(min_y);
+				pts.insert(pts.end(), intersecting_ys.begin(), intersecting_ys.end());
+				pts.push_back(max_y);
+
+				double best_gap = 0.0;
+				out_y1 = 0.0;
+				out_y2 = 0.0;
+				for (size_t pi = 0; pi + 1 < pts.size(); ++pi)
+				{
+					double g = pts[pi + 1] - pts[pi];
+					if (g >= 250.0 && g > best_gap)
+					{
+						best_gap = g;
+						out_y1 = pts[pi];
+						out_y2 = pts[pi + 1];
+					}
+				}
+				return best_gap;
+			}
+
+			bool findTwoColumnSplit(double min_x, double max_x, double min_y, double max_y,
+			                        double search_r, size_t min_chars_l, size_t min_chars_r,
+			                        size_t min_cnt_l, size_t min_cnt_r,
+			                        double max_diff_ratio, double min_col_w, double min_y_span,
+			                        double min_avg_elem_chars,
+			                        double& out_split_x) const
+			{
+				double mid_x = (min_x + max_x) / 2.0;
+				double max_gap_len = 0.0;
+				out_split_x = -1.0;
+
+				for (int xi = (int)(mid_x - search_r); xi <= (int)(mid_x + search_r); xi += 2)
+				{
+					std::vector<double> splits(1, (double)xi);
+					double cand_y1 = 0.0, cand_y2 = 0.0;
+					double g = findBestVerticalBandForSplit(m_text_elements, splits, min_y, max_y, cand_y1, cand_y2);
+					if (g <= max_gap_len)
+						continue;
+
+					ColumnStats left_col, right_col;
+					for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+					{
+						if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
+							continue;
+						if (it->m_y >= cand_y1 && it->m_y <= cand_y2)
+						{
+							if (it->m_x + it->m_width <= splits[0] + 2.0)
+								left_col.add(*it);
+							else if (it->m_x >= splits[0] - 2.0)
+								right_col.add(*it);
+						}
+					}
+
+					if (left_col.chars >= min_chars_l && right_col.chars >= min_chars_r &&
+					    left_col.count >= min_cnt_l && right_col.count >= min_cnt_r &&
+					    left_col.width() >= min_col_w && right_col.width() >= min_col_w &&
+					    left_col.ySpan() >= min_y_span && right_col.ySpan() >= min_y_span &&
+					    (double)left_col.chars >= min_avg_elem_chars * (double)left_col.count &&
+					    (double)right_col.chars >= min_avg_elem_chars * (double)right_col.count)
+					{
+						double max_w = std::max(left_col.width(), right_col.width());
+						double diff_ratio = std::abs(left_col.width() - right_col.width()) / max_w;
+						if (diff_ratio <= max_diff_ratio)
+						{
+							max_gap_len = g;
+							out_split_x = splits[0];
+						}
+					}
+				}
+				return out_split_x > 0.0;
+			}
+
+			bool findThreeColumnSplit(double min_x, double max_x, double min_y, double max_y,
+			                          double& out_x1, double& out_x2) const
+			{
+				double page_w = max_x - min_x;
+				double c1 = min_x + page_w / 3.0;
+				double c2 = min_x + (2.0 * page_w) / 3.0;
+				double search_r = 0.06 * page_w;
+				double max_gap_len = 0.0;
+				out_x1 = -1.0;
+				out_x2 = -1.0;
+
+				for (int x1i = (int)(c1 - search_r); x1i <= (int)(c1 + search_r); x1i += 4)
+				{
+					for (int x2i = (int)(c2 - search_r); x2i <= (int)(c2 + search_r); x2i += 4)
+					{
+						if (x2i - x1i < 100)
+							continue;
+						std::vector<double> splits;
+						splits.push_back((double)x1i);
+						splits.push_back((double)x2i);
+						double cand_y1 = 0.0, cand_y2 = 0.0;
+						double g = findBestVerticalBandForSplit(m_text_elements, splits, min_y, max_y, cand_y1, cand_y2);
+						if (g <= max_gap_len)
+							continue;
+
+						ColumnStats cols[3];
+						for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+						{
+							if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
+								continue;
+							if (it->m_y < cand_y1 || it->m_y > cand_y2)
+								continue;
+							if (it->m_x + it->m_width <= splits[0] + 2.0)
+								cols[0].add(*it);
+							else if (it->m_x >= splits[0] - 2.0 && it->m_x + it->m_width <= splits[1] + 2.0)
+								cols[1].add(*it);
+							else if (it->m_x >= splits[1] - 2.0)
+								cols[2].add(*it);
+						}
+
+						if (cols[0].chars >= 300 && cols[1].chars >= 300 && cols[2].chars >= 300 &&
+						    cols[0].count >= 25 && cols[1].count >= 25 && cols[2].count >= 25 &&
+						    cols[0].width() >= 100.0 && cols[1].width() >= 100.0 && cols[2].width() >= 100.0 &&
+						    cols[0].ySpan() >= 250.0 && cols[1].ySpan() >= 250.0 && cols[2].ySpan() >= 250.0)
+						{
+							max_gap_len = g;
+							out_x1 = splits[0];
+							out_x2 = splits[1];
+						}
+					}
+				}
+				return out_x1 > 0.0 && out_x2 > out_x1;
+			}
+
+			void emitSplitSections(const std::vector<double>& splits_x, double min_y, double max_y, std::string& output) const
+			{
+				std::vector<double> upper_cross, lower_cross;
+				double mid_y = (min_y + max_y) / 2.0;
+
+				for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+				{
+					if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
+						continue;
+					for (size_t s = 0; s < splits_x.size(); ++s)
+					{
+						if (it->m_x < splits_x[s] && (it->m_x + it->m_width) > splits_x[s])
+						{
+							if (it->m_y > mid_y)
+								upper_cross.push_back(it->m_y);
+							else
+								lower_cross.push_back(it->m_y);
+							break;
+						}
+					}
+				}
+
+				double header_y = max_y + 10.0;
+				if (!upper_cross.empty())
+					header_y = *std::min_element(upper_cross.begin(), upper_cross.end()) - 2.0;
+
+				double footer_y = min_y - 10.0;
+				if (!lower_cross.empty())
+					footer_y = *std::max_element(lower_cross.begin(), lower_cross.end()) + 2.0;
+
+				std::multiset<TextElement> header_elems, footer_elems, mid_elems;
+				std::vector<std::multiset<TextElement> > col_elems(splits_x.size() + 1);
+
+				for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+				{
+					if (it->m_y >= header_y)
+					{
+						header_elems.insert(*it);
+					}
+					else if (it->m_y <= footer_y)
+					{
+						footer_elems.insert(*it);
+					}
+					else
+					{
+						bool placed = false;
+						for (size_t c = 0; c <= splits_x.size(); ++c)
+						{
+							bool ok_left = (c == 0) || (it->m_x >= splits_x[c - 1] - 2.0);
+							bool ok_right = (c == splits_x.size()) || (it->m_x + it->m_width <= splits_x[c] + 2.0);
+							if (ok_left && ok_right)
+							{
+								col_elems[c].insert(*it);
+								placed = true;
+								break;
+							}
+						}
+						if (!placed)
+							mid_elems.insert(*it);
+					}
+				}
+
+				if (!header_elems.empty())
+				{
+					formatTextElements(header_elems, output, m_page_height);
+					if (!output.empty() && output[output.length() - 1] != '\n')
+						output += "\n\n";
+				}
+				for (size_t c = 0; c < col_elems.size(); ++c)
+				{
+					if (!col_elems[c].empty())
+					{
+						formatTextElements(col_elems[c], output, m_page_height);
+						if (!output.empty() && output[output.length() - 1] != '\n')
+							output += "\n\n";
+					}
+				}
+				if (!mid_elems.empty())
+				{
+					formatTextElements(mid_elems, output, m_page_height);
+					if (!output.empty() && output[output.length() - 1] != '\n')
+						output += "\n\n";
+				}
+				if (!footer_elems.empty())
+				{
+					formatTextElements(footer_elems, output, m_page_height);
+				}
+			}
+
 			void getText(std::string& output)
 			{
 				if (m_text_elements.empty())
 					return;
 
-				// Check if multi-column layout is present (e.g. academic journal papers)
+				// Check if multi-column layout is present (e.g. academic journal papers or directories)
 				if (m_text_elements.size() >= 25)
 				{
 					double min_x = 1e9, max_x = -1e9;
@@ -7684,183 +7963,24 @@ struct PDFParser::Implementation
 
 					if (page_w >= 350.0 && page_h >= 250.0)
 					{
-						double mid_x = (min_x + max_x) / 2.0;
-						double search_r = 0.06 * page_w;
-
 						double best_split_x = -1.0;
-						double max_gap_len = 0.0;
-						double best_left_max_y = 0.0, best_right_max_y = 0.0;
-						double best_left_min_y = 0.0, best_right_min_y = 0.0;
-
-						for (int xi = (int)(mid_x - search_r); xi <= (int)(mid_x + search_r); xi += 2)
+						if (findTwoColumnSplit(min_x, max_x, min_y, max_y, 0.06 * page_w, 300, 100, 15, 15, 0.20, 150.0, 0.0, 0.0, best_split_x))
 						{
-							double x_cand = (double)xi;
-							std::vector<double> intersecting_ys;
-							for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
-							{
-								if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
-									continue;
-								if (it->m_x <= x_cand && (it->m_x + it->m_width) >= x_cand)
-								{
-									intersecting_ys.push_back(it->m_y);
-								}
-							}
-							std::sort(intersecting_ys.begin(), intersecting_ys.end());
-
-							std::vector<double> pts;
-							pts.push_back(min_y);
-							pts.insert(pts.end(), intersecting_ys.begin(), intersecting_ys.end());
-							pts.push_back(max_y);
-
-							for (size_t pi = 0; pi + 1 < pts.size(); ++pi)
-							{
-								double g = pts[pi + 1] - pts[pi];
-								if (g >= 250.0 && g > max_gap_len)
-								{
-									double cand_y1 = pts[pi];
-									double cand_y2 = pts[pi + 1];
-
-									size_t chars_l = 0, chars_r = 0;
-									size_t cnt_l = 0, cnt_r = 0;
-									double left_min_x = 1e9, left_max_x = -1e9;
-									double right_min_x = 1e9, right_max_x = -1e9;
-									double cur_left_max_y = -1e9, cur_right_max_y = -1e9;
-									double cur_left_min_y = 1e9, cur_right_min_y = 1e9;
-
-									for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
-									{
-										if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
-											continue;
-										if (it->m_y >= cand_y1 && it->m_y <= cand_y2)
-										{
-											if (it->m_x + it->m_width <= x_cand + 2.0)
-											{
-												chars_l += it->m_text.length();
-												cnt_l++;
-												if (it->m_x < left_min_x) left_min_x = it->m_x;
-												if (it->m_x + it->m_width > left_max_x) left_max_x = it->m_x + it->m_width;
-												if (it->m_y > cur_left_max_y) cur_left_max_y = it->m_y;
-												if (it->m_y < cur_left_min_y) cur_left_min_y = it->m_y;
-											}
-											else if (it->m_x >= x_cand - 2.0)
-											{
-												chars_r += it->m_text.length();
-												cnt_r++;
-												if (it->m_x < right_min_x) right_min_x = it->m_x;
-												if (it->m_x + it->m_width > right_max_x) right_max_x = it->m_x + it->m_width;
-												if (it->m_y > cur_right_max_y) cur_right_max_y = it->m_y;
-												if (it->m_y < cur_right_min_y) cur_right_min_y = it->m_y;
-											}
-										}
-									}
-
-									if (chars_l >= 300 && chars_r >= 100 && cnt_l >= 15 && cnt_r >= 15)
-									{
-										double left_w = left_max_x - left_min_x;
-										double right_w = right_max_x - right_min_x;
-										if (left_w >= 150.0 && right_w >= 150.0)
-										{
-											double max_w = std::max(left_w, right_w);
-											double diff_ratio = std::abs(left_w - right_w) / max_w;
-											if (diff_ratio <= 0.20)
-											{
-												max_gap_len = g;
-												best_split_x = x_cand;
-												best_left_max_y = cur_left_max_y;
-												best_right_max_y = cur_right_max_y;
-												best_left_min_y = cur_left_min_y;
-												best_right_min_y = cur_right_min_y;
-											}
-										}
-									}
-								}
-							}
+							emitSplitSections(std::vector<double>(1, best_split_x), min_y, max_y, output);
+							return;
 						}
-
-						if (best_split_x > 0.0)
+						if (findTwoColumnSplit(min_x, max_x, min_y, max_y, 0.10 * page_w, 150, 400, 10, 25, 0.45, 100.0, 250.0, 6.0, best_split_x))
 						{
-							// Find crossing elements at best_split_x to accurately delineate Header and Footer
-							std::vector<double> upper_cross, lower_cross;
-							double mid_y = (min_y + max_y) / 2.0;
-
-							for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
-							{
-								if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
-									continue;
-								if (it->m_x < best_split_x && (it->m_x + it->m_width) > best_split_x)
-								{
-									if (it->m_y > mid_y)
-										upper_cross.push_back(it->m_y);
-									else
-										lower_cross.push_back(it->m_y);
-								}
-							}
-
-							double header_y = max_y + 10.0;
-							if (!upper_cross.empty())
-							{
-								header_y = *std::min_element(upper_cross.begin(), upper_cross.end()) - 2.0;
-							}
-
-							double footer_y = min_y - 10.0;
-							if (!lower_cross.empty())
-							{
-								footer_y = *std::max_element(lower_cross.begin(), lower_cross.end()) + 2.0;
-							}
-
-							std::multiset<TextElement> header_elems, left_elems, right_elems, footer_elems, mid_elems;
-							for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
-							{
-								if (it->m_y >= header_y)
-								{
-									header_elems.insert(*it);
-								}
-								else if (it->m_y <= footer_y)
-								{
-									footer_elems.insert(*it);
-								}
-								else if (it->m_x + it->m_width <= best_split_x + 2.0)
-								{
-									left_elems.insert(*it);
-								}
-								else if (it->m_x >= best_split_x - 2.0)
-								{
-									right_elems.insert(*it);
-								}
-								else
-								{
-									mid_elems.insert(*it);
-								}
-							}
-
-							if (!header_elems.empty())
-							{
-								formatTextElements(header_elems, output, m_page_height);
-								if (!output.empty() && output[output.length() - 1] != '\n')
-									output += "\n\n";
-							}
-							if (!left_elems.empty())
-							{
-								formatTextElements(left_elems, output, m_page_height);
-								if (!output.empty() && output[output.length() - 1] != '\n')
-									output += "\n\n";
-							}
-							if (!right_elems.empty())
-							{
-								formatTextElements(right_elems, output, m_page_height);
-								if (!output.empty() && output[output.length() - 1] != '\n')
-									output += "\n\n";
-							}
-							if (!mid_elems.empty())
-							{
-								formatTextElements(mid_elems, output, m_page_height);
-								if (!output.empty() && output[output.length() - 1] != '\n')
-									output += "\n\n";
-							}
-							if (!footer_elems.empty())
-							{
-								formatTextElements(footer_elems, output, m_page_height);
-							}
+							emitSplitSections(std::vector<double>(1, best_split_x), min_y, max_y, output);
+							return;
+						}
+						double split_x1 = -1.0, split_x2 = -1.0;
+						if (findThreeColumnSplit(min_x, max_x, min_y, max_y, split_x1, split_x2))
+						{
+							std::vector<double> splits;
+							splits.push_back(split_x1);
+							splits.push_back(split_x2);
+							emitSplitSections(splits, min_y, max_y, output);
 							return;
 						}
 					}
@@ -7878,6 +7998,7 @@ struct PDFParser::Implementation
 
 		typedef std::map<std::string, Font*> FontsByNames;
 		std::vector<FontsByNames> m_fonts_for_pages;
+		std::map<PDFReader::PDFDictionary*, FontsByNames> m_form_fonts_by_resources;
 		std::map<unsigned int, Font*> m_fonts_by_indexes;
 		std::vector<Font*> m_fonts;
 		std::vector<PDFReader::PDFDictionary*> m_pages;
@@ -7899,6 +8020,8 @@ struct PDFParser::Implementation
 	PDFContent m_pdf_content;
 	doctotext::ImageParserCallback m_image_callback;
 	void* m_image_user_data;
+	std::vector<Attachment> m_attachments;
+	std::set<PDFReader::PDFStream*> m_extracted_attachment_streams;
 
 	static bool createBMP(const std::vector<unsigned char>& pixels, int width, int height, int bpc, PDFReader::PDFDictionary* dict, std::vector<char>& out_bmp)
 	{
@@ -8262,7 +8385,7 @@ struct PDFParser::Implementation
 		}
 	}
 
-	void scanXObjectsForFonts(PDFReader::PDFDictionary* res_dictionary, PDFContent::FontsByNames* fonts_for_page, std::set<PDFReader::PDFDictionary*>& visited)
+	void scanXObjectsForFonts(PDFReader::PDFDictionary* res_dictionary, std::set<PDFReader::PDFDictionary*>& visited)
 	{
 		if (!res_dictionary || visited.find(res_dictionary) != visited.end())
 			return;
@@ -8284,8 +8407,8 @@ struct PDFParser::Implementation
 					{
 						PDFReader::PDFDictionary* form_fonts = form_res->getObjAsDictionary("Font");
 						if (form_fonts)
-							loadFontsFromDictionary(form_fonts, fonts_for_page);
-						scanXObjectsForFonts(form_res, fonts_for_page, visited);
+							loadFontsFromDictionary(form_fonts, &m_pdf_content.m_form_fonts_by_resources[form_res]);
+						scanXObjectsForFonts(form_res, visited);
 					}
 				}
 			}
@@ -8306,7 +8429,7 @@ struct PDFParser::Implementation
 			if (fonts_dictionary)
 				loadFontsFromDictionary(fonts_dictionary, fonts_for_page);
 			std::set<PDFReader::PDFDictionary*> visited;
-			scanXObjectsForFonts(res_dictionary, fonts_for_page, visited);
+			scanXObjectsForFonts(res_dictionary, visited);
 		}
 	}
 
@@ -8451,6 +8574,74 @@ struct PDFParser::Implementation
 		}
 	}
 
+	static bool parseHexCodepoint(const std::string& hex_str, unsigned int& out_cp)
+	{
+		if (hex_str.empty() || hex_str.size() > 6)
+			return false;
+		unsigned int val = 0;
+		for (size_t i = 0; i < hex_str.size(); ++i)
+		{
+			char c = hex_str[i];
+			val <<= 4;
+			if (c >= '0' && c <= '9')
+				val |= (unsigned int)(c - '0');
+			else if (c >= 'A' && c <= 'F')
+				val |= (unsigned int)(c - 'A' + 10);
+			else if (c >= 'a' && c <= 'f')
+				val |= (unsigned int)(c - 'a' + 10);
+			else
+				return false;
+		}
+		out_cp = val;
+		return true;
+	}
+
+	static unsigned int packUtf8StringToUint(const std::string& utf8)
+	{
+		if (utf8.empty() || utf8.size() > 4)
+			return 0;
+		unsigned int packed = 0;
+		for (size_t i = 0; i < utf8.size(); ++i)
+			packed = (packed << 8) | (unsigned char)utf8[i];
+		return packed;
+	}
+
+	static bool resolveGlyphNameToUtf8Uint(const std::string& glyph_name, unsigned int& out_val)
+	{
+		CharacterNames::const_iterator it = m_pdf_character_names.find(glyph_name);
+		if (it != m_pdf_character_names.end())
+		{
+			out_val = it->second;
+			return true;
+		}
+		// Handle Adobe Glyph List uniXXXX and uXXXX[X[X]] naming
+		unsigned int cp = 0;
+		if (glyph_name.size() >= 7 && glyph_name.compare(0, 3, "uni") == 0 &&
+		    parseHexCodepoint(glyph_name.substr(3, 4), cp) && cp != 0)
+		{
+			out_val = packUtf8StringToUint(unicode_codepoint_to_utf8(cp));
+			return out_val != 0;
+		}
+		if (glyph_name.size() >= 5 && glyph_name.size() <= 7 && glyph_name[0] == 'u' &&
+		    parseHexCodepoint(glyph_name.substr(1), cp) && cp != 0 && cp <= 0x10FFFF)
+		{
+			out_val = packUtf8StringToUint(unicode_codepoint_to_utf8(cp));
+			return out_val != 0;
+		}
+		// Try stripping stylistic variant suffix (e.g., "seven.oldstyle" -> "seven")
+		size_t dot_pos = glyph_name.find('.');
+		if (dot_pos != std::string::npos && dot_pos > 0)
+		{
+			it = m_pdf_character_names.find(glyph_name.substr(0, dot_pos));
+			if (it != m_pdf_character_names.end())
+			{
+				out_val = it->second;
+				return true;
+			}
+		}
+		return false;
+	}
+
 	void getFontEncoding(PDFContent::Font& font)
 	{
 		//Check if this font contain "ToUnicode" stream.
@@ -8518,14 +8709,12 @@ struct PDFParser::Implementation
 						PDFReader::PDFName* char_name = differences->getObjAsName(j);
 						if (char_name)
 						{
-							CharacterNames::const_iterator it = m_pdf_character_names.find((*char_name)());
-							if (it != m_pdf_character_names.end())
-							{
-								font.m_simple_encoding_table[replacements] = it->second;
-								++replacements;
-								if (replacements > 255)
-									replacements = 0;
-							}
+							unsigned int mapped = 0;
+							if (resolveGlyphNameToUtf8Uint((*char_name)(), mapped))
+								font.m_simple_encoding_table[replacements] = mapped;
+							++replacements;
+							if (replacements > 255)
+								replacements = 0;
 						}
 					}
 				}
@@ -8942,6 +9131,158 @@ struct PDFParser::Implementation
 		return val;
 	}
 
+	static bool isLikelyTextBuffer(const std::vector<unsigned char>& bytes)
+	{
+		if (bytes.empty())
+			return false;
+		// Allow UTF-16 BOM text files
+		if (bytes.size() >= 2 &&
+		    ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF)))
+			return true;
+		size_t sample_len = std::min(bytes.size(), (size_t)4096);
+		size_t control_count = 0;
+		for (size_t i = 0; i < sample_len; ++i)
+		{
+			unsigned char c = bytes[i];
+			if (c == 0)
+				return false;
+			if (c < 0x20 && c != '\t' && c != '\r' && c != '\n' && c != '\f')
+				++control_count;
+		}
+		return control_count * 20 <= sample_len;
+	}
+
+	void extractFilespecAttachment(PDFReader::PDFDictionary* fs_dict,
+	                                 const std::string& fallback_name,
+	                                 std::string& text)
+	{
+		static thread_local int t_embed_depth = 0;
+		if (!fs_dict || t_embed_depth >= 5)
+			return;
+		PDFReader::PDFDictionary* ef_dict = fs_dict->getObjAsDictionary("EF");
+		if (!ef_dict)
+			return;
+		PDFReader::PDFStream* file_stream = ef_dict->getObjAsStream("UF");
+		if (!file_stream)
+			file_stream = ef_dict->getObjAsStream("F");
+		if (!file_stream)
+			file_stream = ef_dict->getObjAsStream("DOS");
+		if (!file_stream)
+			file_stream = ef_dict->getObjAsStream("Mac");
+		if (!file_stream)
+			file_stream = ef_dict->getObjAsStream("Unix");
+		if (!file_stream)
+			return;
+		if (!m_extracted_attachment_streams.insert(file_stream).second)
+			return;
+
+		std::string file_name = decode_pdf_string(fs_dict->getObjAsString("UF"));
+		if (file_name.empty())
+			file_name = decode_pdf_string(fs_dict->getObjAsString("F"));
+		if (file_name.empty())
+			file_name = fallback_name;
+
+		std::vector<unsigned char> stream_bytes;
+		if (!file_stream->getDecodedStreamBytes(stream_bytes) || stream_bytes.empty())
+			return;
+
+		Attachment att(file_name);
+		att.setBinaryContent(std::string(reinterpret_cast<const char*>(&stream_bytes[0]), stream_bytes.size()));
+		m_attachments.push_back(att);
+
+		struct DepthGuard
+		{
+			int& d;
+			DepthGuard(int& v) : d(v) { ++d; }
+			~DepthGuard() { --d; }
+		} depth_guard(t_embed_depth);
+
+		try
+		{
+			doctotext::PlainTextExtractor nested_extractor;
+			if (m_verbose_logging)
+				nested_extractor.setVerboseLogging(true);
+			if (m_log_stream)
+				nested_extractor.setLogStream(*m_log_stream);
+			if (m_image_callback)
+				nested_extractor.setImageParserCallback(m_image_callback, m_image_user_data);
+
+			std::string nested_text;
+			bool extracted = false;
+			if (!file_name.empty())
+			{
+				doctotext::PlainTextExtractor::ParserType ext_type =
+					nested_extractor.parserTypeByFileExtension(file_name);
+				if (ext_type != doctotext::PlainTextExtractor::PARSER_AUTO &&
+				    ext_type != doctotext::PlainTextExtractor::PARSER_ARCHIVE &&
+				    ext_type != doctotext::PlainTextExtractor::PARSER_IMAGE)
+				{
+					extracted = nested_extractor.processFile(ext_type, false,
+					                                         reinterpret_cast<const char*>(&stream_bytes[0]),
+					                                         stream_bytes.size(), nested_text);
+				}
+			}
+			if (!extracted)
+			{
+				extracted = nested_extractor.processFile(reinterpret_cast<const char*>(&stream_bytes[0]),
+				                                         stream_bytes.size(), nested_text);
+			}
+			if (!extracted && isLikelyTextBuffer(stream_bytes))
+			{
+				extracted = nested_extractor.processFile(doctotext::PlainTextExtractor::PARSER_TXT, false,
+				                                         reinterpret_cast<const char*>(&stream_bytes[0]),
+				                                         stream_bytes.size(), nested_text);
+			}
+			if (extracted && !nested_text.empty())
+			{
+				text += "\n" + nested_text + "\n";
+			}
+		}
+		catch (...)
+		{
+		}
+	}
+
+	void parseEmbeddedFilesTree(PDFReader::PDFDictionary* node,
+	                            std::string& text,
+	                            std::set<PDFReader::PDFDictionary*>& visited)
+	{
+		if (!node || !visited.insert(node).second)
+			return;
+		if (PDFReader::PDFArray* names_arr = node->getObjAsArray("Names"))
+		{
+			for (size_t i = 0; i + 1 < names_arr->Size(); i += 2)
+			{
+				std::string entry_name = decode_pdf_string(names_arr->getObjAsString(i));
+				PDFReader::PDFDictionary* fs_dict = names_arr->getObjAsDictionary(i + 1);
+				if (fs_dict)
+					extractFilespecAttachment(fs_dict, entry_name, text);
+			}
+		}
+		if (PDFReader::PDFArray* kids_arr = node->getObjAsArray("Kids"))
+		{
+			for (size_t i = 0; i < kids_arr->Size(); ++i)
+			{
+				if (PDFReader::PDFDictionary* kid = kids_arr->getObjAsDictionary(i))
+					parseEmbeddedFilesTree(kid, text, visited);
+			}
+		}
+	}
+
+	void parseEmbeddedFiles(PDFReader& pdf_reader, std::string& text)
+	{
+		if (!pdf_reader.m_root_dictionary)
+			return;
+		PDFReader::PDFDictionary* names_dict = pdf_reader.m_root_dictionary->getObjAsDictionary("Names");
+		if (!names_dict)
+			return;
+		PDFReader::PDFDictionary* embedded_files = names_dict->getObjAsDictionary("EmbeddedFiles");
+		if (!embedded_files)
+			return;
+		std::set<PDFReader::PDFDictionary*> visited;
+		parseEmbeddedFilesTree(embedded_files, text, visited);
+	}
+
 	void parseAnnotations(PDFReader::PDFDictionary* page_obj, std::string& text, int depth = 0)
 	{
 		if (!page_obj || depth >= 5)
@@ -8981,44 +9322,7 @@ struct PDFParser::Implementation
 			{
 				PDFReader::PDFDictionary* fs_dict = annot_dict->getObjAsDictionary("FS");
 				if (fs_dict)
-				{
-					PDFReader::PDFDictionary* ef_dict = fs_dict->getObjAsDictionary("EF");
-					if (ef_dict)
-					{
-						PDFReader::PDFStream* file_stream = ef_dict->getObjAsStream("F");
-						if (!file_stream)
-							file_stream = ef_dict->getObjAsStream("UF");
-						if (!file_stream)
-							file_stream = ef_dict->getObjAsStream("DOS");
-						if (!file_stream)
-							file_stream = ef_dict->getObjAsStream("Mac");
-						if (!file_stream)
-							file_stream = ef_dict->getObjAsStream("Unix");
-
-						if (file_stream)
-						{
-							std::vector<unsigned char> stream_bytes;
-							if (file_stream->getDecodedStreamBytes(stream_bytes) && !stream_bytes.empty())
-							{
-								try
-								{
-									doctotext::PlainTextExtractor nested_extractor;
-									std::string nested_text;
-									if (nested_extractor.processFile((const char*)&stream_bytes[0], stream_bytes.size(), nested_text))
-									{
-										if (!nested_text.empty())
-										{
-											text += "\n" + nested_text + "\n";
-										}
-									}
-								}
-								catch (...)
-								{
-								}
-							}
-						}
-					}
-				}
+					extractFilespecAttachment(fs_dict, subject, text);
 			}
 		}
 	}
@@ -9227,9 +9531,23 @@ struct PDFParser::Implementation
 													page_text.executeCm(mat_vals);
 												}
 												PDFReader::PDFDictionary* form_resources = xobj_stream->m_dictionary->getObjAsDictionary("Resources");
-												if (!form_resources)
+												PDFContent::FontsByNames scoped_fonts = *fonts_for_page;
+												if (form_resources)
+												{
+													std::map<PDFReader::PDFDictionary*, PDFContent::FontsByNames>::const_iterator fit =
+														m_pdf_content.m_form_fonts_by_resources.find(form_resources);
+													if (fit != m_pdf_content.m_form_fonts_by_resources.end())
+													{
+														for (PDFContent::FontsByNames::const_iterator jt = fit->second.begin();
+														     jt != fit->second.end(); ++jt)
+														{
+															scoped_fonts[jt->first] = jt->second;
+														}
+													}
+												}
+												else
 													form_resources = resources;
-												parseSingleContentStream(xobj_stream, fonts_for_page, page_text, form_resources, page_index, processed_images, depth + 1);
+												parseSingleContentStream(xobj_stream, &scoped_fonts, page_text, form_resources, page_index, processed_images, depth + 1);
 												page_text.popState();
 											}
 											else if (m_image_callback)
@@ -10012,11 +10330,81 @@ void PDFParser::getLinks(std::vector<Link>& links)
 	#warning TODO: Implement this functionality
 }
 
+void PDFParser::getAttachments(std::vector<Attachment>& attachments)
+{
+	attachments = impl->m_attachments;
+}
+
+static void compactPdfWhitespace(std::string& text)
+{
+	std::string out;
+	out.reserve(text.size());
+	size_t i = 0;
+	int consecutive_newlines = 0;
+
+	while (i < text.size())
+	{
+		size_t line_end = text.find('\n', i);
+		bool has_nl = (line_end != std::string::npos);
+		size_t end = has_nl ? line_end : text.size();
+
+		// Trim trailing spaces and CR on the line
+		while (end > i && (text[end - 1] == ' ' || text[end - 1] == '\r'))
+			--end;
+
+		std::string line_out;
+		for (size_t j = i; j < end; )
+		{
+			if (text[j] == ' ')
+			{
+				size_t k = j;
+				while (k < end && text[k] == ' ')
+					++k;
+				size_t run = k - j;
+				if (!line_out.empty())
+					line_out.append(run >= 4 ? 2 : 1, ' ');
+				j = k;
+			}
+			else
+			{
+				line_out.push_back(text[j]);
+				++j;
+			}
+		}
+
+		if (line_out.empty())
+		{
+			if (has_nl && !out.empty() && consecutive_newlines < 2)
+			{
+				out.push_back('\n');
+				++consecutive_newlines;
+			}
+		}
+		else
+		{
+			out += line_out;
+			consecutive_newlines = 0;
+			if (has_nl)
+			{
+				out.push_back('\n');
+				consecutive_newlines = 1;
+			}
+		}
+
+		if (!has_nl)
+			break;
+		i = line_end + 1;
+	}
+	text.swap(out);
+}
+
 std::string PDFParser::plainText(const FormattingStyle& formatting)
 {
 	std::string text;
 	impl->m_error = false;
 	impl->m_encrypted = false;
+	impl->m_attachments.clear();
+	impl->m_extracted_attachment_streams.clear();
 	if (!impl->m_data_stream->open())
 	{
 		*impl->m_log_stream << "Cant open " + impl->m_data_stream->name() + " for reading\n";
@@ -10030,6 +10418,9 @@ std::string PDFParser::plainText(const FormattingStyle& formatting)
 		impl->parseFonts();
 		impl->parseText(text);
 		impl->parseAcroForm(pdf_reader, text);
+		impl->parseEmbeddedFiles(pdf_reader, text);
+		if (formatting.compact_whitespace)
+			compactPdfWhitespace(text);
 	}
 	catch (std::bad_alloc& ba)
 	{

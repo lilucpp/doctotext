@@ -30,6 +30,14 @@ namespace doctotext
 		TableStyle table_style;
 		UrlStyle url_style;
 		ListStyle list_style;
+		bool compact_whitespace;
+
+		FormattingStyle()
+			: table_style(TABLE_STYLE_TABLE_LOOK),
+			  url_style(URL_STYLE_UNDERSCORED),
+			  compact_whitespace(false)
+		{
+		}
 	};
 
 	enum XmlParseMode { PARSE_XML, FIX_XML, STRIP_XML };

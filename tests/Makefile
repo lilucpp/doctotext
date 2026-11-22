@@ -73,7 +73,7 @@ endif
 
 SKIP_TESTS = ! $(shell file ../build/doctotext$(EXEEXT) | grep i386 > /dev/null && ! uname -m | grep 64 > /dev/null; echo $$?)
 
-test: c_api_test$(EXEEXT) c_api_status_test$(EXEEXT) cpp_api_test$(EXEEXT) multithreading_test$(EXEEXT) read_from_buffer_test$(EXEEXT) pdf_image_callback_test$(EXEEXT)
+test: c_api_test$(EXEEXT) c_api_status_test$(EXEEXT) pdf_embedded_and_glyph_test$(EXEEXT) cpp_api_test$(EXEEXT) multithreading_test$(EXEEXT) read_from_buffer_test$(EXEEXT) pdf_image_callback_test$(EXEEXT)
 ifeq ($(SKIP_TESTS),0)
 	@echo
 	@echo WARNING! TESTING 64-BIT BINARIES REQUIRES 64-BIT MACHINE. SKIPPING.
@@ -221,6 +221,10 @@ endif
 	@echo
 	$(EXEC) ./c_api_status_test$(EXEEXT)
 	@echo
+	@echo TESTING PDF EMBEDDED FILES AND XOBJECT FONT SCOPING...
+	@echo
+	$(EXEC) ./pdf_embedded_and_glyph_test$(EXEEXT)
+	@echo
 	@echo TESTS COMPLETE.
 	@echo
 endif
@@ -273,6 +277,10 @@ c_api_status_test$(EXEEXT): c_api_status_test.c ../build/doctotext_c_api.h ../bu
 	$(LIB_PATH) $(CC) -o c_api_status_test$(EXEEXT) c_api_status_test.c -L../build/ -ldoctotext $(ARCH_FLAGS)
 	$(STRIP) c_api_status_test$(EXEEXT)
 
+pdf_embedded_and_glyph_test$(EXEEXT): pdf_embedded_and_glyph_test.cpp ../src/pdf_parser.h ../build/plain_text_extractor.h ../build/$(SOPRE)doctotext$(SOEXT)
+	$(LIB_PATH) $(CXX) -o pdf_embedded_and_glyph_test$(EXEEXT) pdf_embedded_and_glyph_test.cpp -L../build/ -ldoctotext $(LDFLAGS) $(CXXFLAGS) $(ARCH_FLAGS)
+	$(STRIP) pdf_embedded_and_glyph_test$(EXEEXT)
+
 cpp_api_test$(EXEEXT): cpp_api_test.cpp ../build/plain_text_extractor.h ../build/formatting_style.h ../build/$(SOPRE)doctotext$(SOEXT)
 	$(LIB_PATH) $(CXX) -o cpp_api_test$(EXEEXT) cpp_api_test.cpp -L../build/ -ldoctotext $(LDFLAGS) $(ARCH_FLAGS) $(CXXFLAGS)
 	$(STRIP) cpp_api_test$(EXEEXT)
@@ -296,4 +304,4 @@ test_img: test_img_runner$(EXEEXT)
 	$(EXEC) ./test_img_runner$(EXEEXT) ../tests_img
 
 clean:
-	rm -f c_api_test c_api_test.exe c_api_status_test c_api_status_test.exe cpp_api_test cpp_api_test.exe multithreading_test multithreading_test.exe read_from_buffer_test read_from_buffer_test.exe test_img_runner test_img_runner.exe pdf_image_callback_test pdf_image_callback_test.exe
+	rm -f c_api_test c_api_test.exe c_api_status_test c_api_status_test.exe pdf_embedded_and_glyph_test pdf_embedded_and_glyph_test.exe cpp_api_test cpp_api_test.exe multithreading_test multithreading_test.exe read_from_buffer_test read_from_buffer_test.exe test_img_runner test_img_runner.exe pdf_image_callback_test pdf_image_callback_test.exe

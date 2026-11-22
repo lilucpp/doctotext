@@ -103,6 +103,9 @@ int main(void)
 {
 	const char* log_path = "c_api_status_test.log.out";
 	DocToTextExtractorParams* params = doctotext_create_extractor_params();
+	DocToTextFormattingStyle* fmt = doctotext_create_formatting_style();
+	doctotext_formatting_style_set_compact_whitespace(fmt, 1);
+	doctotext_extractor_params_set_formatting_style(params, fmt);
 	doctotext_extractor_params_set_log_file(params, log_path);
 
 	DocToTextException* exc = NULL;
@@ -216,6 +219,7 @@ int main(void)
 			return 1;
 	}
 
+	doctotext_free_formatting_style(fmt);
 	doctotext_free_extractor_params(params);
 	remove(log_path);
 	printf("c_api_status_test PASSED.\n");

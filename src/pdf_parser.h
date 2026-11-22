@@ -1,6 +1,7 @@
 #ifndef DOCTOTEXT_PDF_PARSER_H
 #define DOCTOTEXT_PDF_PARSER_H
 
+#include "attachment.h"
 #include "link.h"
 #include <string>
 #include <vector>
@@ -32,6 +33,7 @@ class PDFParser
 		void setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data = NULL);
 		bool isPDF();
 		void getLinks(std::vector<Link>& links);
+		void getAttachments(std::vector<Attachment>& attachments);
 		std::string plainText(const FormattingStyle& formatting);
 		bool error();
 		bool encrypted();

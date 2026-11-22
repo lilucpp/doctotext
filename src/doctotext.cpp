@@ -192,6 +192,8 @@ int main(int argc, char* argv[])
 		}
 		if (arg.find("verbose", 0) != std::string::npos)
 			verbose = true;
+		if (arg.find("compact-whitespace", 0) != std::string::npos)
+			options.compact_whitespace = true;
 		if (arg.find("log-file=", 0) != std::string::npos)
 			log_stream = new ofstream(arg.substr(arg.find("log-file=", 0) + 9).c_str());
 	}

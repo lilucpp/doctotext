@@ -464,28 +464,29 @@ struct PlainTextExtractor::Implementation
 		text = eml.plainText(m_formatting_style);
 		m_links.clear();
 		eml.getLinks(m_links);
-		m_attachments.clear();
-		eml.getAttachments(m_attachments);
+		std::vector<Attachment> eml_attachments;
+		eml.getAttachments(eml_attachments);
 		//try to get additional metadata
-		for (size_t i = 0; i < m_attachments.size(); ++i)
+		for (size_t i = 0; i < eml_attachments.size(); ++i)
 		{
 			Metadata metadata;
-			if (m_interf->extractMetadata(m_attachments[i].binaryContent(), m_attachments[i].binaryContentSize(), metadata))
+			if (m_interf->extractMetadata(eml_attachments[i].binaryContent(), eml_attachments[i].binaryContentSize(), metadata))
 			{
 				if (metadata.authorType() != Metadata::NONE)
-					m_attachments[i].addField("author", Variant(metadata.author()));
+					eml_attachments[i].addField("author", Variant(metadata.author()));
 				if (metadata.creationDateType() != Metadata::NONE)
-					m_attachments[i].addField("creation date", metadata.creationDate());
+					eml_attachments[i].addField("creation date", metadata.creationDate());
 				if (metadata.lastModificationDateType() != Metadata::NONE)
-					m_attachments[i].addField("last modification date", metadata.lastModificationDate());
+					eml_attachments[i].addField("last modification date", metadata.lastModificationDate());
 				if (metadata.lastModifiedByType() != Metadata::NONE)
-					m_attachments[i].addField("last modified by", Variant(metadata.lastModifiedBy()));
+					eml_attachments[i].addField("last modified by", Variant(metadata.lastModifiedBy()));
 				if (metadata.pageCountType() != Metadata::NONE)
-					m_attachments[i].addField("page count", (size_t)metadata.pageCount());
+					eml_attachments[i].addField("page count", (size_t)metadata.pageCount());
 				if (metadata.wordCountType() != Metadata::NONE)
-					m_attachments[i].addField("word count", (size_t)metadata.wordCount());
+					eml_attachments[i].addField("word count", (size_t)metadata.wordCount());
 			}
 		}
+		m_attachments.swap(eml_attachments);
 		return eml.error();
 	}
 
