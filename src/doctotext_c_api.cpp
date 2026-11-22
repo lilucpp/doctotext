@@ -763,11 +763,19 @@ static void handle_doctotext_exception(doctotextex::CustomException& ex, DocToTe
 	}
 }
 
-DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_name, DocToTextExtractorParams* extractor_params, DocToTextException** exception)
+static DocToTextExtractedData* process_with_status_impl(const char* file_name,
+                                                        const char* buffer,
+                                                        size_t size,
+                                                        bool from_buffer,
+                                                        DocToTextExtractorParams* extractor_params,
+                                                        doctotext_status* out_status,
+                                                        DocToTextException** exception)
 {
 	DocToTextExtractedData* extracted_data = NULL;
 	if (exception)
 		*exception = NULL;
+	if (out_status)
+		*out_status = DOCTOTEXT_STATUS_ERROR;
 	FILE* c_log_stream = stderr;
 	bool use_file_stream = false;
 	try
@@ -780,7 +788,9 @@ DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_n
 		std::ostream log_stream(&stream_buf);
 		extractor.setLogStream(log_stream);
 
-		bool success = extractor.processFile(file_name, extracted_data->m_text);
+		bool success = from_buffer
+			? extractor.processFile(buffer, size, extracted_data->m_text)
+			: extractor.processFile(file_name, extracted_data->m_text);
 		if (use_file_stream)
 		{
 			stream_buf.close();
@@ -789,11 +799,21 @@ DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_n
 		}
 		if (!success)
 		{
+			bool encrypted = extractor.isEncrypted();
+			if (out_status)
+				*out_status = encrypted ? DOCTOTEXT_STATUS_ENCRYPTED : DOCTOTEXT_STATUS_ERROR;
+			if (encrypted && exception)
+			{
+				doctotextex::CustomException enc_ex("Document is encrypted and requires a password");
+				handle_doctotext_exception(enc_ex, exception);
+			}
 			delete extracted_data;
 			return NULL;
 		}
 		extractor.getParsedLinks(extracted_data->m_links);
 		extractor.getAttachments(extracted_data->m_attachments);
+		if (out_status)
+			*out_status = DOCTOTEXT_STATUS_OK;
 		return extracted_data;
 	}
 	catch (std::bad_alloc& ba)
@@ -817,58 +837,24 @@ DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_n
 	return NULL;
 }
 
+DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file_ex(const char* file_name, DocToTextExtractorParams* extractor_params, doctotext_status* out_status, DocToTextException** exception)
+{
+	return process_with_status_impl(file_name, NULL, 0, false, extractor_params, out_status, exception);
+}
+
+DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_name, DocToTextExtractorParams* extractor_params, DocToTextException** exception)
+{
+	return doctotext_process_file_ex(file_name, extractor_params, NULL, exception);
+}
+
+DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file_from_buffer_ex(const char* buffer, size_t size, DocToTextExtractorParams* extractor_params, doctotext_status* out_status, DocToTextException** exception)
+{
+	return process_with_status_impl(NULL, buffer, size, true, extractor_params, out_status, exception);
+}
+
 DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file_from_buffer(const char* buffer, size_t size, DocToTextExtractorParams* extractor_params, DocToTextException** exception)
 {
-	DocToTextExtractedData* extracted_data = NULL;
-	if (exception)
-		*exception = NULL;
-	FILE* c_log_stream = stderr;
-	bool use_file_stream = false;
-	try
-	{
-		extracted_data = new DocToTextExtractedData;
-		PlainTextExtractor extractor(extractor_params->m_parser_type);
-		init_extractor(extractor, extractor_params);
-		init_log_stream(extractor_params, c_log_stream, use_file_stream);
-		StreamBuf stream_buf(c_log_stream);
-		std::ostream log_stream(&stream_buf);
-		extractor.setLogStream(log_stream);
-
-		bool success = extractor.processFile(buffer, size, extracted_data->m_text);
-		if (use_file_stream)
-		{
-			stream_buf.close();
-			fclose(c_log_stream);
-			c_log_stream = NULL;
-		}
-		if (!success)
-		{
-			delete extracted_data;
-			return NULL;
-		}
-		extractor.getParsedLinks(extracted_data->m_links);
-		extractor.getAttachments(extracted_data->m_attachments);
-		return extracted_data;
-	}
-	catch (std::bad_alloc& ba)
-	{
-		if (use_file_stream && c_log_stream)
-			fclose(c_log_stream);
-		if (extracted_data)
-			delete extracted_data;
-		if (exception)
-			handle_bad_alloc(exception);
-	}
-	catch (doctotextex::CustomException& ex)
-	{
-		if (use_file_stream && c_log_stream)
-			fclose(c_log_stream);
-		if (extracted_data)
-			delete extracted_data;
-		if (exception)
-			handle_doctotext_exception(ex, exception);
-	}
-	return NULL;
+	return doctotext_process_file_from_buffer_ex(buffer, size, extractor_params, NULL, exception);
 }
 
 DocToTextMetadata* DOCTOTEXT_CALL doctotext_extract_metadata(const char* file_name, DocToTextExtractorParams* extractor_params, DocToTextException** exception)

@@ -45,6 +45,7 @@
 #include <list>
 #include <map>
 #include "poppler_ccitt.h"
+#include "poppler_decrypt.h"
 #include "jbig2.h"
 #include "xml_stream.h"
 #include <libxml/xmlreader.h>
@@ -926,6 +927,7 @@ struct PDFParser::Implementation
 				flat,
 				ccitt,
 				jbig2,
+				crypt,
 				unknown_compression
 			};
 
@@ -981,6 +983,7 @@ struct PDFParser::Implementation
 						insert(std::pair<std::string, CompressionTypes>("CCITTFaxDecode", ccitt));
 						insert(std::pair<std::string, CompressionTypes>("CCF", ccitt));
 						insert(std::pair<std::string, CompressionTypes>("JBIG2Decode", jbig2));
+						insert(std::pair<std::string, CompressionTypes>("Crypt", crypt));
 					}
 			};
 
@@ -1046,6 +1049,69 @@ struct PDFParser::Implementation
 			}
 
 		public:
+			struct EncryptionState
+			{
+				bool m_active;
+				bool m_encrypt_metadata;
+				unsigned long m_encrypt_obj_num;
+				unsigned char m_file_key[32];
+				int m_file_key_len;
+				PopplerCryptAlgo m_str_algo;
+				PopplerCryptAlgo m_stm_algo;
+
+				bool m_in_encrypted_object;
+				unsigned long m_cur_obj_num;
+				unsigned long m_cur_gen_num;
+
+				EncryptionState()
+					: m_active(false), m_encrypt_metadata(true), m_encrypt_obj_num(0),
+					  m_file_key_len(0), m_str_algo(POPPLER_CRYPT_NONE), m_stm_algo(POPPLER_CRYPT_NONE),
+					  m_in_encrypted_object(false), m_cur_obj_num(0), m_cur_gen_num(0)
+				{
+					memset(m_file_key, 0, sizeof(m_file_key));
+				}
+
+				void decryptString(std::string& val) const
+				{
+					if (!m_active || !m_in_encrypted_object || m_str_algo == POPPLER_CRYPT_NONE || val.empty())
+						return;
+					std::vector<unsigned char> plain(val.size());
+					size_t out_len = 0;
+					if (poppler_decrypt_buffer(m_file_key, m_file_key_len, m_str_algo,
+					                           m_cur_obj_num, m_cur_gen_num,
+					                           reinterpret_cast<const unsigned char*>(&val[0]), val.size(),
+					                           &plain[0], &out_len))
+					{
+						val.assign(reinterpret_cast<const char*>(plain.data()), out_len);
+					}
+				}
+
+				void decryptStream(unsigned long obj_num, unsigned long gen_num,
+				                   bool is_xref, bool is_metadata, bool has_identity_crypt,
+				                   std::vector<unsigned char>& raw) const
+				{
+					if (!m_active || m_stm_algo == POPPLER_CRYPT_NONE || raw.empty())
+						return;
+					if (obj_num != 0 && obj_num == m_encrypt_obj_num)
+						return;
+					if (is_xref || has_identity_crypt)
+						return;
+					if (is_metadata && !m_encrypt_metadata)
+						return;
+					std::vector<unsigned char> plain(raw.size());
+					size_t out_len = 0;
+					if (poppler_decrypt_buffer(m_file_key, m_file_key_len, m_stm_algo,
+					                           obj_num, gen_num, &raw[0], raw.size(),
+					                           &plain[0], &out_len))
+					{
+						plain.resize(out_len);
+						raw.swap(plain);
+					}
+				}
+			};
+
+			EncryptionState m_enc;
+
 			class ReferenceInfo;
 			class PDFObject;
 			class PDFDictionary;
@@ -2546,6 +2612,8 @@ struct PDFParser::Implementation
 					size_t m_stream_data_buffer_len;
 					size_t m_position;
 					size_t m_size;
+					unsigned long m_obj_num;
+					unsigned long m_gen_num;
 					bool m_is_in_external_file;									//are the data for this stream outside of this file?
 					bool m_is_obj_stream;										//is this stream a collection of compressed object?
 					bool m_is_decoded;											//is this stream decoded?
@@ -2568,6 +2636,8 @@ struct PDFParser::Implementation
 						m_dictionary = &dictionary;
 						m_position = 0;
 						m_size = 0;
+						m_obj_num = 0;
+						m_gen_num = 0;
 						m_reader = &reader;
 					}
 
@@ -3154,9 +3224,59 @@ struct PDFParser::Implementation
 							case jbig2:
 								jbig2_decode(src, dest, options);
 								return true;
+							case crypt:
+								dest = src;
+								return true;
 							default:
 								return false;
 						}
+					}
+
+					bool readRawStreamBytes(std::vector<unsigned char>& raw_bytes)
+					{
+						raw_bytes.resize(m_size);
+						if (m_size == 0)
+							return true;
+						size_t current_pos = m_reader->tell();
+						if (!m_reader->seek(m_position, SEEK_SET))
+							return false;
+						if (!m_reader->read(reinterpret_cast<char*>(&raw_bytes[0]), 1, m_size))
+							return false;
+						m_reader->seek(current_pos, SEEK_SET);
+
+						bool is_xref = false;
+						bool is_metadata = false;
+						bool has_identity_crypt = false;
+						if (m_dictionary)
+						{
+							std::string stype = m_dictionary->getValAsString("Type", "");
+							is_xref = (stype == "XRef");
+							is_metadata = (stype == "Metadata");
+							PDFObject* f_entry = (*m_dictionary)["Filter"];
+							if (f_entry && f_entry->isName() && (*f_entry->getName())() == "Crypt")
+							{
+								PDFDictionary* dp = m_dictionary->getObjAsDictionary("DecodeParms");
+								if (!dp || dp->getValAsString("Name", "Identity") == "Identity")
+									has_identity_crypt = true;
+							}
+							else if (f_entry && f_entry->isArray())
+							{
+								PDFArray* fa = f_entry->getArray();
+								PDFArray* dpa = m_dictionary->getObjAsArray("DecodeParms");
+								for (size_t fi = 0; fi < fa->Size(); ++fi)
+								{
+									PDFName* fn = fa->getObjAsName(fi);
+									if (fn && (*fn)() == "Crypt")
+									{
+										PDFDictionary* dp = (dpa && fi < dpa->Size()) ? dpa->getObjAsDictionary(fi) : NULL;
+										if (!dp || dp->getValAsString("Name", "Identity") == "Identity")
+											has_identity_crypt = true;
+									}
+								}
+							}
+						}
+						m_reader->m_enc.decryptStream(m_obj_num, m_gen_num, is_xref, is_metadata, has_identity_crypt, raw_bytes);
+						return true;
 					}
 
 					void decode()
@@ -3205,13 +3325,10 @@ struct PDFParser::Implementation
 						if (filters.size() != filter_options.size())
 							throw doctotextex::CustomException("Cannot decode stream: number of filters does not match the number of decoding parameters");
 
-						std::vector<unsigned char> stream_first_content(m_size);
+						std::vector<unsigned char> stream_first_content;
 						std::vector<unsigned char> stream_second_content;
 						stream_second_content.reserve(m_size);
-						size_t current_pos = m_reader->tell();
-						if (!m_reader->seek(m_position, SEEK_SET))
-							throw doctotextex::CustomException("Cannot decode stream: cant seek to the position of the stream");
-						if (!m_reader->read((char*)&stream_first_content[0], 1, m_size))
+						if (!readRawStreamBytes(stream_first_content))
 							throw doctotextex::CustomException("Cannot decode stream: cant read encoded data");
 						try
 						{
@@ -3227,7 +3344,8 @@ struct PDFParser::Implementation
 								m_stream_data_buffer = new char[stream_second_content.size() + 2];
 								m_stream_data_buffer[0] = '[';
 								m_stream_data_buffer_len = stream_second_content.size() + 2;
-								memcpy(m_stream_data_buffer + 1, &stream_second_content[0], stream_second_content.size());
+								if (!stream_second_content.empty())
+									memcpy(m_stream_data_buffer + 1, &stream_second_content[0], stream_second_content.size());
 								m_stream_data_buffer[m_stream_data_buffer_len - 1] = ']';
 								m_stream_iterator.init(m_stream_data_buffer, m_stream_data_buffer_len);
 							}
@@ -3236,12 +3354,11 @@ struct PDFParser::Implementation
 								m_stream_data_buffer = new char[stream_first_content.size() + 2];
 								m_stream_data_buffer[0] = '[';
 								m_stream_data_buffer_len = stream_first_content.size() + 2;
-								memcpy(m_stream_data_buffer + 1, &stream_first_content[0], stream_first_content.size());
+								if (!stream_first_content.empty())
+									memcpy(m_stream_data_buffer + 1, &stream_first_content[0], stream_first_content.size());
 								m_stream_data_buffer[m_stream_data_buffer_len - 1] = ']';
 								m_stream_iterator.init(m_stream_data_buffer, m_stream_data_buffer_len);
 							}
-							if (!m_reader->seek(current_pos, SEEK_SET))
-								throw doctotextex::CustomException("Cannot decode stream: Cannot go back to the previous location of the file, which is " + uint_to_string(current_pos));
 							m_is_decoded = true;
 						}
 						catch (doctotextex::CustomException& ex)
@@ -3263,17 +3380,15 @@ struct PDFParser::Implementation
 								decode();
 							else
 							{
-								m_stream_data_buffer = new char[m_size + 2];
+								std::vector<unsigned char> raw_bytes;
+								if (!readRawStreamBytes(raw_bytes))
+									throw doctotextex::CustomException("Cannot load stream data, size to read: " + uint_to_string(m_size) + " from position " + uint_to_string(m_position));
+								m_stream_data_buffer = new char[raw_bytes.size() + 2];
 								m_stream_data_buffer[0] = '[';					//make array
-								m_stream_data_buffer_len = m_size + 2;
-								size_t current_pos = m_reader->tell();
-								if (!m_reader->seek(m_position, SEEK_SET))
-									throw doctotextex::CustomException("Cannot load stream data: cant seek to the beggining of the stream, position: " + uint_to_string(m_position));
-								if (!m_reader->read(m_stream_data_buffer + 1, 1, m_size))
-									throw doctotextex::CustomException("Cannot read stream data, size to read: " + uint_to_string(m_size) + " from position " + uint_to_string(m_position));
+								m_stream_data_buffer_len = raw_bytes.size() + 2;
+								if (!raw_bytes.empty())
+									memcpy(m_stream_data_buffer + 1, &raw_bytes[0], raw_bytes.size());
 								m_stream_data_buffer[m_stream_data_buffer_len - 1] = ']';
-								if (!m_reader->seek(current_pos, SEEK_SET))
-									throw doctotextex::CustomException("Cannot go back to the previous position after loading stream data. Previous location: " + uint_to_string(current_pos));
 								m_stream_iterator.init(m_stream_data_buffer, m_stream_data_buffer_len);
 							}
 						}
@@ -3401,15 +3516,11 @@ struct PDFParser::Implementation
 				public:
 					void getRawData(std::vector<char>& raw_data)
 					{
-						raw_data.resize(m_size);
-						if (m_size == 0)
-							return;
-						size_t current_pos = m_reader->tell();
-						if (!m_reader->seek(m_position, SEEK_SET))
-							throw doctotextex::CustomException("Cannot get raw stream data: cant seek to position " + uint_to_string(m_position));
-						if (!m_reader->read(&raw_data[0], 1, m_size))
+						std::vector<unsigned char> raw_bytes;
+						if (!readRawStreamBytes(raw_bytes))
 							throw doctotextex::CustomException("Cannot get raw stream data: cant read " + uint_to_string(m_size) + " bytes");
-						m_reader->seek(current_pos, SEEK_SET);
+						raw_data.assign(reinterpret_cast<const char*>(raw_bytes.data()),
+						                reinterpret_cast<const char*>(raw_bytes.data()) + raw_bytes.size());
 					}
 
 					std::string getFilterName()
@@ -3438,18 +3549,7 @@ struct PDFParser::Implementation
 								return false;
 							PDFObject* filter_entry = (*m_dictionary)["Filter"];
 							if (!filter_entry)
-							{
-								out_bytes.resize(m_size);
-								if (m_size == 0)
-									return true;
-								size_t current_pos = m_reader->tell();
-								if (!m_reader->seek(m_position, SEEK_SET))
-									return false;
-								if (!m_reader->read((char*)&out_bytes[0], 1, m_size))
-									return false;
-								m_reader->seek(current_pos, SEEK_SET);
-								return true;
-							}
+								return readRawStreamBytes(out_bytes);
 							std::vector<PDFName*> filters;
 							std::vector<PDFDictionary*> filter_options;
 							PDFObject* filter_options_entry = (*m_dictionary)["DecodeParms"];
@@ -3483,31 +3583,21 @@ struct PDFParser::Implementation
 
 							if (m_size == 0)
 								return false;
-							std::vector<unsigned char> stream_first_content(m_size);
+							std::vector<unsigned char> stream_first_content;
 							std::vector<unsigned char> stream_second_content;
 							stream_second_content.reserve(m_size);
-							size_t current_pos = m_reader->tell();
-							if (!m_reader->seek(m_position, SEEK_SET))
-								return false;
-							if (!m_reader->read((char*)&stream_first_content[0], 1, m_size))
+							if (!readRawStreamBytes(stream_first_content))
 								return false;
 
 							for (size_t i = 0; i < filters.size(); ++i)
 							{
 								if (!filters[i])
-								{
-									m_reader->seek(current_pos, SEEK_SET);
 									return false;
-								}
 								std::vector<unsigned char>& src = (i % 2 == 0) ? stream_first_content : stream_second_content;
 								std::vector<unsigned char>& dst = (i % 2 == 0) ? stream_second_content : stream_first_content;
 								if (!applyFilter((*filters[i])(), src, dst, filter_options[i], m_dictionary))
-								{
-									m_reader->seek(current_pos, SEEK_SET);
 									return false;
-								}
 							}
-							m_reader->seek(current_pos, SEEK_SET);
 							if (filters.size() % 2 == 1)
 								out_bytes.swap(stream_second_content);
 							else
@@ -3877,8 +3967,223 @@ struct PDFParser::Implementation
 			PDFDictionary m_trailer_dict;
 			bool m_got_root;
 			bool m_got_info;
+			bool m_got_encrypt;
+			bool m_got_id;
+			struct EncryptInputs
+			{
+				int v;
+				int r;
+				int key_length_bytes;
+				int permissions;
+				bool encrypt_metadata;
+				std::string o_val;
+				std::string u_val;
+				std::string oe_val;
+				std::string ue_val;
+				EncryptInputs()
+					: v(0), r(0), key_length_bytes(5), permissions(0), encrypt_metadata(true)
+				{}
+				PopplerPdfEncryptParams toCParams(const std::string& file_id) const
+				{
+					PopplerPdfEncryptParams p;
+					p.v = v;
+					p.r = r;
+					p.key_length_bytes = key_length_bytes;
+					p.permissions = permissions;
+					p.encrypt_metadata = encrypt_metadata ? 1 : 0;
+					p.o_val = o_val.data();
+					p.o_len = o_val.size();
+					p.u_val = u_val.data();
+					p.u_len = u_val.size();
+					p.oe_val = oe_val.data();
+					p.oe_len = oe_val.size();
+					p.ue_val = ue_val.data();
+					p.ue_len = ue_val.size();
+					p.file_id = file_id.data();
+					p.file_id_len = file_id.size();
+					return p;
+				}
+			};
+			bool m_has_inline_encrypt;
+			EncryptInputs m_inline_encrypt_params;
+			PopplerCryptAlgo m_inline_str_algo;
+			PopplerCryptAlgo m_inline_stm_algo;
+			std::string m_file_id;
 			PDFReferenceCall* m_root_ref;
 			PDFReferenceCall* m_info_ref;
+			PDFReferenceCall* m_encrypt_ref;
+
+			static PopplerCryptAlgo resolveCryptFilterAlgo(PDFDictionary* enc_dict, const char* key, int default_v, int& out_cf_key_bytes)
+			{
+				PopplerCryptAlgo fallback = (default_v == 5) ? POPPLER_CRYPT_AES256 : POPPLER_CRYPT_RC4;
+				std::string filter_name = enc_dict->getValAsString(key, "StdCF");
+				if (filter_name == "Identity" || filter_name == "None")
+					return POPPLER_CRYPT_NONE;
+				PDFDictionary* cf = enc_dict->getObjAsDictionary("CF");
+				if (cf)
+				{
+					PDFDictionary* sub = cf->getObjAsDictionary(filter_name);
+					if (sub)
+					{
+						long len_val = sub->getValAsInteger("Length", 0);
+						if (len_val > 0 && len_val <= 32)
+							out_cf_key_bytes = (int)len_val;
+						std::string cfm = sub->getValAsString("CFM", "");
+						if (cfm == "AESV2")
+							return POPPLER_CRYPT_AES128;
+						if (cfm == "AESV3")
+							return POPPLER_CRYPT_AES256;
+						if (cfm == "V2")
+							return POPPLER_CRYPT_RC4;
+						if (cfm == "None")
+							return POPPLER_CRYPT_NONE;
+					}
+				}
+				return fallback;
+			}
+
+			void parseEncryptDictionaryParams(PDFDictionary* enc_dict,
+			                                  EncryptInputs& params,
+			                                  PopplerCryptAlgo& str_algo,
+			                                  PopplerCryptAlgo& stm_algo,
+			                                  std::string& filter_out)
+			{
+				filter_out = enc_dict->getValAsString("Filter", "");
+				params.v = (int)enc_dict->getValAsInteger("V", 0);
+				params.r = (int)enc_dict->getValAsInteger("R", 0);
+				params.permissions = (int)enc_dict->getValAsInteger("P", 0);
+				params.encrypt_metadata = enc_dict->getValAsBoolean("EncryptMetadata", true);
+				int default_bits = (params.v == 1) ? 40 : ((params.v == 5) ? 256 : 128);
+				int len_bits = (int)enc_dict->getValAsInteger("Length", default_bits);
+				int key_bytes = (len_bits > 0 && len_bits <= 256) ? (len_bits / 8) : (default_bits / 8);
+
+				if (PDFString* o_str = enc_dict->getObjAsString("O"))
+				{
+					o_str->ConvertToLiteral();
+					params.o_val = o_str->m_value;
+				}
+				if (PDFString* u_str = enc_dict->getObjAsString("U"))
+				{
+					u_str->ConvertToLiteral();
+					params.u_val = u_str->m_value;
+				}
+				if (PDFString* oe_str = enc_dict->getObjAsString("OE"))
+				{
+					oe_str->ConvertToLiteral();
+					params.oe_val = oe_str->m_value;
+				}
+				if (PDFString* ue_str = enc_dict->getObjAsString("UE"))
+				{
+					ue_str->ConvertToLiteral();
+					params.ue_val = ue_str->m_value;
+				}
+
+				if (params.v == 1 || params.v == 2)
+				{
+					str_algo = POPPLER_CRYPT_RC4;
+					stm_algo = POPPLER_CRYPT_RC4;
+				}
+				else if (params.v == 4 || params.v == 5)
+				{
+					int cf_bytes = 0;
+					str_algo = resolveCryptFilterAlgo(enc_dict, "StrF", params.v, cf_bytes);
+					stm_algo = resolveCryptFilterAlgo(enc_dict, "StmF", params.v, cf_bytes);
+					if (cf_bytes > 0)
+						key_bytes = cf_bytes;
+				}
+				else
+				{
+					str_algo = POPPLER_CRYPT_NONE;
+					stm_algo = POPPLER_CRYPT_NONE;
+				}
+				params.key_length_bytes = key_bytes;
+			}
+
+			void captureEncryptAndId(PDFDictionary& dict)
+			{
+				if (!m_got_id)
+				{
+					if (PDFArray* id_arr = dict.getObjAsArray("ID"))
+					{
+						if (id_arr->Size() > 0)
+						{
+							if (PDFString* id_s = id_arr->getObjAsString(0))
+							{
+								id_s->ConvertToLiteral();
+								m_file_id = id_s->m_value;
+								m_got_id = true;
+							}
+						}
+					}
+				}
+				if (!m_got_encrypt)
+				{
+					PDFObject* enc_obj = dict["Encrypt"];
+					if (enc_obj)
+					{
+						if (enc_obj->isReferenceCall())
+						{
+							*m_encrypt_ref = *enc_obj->getReferenceCall();
+							m_got_encrypt = true;
+						}
+						else if (enc_obj->isDictionary())
+						{
+							std::string unused_filter;
+							parseEncryptDictionaryParams(enc_obj->getDictionary(),
+							                             m_inline_encrypt_params,
+							                             m_inline_str_algo,
+							                             m_inline_stm_algo,
+							                             unused_filter);
+							m_has_inline_encrypt = true;
+							m_got_encrypt = true;
+						}
+					}
+				}
+			}
+
+			void setupEncryption(bool* out_encrypted)
+			{
+				if (!m_got_encrypt)
+					return;
+
+				EncryptInputs params;
+				PopplerCryptAlgo str_algo = POPPLER_CRYPT_NONE;
+				PopplerCryptAlgo stm_algo = POPPLER_CRYPT_NONE;
+				std::string filter_name = "Standard";
+
+				if (m_has_inline_encrypt)
+				{
+					params = m_inline_encrypt_params;
+					str_algo = m_inline_str_algo;
+					stm_algo = m_inline_stm_algo;
+				}
+				else
+				{
+					m_enc.m_encrypt_obj_num = m_encrypt_ref->m_index;
+					PDFDictionary* enc_dict = m_encrypt_ref->getDictionary();
+					if (!enc_dict)
+					{
+						if (out_encrypted)
+							*out_encrypted = true;
+						throw doctotextex::CustomException("PDF document is encrypted (invalid Encrypt dictionary)");
+					}
+					parseEncryptDictionaryParams(enc_dict, params, str_algo, stm_algo, filter_name);
+				}
+
+				PopplerPdfEncryptParams c_params = params.toCParams(m_file_id);
+				if (filter_name != "Standard" ||
+				    !poppler_decrypt_make_empty_user_key(&c_params, m_enc.m_file_key, &m_enc.m_file_key_len))
+				{
+					if (out_encrypted)
+						*out_encrypted = true;
+					throw doctotextex::CustomException("PDF document is encrypted and requires a password");
+				}
+
+				m_enc.m_encrypt_metadata = params.encrypt_metadata;
+				m_enc.m_str_algo = str_algo;
+				m_enc.m_stm_algo = stm_algo;
+				m_enc.m_active = true;
+			}
 
 			void locateHeader()
 			{
@@ -3909,15 +4214,19 @@ struct PDFParser::Implementation
 			PDFStream* m_metadata;
 
 		public:
-			PDFReader(DataStream* data_stream)
-				: m_data_stream(data_stream), m_header_offset(0), m_root_dictionary(NULL), m_info(NULL), m_metadata(NULL), m_got_info(false), m_got_root(false)
+			PDFReader(DataStream* data_stream, bool* out_encrypted = NULL)
+				: m_data_stream(data_stream), m_header_offset(0), m_root_dictionary(NULL), m_info(NULL), m_metadata(NULL),
+				  m_got_info(false), m_got_root(false), m_got_encrypt(false), m_got_id(false),
+				  m_has_inline_encrypt(false), m_inline_str_algo(POPPLER_CRYPT_NONE), m_inline_stm_algo(POPPLER_CRYPT_NONE)
 			{
 				m_root_ref = new PDFReferenceCall(*this);
 				m_info_ref = new PDFReferenceCall(*this);
+				m_encrypt_ref = new PDFReferenceCall(*this);
 				
 				try {
 					locateHeader();
 					readReferenceData();
+					setupEncryption(out_encrypted);
 					if (m_got_info)
 						m_info = m_info_ref->getDictionary();
 					if (m_got_root)
@@ -3936,6 +4245,11 @@ struct PDFParser::Implementation
 						m_info_ref = NULL;
 					}
 
+					if (m_encrypt_ref) {
+						delete m_encrypt_ref;
+						m_encrypt_ref = NULL;
+					}
+
                     		throw ex;
 			    }
 			}
@@ -3944,6 +4258,7 @@ struct PDFParser::Implementation
 			{
 				delete m_root_ref;
 				delete m_info_ref;
+				delete m_encrypt_ref;
 			}
 
 			void readLine(std::string& line)
@@ -4116,6 +4431,7 @@ struct PDFParser::Implementation
 								string.m_value += hex_char_to_single_char(hex_char);
 							}
 							string.m_is_hex = false;
+							m_enc.decryptString(string.m_value);
 							return;
 						}
 						normalize_hex_char(ch);
@@ -4242,7 +4558,10 @@ struct PDFParser::Implementation
 							case ')':
 							{
 								if (parentheses_depth == 0)
+								{
+									m_enc.decryptString(string.m_value);
 									return;
+								}
 								--parentheses_depth;
 								string.m_value += ')';
 								break;
@@ -5029,6 +5348,28 @@ struct PDFParser::Implementation
 						}
 						case ReferenceInfo::in_use:
 						{
+							struct ScopedEncCtx
+							{
+								EncryptionState& m_state;
+								bool m_prev_in;
+								unsigned long m_prev_obj;
+								unsigned long m_prev_gen;
+								ScopedEncCtx(EncryptionState& s, size_t idx, size_t gen)
+									: m_state(s), m_prev_in(s.m_in_encrypted_object),
+									  m_prev_obj(s.m_cur_obj_num), m_prev_gen(s.m_cur_gen_num)
+								{
+									m_state.m_in_encrypted_object = (m_state.m_active && idx != m_state.m_encrypt_obj_num);
+									m_state.m_cur_obj_num = (unsigned long)idx;
+									m_state.m_cur_gen_num = (unsigned long)gen;
+								}
+								~ScopedEncCtx()
+								{
+									m_state.m_in_encrypted_object = m_prev_in;
+									m_state.m_cur_obj_num = m_prev_obj;
+									m_state.m_cur_gen_num = m_prev_gen;
+								}
+							} enc_guard(m_enc, index, reference_info->m_generation);
+
 							size_t current_position = m_data_stream->tell();
 							if (!seek(reference_info->m_offset, SEEK_SET))
 								throw doctotextex::CustomException("PDF Reader: Cant seek to the begginig of the indirect object, position: "
@@ -5071,10 +5412,13 @@ struct PDFParser::Implementation
 											reference_info->m_object->m_object = NULL;
 											if (!value_object || !value_object->isDictionary())
 												throw doctotextex::CustomException("PDF Reader: Error while reading indirect object: Stream cannot exist without dictionary");
-											reference_info->m_object->m_object = new PDFStream(*this, *value_object->getDictionary());
+											PDFStream* stream_ptr = new PDFStream(*this, *value_object->getDictionary());
+											stream_ptr->m_obj_num = (unsigned long)index;
+											stream_ptr->m_gen_num = (unsigned long)reference_info->m_generation;
+											reference_info->m_object->m_object = stream_ptr;
 											value_object = NULL;
 											m_data_stream->unGetc(ch);
-											readStream(*((PDFStream*)reference_info->m_object->m_object));
+											readStream(*stream_ptr);
 											break;
 										}
 										case '/':	//name
@@ -5456,6 +5800,7 @@ struct PDFParser::Implementation
 								m_got_info = true;
 								*m_info_ref = *m_trailer_dict.getObjAsReferenceCall("Info");
 							}
+							captureEncryptAndId(m_trailer_dict);
 							PDFNumericInteger* xref_stm = m_trailer_dict.getObjAsNumericInteger("XRefStm");
 							if (xref_stm)
 							{
@@ -5507,6 +5852,7 @@ struct PDFParser::Implementation
 								m_got_info = true;
 								*m_info_ref = *xref_stream->m_dictionary->getObjAsReferenceCall("Info");
 							}
+							captureEncryptAndId(*xref_stream->m_dictionary);
 							PDFNumericInteger* prev = NULL;
 							if (backward_compatibility)
 								prev = m_trailer_dict.getObjAsNumericInteger("Prev");
@@ -7546,6 +7892,7 @@ struct PDFParser::Implementation
 	};
 
 	bool m_error;
+	bool m_encrypted;
 	DataStream* m_data_stream;
 	bool m_verbose_logging;
 	std::ostream* m_log_stream;
@@ -9554,6 +9901,7 @@ PDFParser::PDFParser(const std::string& file_name)
 		impl->m_data_stream = NULL;
 		impl->m_data_stream = new FileStream(file_name);
 		impl->m_error = false;
+		impl->m_encrypted = false;
 		impl->m_verbose_logging = false;
 		impl->m_log_stream = &std::cerr;
 		impl->m_image_callback = NULL;
@@ -9580,6 +9928,7 @@ PDFParser::PDFParser(const char* buffer, size_t size)
 		impl->m_data_stream = NULL;
 		impl->m_data_stream = new BufferStream(buffer, size);
 		impl->m_error = false;
+		impl->m_encrypted = false;
 		impl->m_verbose_logging = false;
 		impl->m_log_stream = &std::cerr;
 		impl->m_image_callback = NULL;
@@ -9666,6 +10015,8 @@ void PDFParser::getLinks(std::vector<Link>& links)
 std::string PDFParser::plainText(const FormattingStyle& formatting)
 {
 	std::string text;
+	impl->m_error = false;
+	impl->m_encrypted = false;
 	if (!impl->m_data_stream->open())
 	{
 		*impl->m_log_stream << "Cant open " + impl->m_data_stream->name() + " for reading\n";
@@ -9674,7 +10025,7 @@ std::string PDFParser::plainText(const FormattingStyle& formatting)
 	}
 	try
 	{
-		Implementation::PDFReader pdf_reader(impl->m_data_stream);
+		Implementation::PDFReader pdf_reader(impl->m_data_stream, &impl->m_encrypted);
 		impl->parsePagesTree(pdf_reader);
 		impl->parseFonts();
 		impl->parseText(text);
@@ -9703,9 +10054,16 @@ bool PDFParser::error()
 	return impl->m_error;
 }
 
+bool PDFParser::encrypted()
+{
+	return impl->m_encrypted;
+}
+
 Metadata PDFParser::metaData()
 {
 	Metadata metadata;
+	impl->m_error = false;
+	impl->m_encrypted = false;
 	if (!impl->m_data_stream->open())
 	{
 		*impl->m_log_stream << "Cant open " + impl->m_data_stream->name() + " for reading\n";
@@ -9714,7 +10072,7 @@ Metadata PDFParser::metaData()
 	}
 	try
 	{
-		Implementation::PDFReader pdf_reader(impl->m_data_stream);
+		Implementation::PDFReader pdf_reader(impl->m_data_stream, &impl->m_encrypted);
 		impl->parsePagesTree(pdf_reader);
 		impl->parseMetadata(pdf_reader, metadata);
 	}

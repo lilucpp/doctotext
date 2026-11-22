@@ -357,6 +357,13 @@ namespace doctotext
 				\see Attachment
 			**/
 			size_t getNumberOfAttachments() const;
+
+			/**
+				Checks if the last failed parsing attempt stopped because the document is encrypted
+				(e.g., password-protected PDF that cannot be opened with an empty user password).
+				\return \c true if the last processed document was rejected due to encryption, \c false otherwise.
+			**/
+			bool isEncrypted() const;
 	};
 }
 

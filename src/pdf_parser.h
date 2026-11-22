@@ -34,6 +34,7 @@ class PDFParser
 		void getLinks(std::vector<Link>& links);
 		std::string plainText(const FormattingStyle& formatting);
 		bool error();
+		bool encrypted();
 		Metadata metaData();
 };
 

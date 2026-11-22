@@ -1,5 +1,5 @@
-CXXFLAGS = -O2 -std=c++14 -I../3rdparty/wv2/include -I../3rdparty/unzip101e -I../3rdparty/htmlcxx/include -I../3rdparty/jbig2dec -I../3rdparty/poppler_ccitt
-LDFLAGS = ../3rdparty/unzip101e/ioapi.o ../3rdparty/unzip101e/unzip.o ../3rdparty/jbig2dec/libjbig2dec.a ../3rdparty/poppler_ccitt/libpoppler_ccitt.a
+CXXFLAGS = -O2 -std=c++14 -I../3rdparty/wv2/include -I../3rdparty/unzip101e -I../3rdparty/htmlcxx/include -I../3rdparty/jbig2dec -I../3rdparty/poppler_ccitt -I../3rdparty/poppler_decrypt
+LDFLAGS = ../3rdparty/unzip101e/ioapi.o ../3rdparty/unzip101e/unzip.o ../3rdparty/jbig2dec/libjbig2dec.a ../3rdparty/poppler_ccitt/libpoppler_ccitt.a ../3rdparty/poppler_decrypt/libpoppler_decrypt.a
 
 COMMON_OBJECTS = data_stream.o doc_parser.o entities.o exception.o list_style.o rtf_parser.o odf_ooxml_parser.o html_parser.o iwork_parser.o metadata.o misc.o xml_fixer.o doctotext_unzip.o \
 	oshared.o pdf_parser.o plain_text_extractor.o ppt_parser.o xls_parser.o xlsb_parser.o thread_safe_ole_storage.o thread_safe_ole_stream_reader.o txt_parser.o \
@@ -101,11 +101,11 @@ endif
 
 all: doctotext$(EXEEXT) $(SOPRE)doctotext$(SOEXT)
 
-doctotext$(EXEEXT): $(OBJECTS)
+doctotext$(EXEEXT): $(OBJECTS) ../3rdparty/poppler_decrypt/libpoppler_decrypt.a
 	$(CXX) -o doctotext$(EXEEXT) $(OBJECTS) $(LDFLAGS)
 	$(STRIP) doctotext$(EXEEXT)
 
-$(SOPRE)doctotext$(SOEXT): $(LIB_OBJECTS)
+$(SOPRE)doctotext$(SOEXT): $(LIB_OBJECTS) ../3rdparty/poppler_decrypt/libpoppler_decrypt.a
 	$(CXX) $(SHARED) -o $(SOPRE)doctotext$(SOEXT) $(LIB_OBJECTS) $(LDFLAGS) $(DLL_LDFLAGS)
 	$(STRIP) $(SOPRE)doctotext$(SOEXT)
 

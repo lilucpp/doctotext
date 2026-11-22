@@ -76,6 +76,7 @@ struct PlainTextExtractor::Implementation
 	std::vector<Attachment> m_attachments;
 	ImageParserCallback m_image_callback;
 	void* m_image_user_data;
+	bool m_is_encrypted;
 	PlainTextExtractor* m_interf;
 
 	bool isRTF(RTFParser& rtf, bool& error, ParserType& parser_type)
@@ -424,6 +425,8 @@ struct PlainTextExtractor::Implementation
 			pdf.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using PDF parser.\n";
 		text = pdf.plainText(m_formatting_style);
+		if (pdf.encrypted())
+			m_is_encrypted = true;
 		m_links.clear();
 		pdf.getLinks(m_links);
 		return pdf.error();
@@ -591,6 +594,8 @@ struct PlainTextExtractor::Implementation
 			pdf.setLogStream(*m_log_stream);
 		*m_log_stream << "Using PDF parser.\n";
 		metadata = pdf.metaData();
+		if (pdf.encrypted())
+			m_is_encrypted = true;
 		return pdf.error();
 	}
 
@@ -633,6 +638,7 @@ PlainTextExtractor::PlainTextExtractor(ParserType parser_type)
 	impl->m_manage_xml_parser = true;
 	impl->m_image_callback = NULL;
 	impl->m_image_user_data = NULL;
+	impl->m_is_encrypted = false;
 }
 
 PlainTextExtractor::~PlainTextExtractor()
@@ -982,6 +988,7 @@ bool PlainTextExtractor::parserTypeByFileContent(const char* file_name, ParserTy
 
 bool PlainTextExtractor::processFile(const std::string& file_name, std::string& text)
 {
+	impl->m_is_encrypted = false;
 	ParserType parser_type = impl->m_parser_type;
 	bool fallback = false;
 	if (parser_type == PARSER_AUTO)
@@ -1018,6 +1025,7 @@ bool PlainTextExtractor::processFile(const char* buffer, size_t size, char*& tex
 
 bool PlainTextExtractor::processFile(const char* buffer, size_t size, std::string& text)
 {
+	impl->m_is_encrypted = false;
 	ParserType parser_type = impl->m_parser_type;
 	bool fallback = false;
 	if (parser_type == PARSER_AUTO)
@@ -1032,6 +1040,7 @@ bool PlainTextExtractor::processFile(const char* buffer, size_t size, std::strin
 
 bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, const std::string& file_name, std::string& text)
 {
+	impl->m_is_encrypted = false;
 	if (parser_type == PARSER_AUTO)
 		return processFile(file_name, text);
 
@@ -1139,7 +1148,7 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 		}
 	}
 
-	if (error && fallback)
+	if (error && fallback && !impl->m_is_encrypted)
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
@@ -1163,6 +1172,7 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 
 bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, const char* buffer, size_t size, std::string& text)
 {
+	impl->m_is_encrypted = false;
 	if (parser_type == PARSER_AUTO)
 		return processFile(buffer, size, text);
 
@@ -1263,7 +1273,7 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 		}
 	}
 
-	if (error && fallback)
+	if (error && fallback && !impl->m_is_encrypted)
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
@@ -1412,6 +1422,7 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 	if (parser_type == PARSER_AUTO)
 		return extractMetadata(file_name, metadata);
 
+	impl->m_is_encrypted = false;
 	bool error = true;
 	switch (parser_type)
 	{
@@ -1491,7 +1502,7 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 			return false;
 	}
 
-	if (error && fallback)
+	if (error && fallback && !impl->m_is_encrypted)
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
@@ -1593,6 +1604,7 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 	if (parser_type == PARSER_AUTO)
 		return extractMetadata(buffer, size, metadata);
 
+	impl->m_is_encrypted = false;
 	bool error = true;
 	switch (parser_type)
 	{
@@ -1672,7 +1684,7 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 			return false;
 	}
 
-	if (error && fallback)
+	if (error && fallback && !impl->m_is_encrypted)
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
@@ -1805,4 +1817,9 @@ const Attachment* PlainTextExtractor::getAttachments() const
 	if (impl->m_attachments.size() == 0)
 		return NULL;
 	return &impl->m_attachments[0];
+}
+
+bool PlainTextExtractor::isEncrypted() const
+{
+	return impl->m_is_encrypted;
 }

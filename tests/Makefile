@@ -73,7 +73,7 @@ endif
 
 SKIP_TESTS = ! $(shell file ../build/doctotext$(EXEEXT) | grep i386 > /dev/null && ! uname -m | grep 64 > /dev/null; echo $$?)
 
-test: c_api_test$(EXEEXT) cpp_api_test$(EXEEXT) multithreading_test$(EXEEXT) read_from_buffer_test$(EXEEXT) pdf_image_callback_test$(EXEEXT)
+test: c_api_test$(EXEEXT) c_api_status_test$(EXEEXT) cpp_api_test$(EXEEXT) multithreading_test$(EXEEXT) read_from_buffer_test$(EXEEXT) pdf_image_callback_test$(EXEEXT)
 ifeq ($(SKIP_TESTS),0)
 	@echo
 	@echo WARNING! TESTING 64-BIT BINARIES REQUIRES 64-BIT MACHINE. SKIPPING.
@@ -102,7 +102,8 @@ else
 			$(addprefix comments_libreoffice_3.5.,odt doc docx rtf) \
 			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
 			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf testPDF_JBIG2.pdf testPDF_CCITT_G4.pdf testPDF_CCITT_G3.pdf \
-			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf; do \
+			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf \
+			testPDF_no_extract_no_accessibility_owner_empty.pdf testPDF_protected.pdf; do \
 		echo TESTING $$f; \
 		if ! $(EXEC) ../build/doctotext $$f | tr -d '\r' | diff -u - $$f.out; then \
 			exit 1; \
@@ -216,6 +217,10 @@ else
 	$(EXEC) ./pdf_image_callback_test$(EXEEXT)
 endif
 	@echo
+	@echo TESTING C API STATUS REPORTING AND ENCRYPTED PDF HANDLING...
+	@echo
+	$(EXEC) ./c_api_status_test$(EXEEXT)
+	@echo
 	@echo TESTS COMPLETE.
 	@echo
 endif
@@ -240,7 +245,8 @@ update_tests:
 			$(addprefix comments_libreoffice_3.5.,odt doc docx rtf) \
 			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
 			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf testPDF_JBIG2.pdf testPDF_CCITT_G4.pdf testPDF_CCITT_G3.pdf \
-			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf; do \
+			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf \
+			testPDF_no_extract_no_accessibility_owner_empty.pdf testPDF_protected.pdf; do \
 		echo PROCESSING $$f; \
 		$(EXEC) ../build/doctotext $$f | tr -d '\r' > $$f.out; \
 	done
@@ -262,6 +268,10 @@ update_tests:
 c_api_test$(EXEEXT): c_api_test.c ../build/doctotext_c_api.h ../build/$(SOPRE)doctotext$(SOEXT)
 	$(LIB_PATH) $(CC) -o c_api_test$(EXEEXT) c_api_test.c -L../build/ -ldoctotext $(ARCH_FLAGS)
 	$(STRIP) c_api_test$(EXEEXT)
+
+c_api_status_test$(EXEEXT): c_api_status_test.c ../build/doctotext_c_api.h ../build/$(SOPRE)doctotext$(SOEXT)
+	$(LIB_PATH) $(CC) -o c_api_status_test$(EXEEXT) c_api_status_test.c -L../build/ -ldoctotext $(ARCH_FLAGS)
+	$(STRIP) c_api_status_test$(EXEEXT)
 
 cpp_api_test$(EXEEXT): cpp_api_test.cpp ../build/plain_text_extractor.h ../build/formatting_style.h ../build/$(SOPRE)doctotext$(SOEXT)
 	$(LIB_PATH) $(CXX) -o cpp_api_test$(EXEEXT) cpp_api_test.cpp -L../build/ -ldoctotext $(LDFLAGS) $(ARCH_FLAGS) $(CXXFLAGS)
@@ -286,4 +296,4 @@ test_img: test_img_runner$(EXEEXT)
 	$(EXEC) ./test_img_runner$(EXEEXT) ../tests_img
 
 clean:
-	rm -f c_api_test c_api_test.exe cpp_api_test cpp_api_test.exe multithreading_test multithreading_test.exe read_from_buffer_test read_from_buffer_test.exe test_img_runner test_img_runner.exe pdf_image_callback_test pdf_image_callback_test.exe
+	rm -f c_api_test c_api_test.exe c_api_status_test c_api_status_test.exe cpp_api_test cpp_api_test.exe multithreading_test multithreading_test.exe read_from_buffer_test read_from_buffer_test.exe test_img_runner test_img_runner.exe pdf_image_callback_test pdf_image_callback_test.exe

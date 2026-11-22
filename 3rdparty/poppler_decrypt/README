@@ -1,0 +1,12 @@
+poppler_decrypt
+===============
+
+Lightweight standalone PDF Standard Security Handler decryption module
+(MD5, RC4, AES-128-CBC, AES-256-CBC, SHA-256/384/512, PDF R2-R6 key derivation)
+extracted from upstream Poppler (poppler/Decrypt.h & poppler/Decrypt.cc).
+
+Adapted to operate directly on in-memory std::vector<unsigned char> buffers
+without pulling in Poppler's GooString/Stream/Object runtime.
+
+License: GNU General Public License version 2 or later (GPLv2+).
+Copyright 1996-2003 Glyph & Cog, LLC / Poppler developers.

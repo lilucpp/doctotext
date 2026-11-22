@@ -231,6 +231,13 @@ poppler_ccitt: poppler_ccitt/libpoppler_ccitt.a
 poppler_ccitt/libpoppler_ccitt.a:
 	cd poppler_ccitt && $(MAKE) CXX="$(CXX)" CXXFLAGS="$(ARCH_FLAGS) -O2 -std=c++14"
 
+.PHONY: jbig2dec poppler_ccitt poppler_decrypt clean
+
+poppler_decrypt: poppler_decrypt/libpoppler_decrypt.a
+
+poppler_decrypt/libpoppler_decrypt.a: poppler_decrypt/poppler_decrypt.cpp poppler_decrypt/poppler_decrypt.h poppler_decrypt/Makefile
+	cd poppler_decrypt && $(MAKE) CXX="$(CXX)" CXXFLAGS="$(ARCH_FLAGS) -O2 -std=c++14"
+
 ifeq ($(WIN),1)
 unzip101e/unzip.o: zlib unzip101e/.unpacked
 	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="-O2 -std=gnu89 -w -I../zlib/include" unzip.o ioapi.o iowin32.o
@@ -309,3 +316,4 @@ clean:
 	rm -rf mimetic
 	$(MAKE) -C jbig2dec clean
 	$(MAKE) -C poppler_ccitt clean
+	$(MAKE) -C poppler_decrypt clean

@@ -61,6 +61,12 @@ typedef int doctotext_metadata_type;
 #define DOCTOTEXT_METADATA_TYPE_EXTRACTED 1
 #define DOCTOTEXT_METADATA_TYPE_ESTIMATED 2
 
+typedef int doctotext_status;
+
+#define DOCTOTEXT_STATUS_OK 0
+#define DOCTOTEXT_STATUS_ERROR 1
+#define DOCTOTEXT_STATUS_ENCRYPTED 2
+
 /*-------------------------------------------------------------------------------------------------------------------------*/
 
 typedef struct DocToTextFormattingStyle DocToTextFormattingStyle;
@@ -545,6 +551,16 @@ char** DOCTOTEXT_CALL doctotext_metadata_get_keys(DocToTextMetadata* metadata);
 DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_name, DocToTextExtractorParams* extractor_params, DocToTextException** exception);
 
 /**
+ * @brief Parses file of given name and reports structured extraction status (OK, ERROR, or ENCRYPTED).
+ * @param file_name - file name with path to the file
+ * @param extractor_params - extractor parameters object
+ * @param out_status - optional pointer receiving \c doctotext_status (OK / ERROR / ENCRYPTED)
+ * @param exception - optional pointer receiving exception details on failure
+ * @return Object with extracted data, or NULL on error/encrypted document.
+ */
+DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file_ex(const char* file_name, DocToTextExtractorParams* extractor_params, doctotext_status* out_status, DocToTextException** exception);
+
+/**
  * @brief Parses file from memory buffer. Besides that fact, this function works just like \c doctotext_process_file (from file)
  * @param buffer - buffer with file memory
  * @param size - size of the given buffer
@@ -557,6 +573,17 @@ DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file(const char* file_n
  * free(). DocToTextExtractedData is C++ object inside and free() will not work. Use \c doctotext_free_extracted_data
  */
 DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file_from_buffer(const char* buffer, size_t size, DocToTextExtractorParams* extractor_params, DocToTextException** exception);
+
+/**
+ * @brief Parses file from memory buffer and reports structured extraction status (OK, ERROR, or ENCRYPTED).
+ * @param buffer - buffer with file memory
+ * @param size - size of the given buffer
+ * @param extractor_params - extractor parameters object
+ * @param out_status - optional pointer receiving \c doctotext_status (OK / ERROR / ENCRYPTED)
+ * @param exception - optional pointer receiving exception details on failure
+ * @return Object with extracted data, or NULL on error/encrypted document.
+ */
+DocToTextExtractedData* DOCTOTEXT_CALL doctotext_process_file_from_buffer_ex(const char* buffer, size_t size, DocToTextExtractorParams* extractor_params, doctotext_status* out_status, DocToTextException** exception);
 
 /**
  * @brief Parses file of given name. Uses DocToTextExtractorParams objects to adjust its behavior to user expectations.
