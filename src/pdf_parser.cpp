@@ -3810,12 +3810,36 @@ struct PDFParser::Implementation
 
 		private:
 			DataStream* m_data_stream;
+			size_t m_header_offset;
 			std::vector<ReferenceInfo> m_references;
 			PDFDictionary m_trailer_dict;
 			bool m_got_root;
 			bool m_got_info;
 			PDFReferenceCall* m_root_ref;
 			PDFReferenceCall* m_info_ref;
+
+			void locateHeader()
+			{
+				m_header_offset = 0;
+				if (!m_data_stream->seek(0, SEEK_SET))
+					return;
+				size_t total_size = m_data_stream->size();
+				size_t bytes_to_read = std::min((size_t)1024, total_size);
+				if (bytes_to_read < 5)
+					return;
+				char buffer[1024];
+				if (!m_data_stream->read(buffer, 1, bytes_to_read))
+					return;
+				const char pdf[5] = {'%', 'P', 'D', 'F', '-'};
+				for (size_t i = 0; i + 5 <= bytes_to_read; ++i)
+				{
+					if (memcmp(buffer + i, pdf, 5) == 0)
+					{
+						m_header_offset = i;
+						break;
+					}
+				}
+			}
 
 		public:
 			PDFDictionary* m_root_dictionary;
@@ -3824,12 +3848,13 @@ struct PDFParser::Implementation
 
 		public:
 			PDFReader(DataStream* data_stream)
-				: m_data_stream(data_stream), m_root_dictionary(NULL), m_info(NULL), m_metadata(NULL), m_got_info(false), m_got_root(false)
+				: m_data_stream(data_stream), m_header_offset(0), m_root_dictionary(NULL), m_info(NULL), m_metadata(NULL), m_got_info(false), m_got_root(false)
 			{
 				m_root_ref = new PDFReferenceCall(*this);
 				m_info_ref = new PDFReferenceCall(*this);
 				
 				try {
+					locateHeader();
 					readReferenceData();
 					if (m_got_info)
 						m_info = m_info_ref->getDictionary();
@@ -5081,7 +5106,7 @@ struct PDFParser::Implementation
 					start_xref_positions.insert(xref_data_position);
 					while (true)
 					{
-						if (!m_data_stream->seek(xref_data_position, SEEK_SET))
+						if (!m_data_stream->seek(m_header_offset + xref_data_position, SEEK_SET))
 							throw doctotextex::CustomException("PDF Reader: Cant seek to the cross reference data");
 						char ch = m_data_stream->getc();
 						if (ch == EOF)
@@ -5141,7 +5166,7 @@ struct PDFParser::Implementation
 							if (m_references.size() < index + 1)
 								m_references.resize(index + 1);
 							m_references[index].m_type = ReferenceInfo::in_use;
-							m_references[index].m_offset = xref_data_position;
+							m_references[index].m_offset = m_header_offset + xref_data_position;
 							m_references[index].m_read = true;
 							PDFStream* xref_stream = readIndirectObject(index)->getStream();
 							if (!xref_stream)
@@ -5225,7 +5250,10 @@ struct PDFParser::Implementation
 									if (line[17] == 'f')
 										reference->m_type = ReferenceInfo::free;
 									else
+									{
 										reference->m_type = ReferenceInfo::in_use;
+										reference->m_offset += m_header_offset;
+									}
 									reference->m_read = true;
 								}
 							}
@@ -5334,6 +5362,10 @@ struct PDFParser::Implementation
 							{
 								reference->m_generation = reference->m_generation << 8;
 								reference->m_generation += data[read_index++];
+							}
+							if (reference->m_type == ReferenceInfo::in_use)
+							{
+								reference->m_offset += m_header_offset;
 							}
 							reference->m_read = true;
 						}
@@ -8419,26 +8451,37 @@ void PDFParser::setImageParserCallback(doctotext::ImageParserCallback callback, 
 
 bool PDFParser::isPDF()
 {
-	char buffer[5];
-	const char pdf[6] = "%PDF-";
 	if (!impl->m_data_stream->open())
 	{
 		*impl->m_log_stream << "Cant open " + impl->m_data_stream->name() + " for reading\n";
 		return false;
 	}
-	if (!impl->m_data_stream->read(buffer, 1, 5))
+	size_t total_size = impl->m_data_stream->size();
+	size_t bytes_to_read = std::min((size_t)1024, total_size);
+	if (bytes_to_read < 5)
+	{
+		*impl->m_log_stream << "Cant read from file " + impl->m_data_stream->name() + "\n";
+		impl->m_data_stream->close();
+		return false;
+	}
+	char buffer[1024];
+	if (!impl->m_data_stream->read(buffer, 1, bytes_to_read))
 	{
 		*impl->m_log_stream << "Cant read from file " + impl->m_data_stream->name() + "\n";
 		impl->m_data_stream->close();
 		return false;
 	}
 	impl->m_data_stream->close();
-	if (memcmp(buffer, pdf, 5) != 0)
+	// ISO 32000-1 § 7.5.2: A conforming reader should accept any header that begins
+	// with %PDF- if it occurs anywhere within the first 1024 bytes of the file.
+	const char pdf[5] = {'%', 'P', 'D', 'F', '-'};
+	for (size_t i = 0; i + 5 <= bytes_to_read; ++i)
 	{
-		*impl->m_log_stream << "No PDF header found\n";
-		return false;
+		if (memcmp(buffer + i, pdf, 5) == 0)
+			return true;
 	}
-	return true;
+	*impl->m_log_stream << "No PDF header found\n";
+	return false;
 }
 
 void PDFParser::getLinks(std::vector<Link>& links)
