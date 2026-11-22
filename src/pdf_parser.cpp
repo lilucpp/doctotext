@@ -6787,6 +6787,7 @@ struct PDFParser::Implementation
 			};
 
 			Font* m_font;
+			double m_page_height;
 			std::list<TextState> m_text_states;
 			TextState m_current_state;
 			std::multiset<TextElement> m_text_elements;
@@ -7080,7 +7081,7 @@ struct PDFParser::Implementation
 				}
 			};
 
-			static void formatTextElements(const std::multiset<TextElement>& elements, std::string& output)
+			static void formatTextElements(const std::multiset<TextElement>& elements, std::string& output, double page_height = 792.0)
 			{
 				if (elements.empty())
 					return;
@@ -7133,7 +7134,24 @@ struct PDFParser::Implementation
 					return a.m_base_y > b.m_base_y;
 				});
 
-				// 3. Output lines
+				// 3. Output lines (cap blank lines to what the physical page height can contain)
+				std::vector<double> line_heights;
+				line_heights.reserve(lines.size());
+				for (size_t li = 0; li < lines.size(); ++li)
+				{
+					if (lines[li].m_height > 0.0)
+						line_heights.push_back(lines[li].m_height);
+				}
+				double typical_h = 12.0;
+				if (!line_heights.empty())
+				{
+					std::nth_element(line_heights.begin(), line_heights.begin() + line_heights.size() / 2, line_heights.end());
+					typical_h = line_heights[line_heights.size() / 2];
+				}
+				double capacity_step = std::max(8.0, typical_h * 0.75);
+				int max_page_newlines = std::max(1, static_cast<int>(std::floor(page_height / capacity_step)));
+				int total_newlines = 0;
+
 				double prev_center_y = lines[0].m_min_y + lines[0].m_height / 2.0;
 				for (size_t li = 0; li < lines.size(); ++li)
 				{
@@ -7150,26 +7168,39 @@ struct PDFParser::Implementation
 					{
 						double cur_center_y = line.m_min_y + line.m_height / 2.0;
 						double dy = prev_center_y - cur_center_y;
+						if (dy > page_height)
+							dy = page_height;
 						double new_line_size = line.m_height * 0.75 < 4.0 ? 4.0 : line.m_height * 0.75;
 						int newlines = 0;
-						while (dy >= new_line_size)
+						while (dy >= new_line_size && total_newlines < max_page_newlines)
 						{
 							output += '\n';
 							dy -= new_line_size;
 							newlines++;
+							total_newlines++;
 						}
 						if (newlines == 0)
 						{
 							output += '\n';
+							total_newlines++;
 						}
 						prev_center_y = cur_center_y;
 					}
 
 					double x_end = 0.0;
 					bool first_elem = true;
+					const TextElement* prev_emitted = NULL;
 					for (size_t ei = 0; ei < line.m_elements.size(); ++ei)
 					{
 						const TextElement& elem = line.m_elements[ei];
+						// Deduplicate identical text stamped at identical coordinates (e.g. multi-pass watermarks/faux-bold)
+						if (prev_emitted &&
+						    elem.m_text == prev_emitted->m_text &&
+						    std::abs(elem.m_x - prev_emitted->m_x) < 1.0 &&
+						    std::abs(elem.m_base_y - prev_emitted->m_base_y) < 1.0)
+						{
+							continue;
+						}
 						double space_size = elem.m_space_size < 1.0 ? 1.0 : elem.m_space_size;
 						space_size *= 2.0;
 
@@ -7187,6 +7218,7 @@ struct PDFParser::Implementation
 						}
 						output += elem.m_text;
 						first_elem = false;
+						prev_emitted = &elem;
 						x_end = elem.m_x + elem.m_width;
 					}
 				}
@@ -7367,31 +7399,31 @@ struct PDFParser::Implementation
 
 							if (!header_elems.empty())
 							{
-								formatTextElements(header_elems, output);
+								formatTextElements(header_elems, output, m_page_height);
 								if (!output.empty() && output[output.length() - 1] != '\n')
 									output += "\n\n";
 							}
 							if (!left_elems.empty())
 							{
-								formatTextElements(left_elems, output);
+								formatTextElements(left_elems, output, m_page_height);
 								if (!output.empty() && output[output.length() - 1] != '\n')
 									output += "\n\n";
 							}
 							if (!right_elems.empty())
 							{
-								formatTextElements(right_elems, output);
+								formatTextElements(right_elems, output, m_page_height);
 								if (!output.empty() && output[output.length() - 1] != '\n')
 									output += "\n\n";
 							}
 							if (!mid_elems.empty())
 							{
-								formatTextElements(mid_elems, output);
+								formatTextElements(mid_elems, output, m_page_height);
 								if (!output.empty() && output[output.length() - 1] != '\n')
 									output += "\n\n";
 							}
 							if (!footer_elems.empty())
 							{
-								formatTextElements(footer_elems, output);
+								formatTextElements(footer_elems, output, m_page_height);
 							}
 							return;
 						}
@@ -7399,12 +7431,12 @@ struct PDFParser::Implementation
 				}
 
 				// Standard single column or table layout
-				formatTextElements(m_text_elements, output);
+				formatTextElements(m_text_elements, output, m_page_height);
 			}
 
 			PageText()
+				: m_font(NULL), m_page_height(792.0)
 			{
-				m_font = NULL;
 			}
 		};
 
@@ -9010,13 +9042,18 @@ struct PDFParser::Implementation
 	static std::string extract_acroform_value(PDFReader::PDFDictionary* field_dict, const std::string& ft)
 	{
 		if (PDFReader::PDFString* v_str = field_dict->getObjAsString("V"))
-			return decode_pdf_string(v_str);
+		{
+			std::string val = decode_pdf_string(v_str);
+			if (val.empty())
+				return "";
+			return (ft == "Ch") ? ("[" + val + "]") : val;
+		}
 		if (PDFReader::PDFName* v_name = field_dict->getObjAsName("V"))
 		{
 			const std::string& name_val = (*v_name)();
 			if (ft == "Btn" && name_val == "Off")
 				return "";
-			return name_val;
+			return (ft == "Ch" && !name_val.empty()) ? ("[" + name_val + "]") : name_val;
 		}
 		if (PDFReader::PDFArray* v_arr = field_dict->getObjAsArray("V"))
 		{
@@ -9170,6 +9207,15 @@ struct PDFParser::Implementation
 					contents.push_back(page_obj->getObjAsStream("Contents"));
 
 				PDFContent::PageText page_text;
+				PDFReader::PDFArray* page_box = page_obj->getObjAsArray("CropBox");
+				if (!page_box)
+					page_box = page_obj->getObjAsArray("MediaBox");
+				if (page_box && page_box->Size() >= 4)
+				{
+					double h = std::abs(page_box->getValAsDouble(3, 792.0) - page_box->getValAsDouble(1, 0.0));
+					if (h >= 72.0 && h <= 5000.0)
+						page_text.m_page_height = h;
+				}
 				std::set<std::string> processed_images;
 				std::vector<PDFReader::PDFStream*> valid_contents;
 				for (size_t j = 0; j < contents.size(); ++j)
