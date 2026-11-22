@@ -544,7 +544,7 @@ extern "C" const char* DocToTextImageParserCallbackC(
 
   // 使用 thread_local 保证在 C API 主调方消费前有效且线程安全
   static thread_local std::string tls_result;
-  tls_result = "\n[图片文字识别:\n" + ocr_text + "\n]\n";
+  tls_result = ocr_text;
   return tls_result.c_str();
 }
 

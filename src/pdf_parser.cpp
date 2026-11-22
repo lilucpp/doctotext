@@ -5097,22 +5097,27 @@ struct PDFParser::Implementation
 			{
 				try
 				{
-					char start_xref_buffer[25];
-					size_t xref_data_position;
-					if (!m_data_stream->seek(-25, SEEK_END))
+					size_t file_len = m_data_stream->size();
+					size_t buf_size = file_len < 1024 ? file_len : 1024;
+					std::vector<char> start_xref_buffer(buf_size + 1, 0);
+					if (!m_data_stream->seek(-(int)buf_size, SEEK_END))
 						throw doctotextex::CustomException("PDF Reader: Cant read xref data: Cant seek to the position of startxref");
-					if (!m_data_stream->read(start_xref_buffer, 1, 25))
+					if (!m_data_stream->read(&start_xref_buffer[0], 1, buf_size))
 						throw doctotextex::CustomException("PDF Reader: Cant read xref data: Cant read the position of startxref");
-					int index = 0;
-					while (start_xref_buffer[index] > '9' || start_xref_buffer[index] < '0')
+					std::string buf_str(&start_xref_buffer[0], buf_size);
+					size_t sx_pos = buf_str.rfind("startxref");
+					if (sx_pos == std::string::npos)
+						throw doctotextex::CustomException("PDF Reader: Cant read xref data: startxref keyword not found");
+					size_t index = sx_pos + 9;
+					while (index < buf_size && (start_xref_buffer[index] > '9' || start_xref_buffer[index] < '0'))
 					{
 						++index;
-						if (index == 25)
-							throw doctotextex::CustomException("PDF Reader: Cant read xref data: Cant read the position of startxref");
 					}
+					if (index >= buf_size)
+						throw doctotextex::CustomException("PDF Reader: Cant read xref data: Cant read the position of startxref");
 					bool backward_compatibility = false;
 					std::set<size_t> start_xref_positions;
-					xref_data_position = strtol(start_xref_buffer + index, NULL, 10);
+					size_t xref_data_position = strtol(&start_xref_buffer[index], NULL, 10);
 					start_xref_positions.insert(xref_data_position);
 					while (true)
 					{
