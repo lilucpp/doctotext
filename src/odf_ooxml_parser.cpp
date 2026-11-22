@@ -300,11 +300,17 @@ bool ODFOOXMLParser::isODFOOXML()
 	setError(false);
 	if (!extended_impl->m_buffer)	//check file
 	{
-		FILE* f = fopen(extended_impl->m_file_name.c_str(), "r");
+		FILE* f = fopen(extended_impl->m_file_name.c_str(), "rb");
 		if (f == NULL)
 		{
 			getLogStream() << "Error opening file " << extended_impl->m_file_name << ".\n";
 			setError(true);
+			return false;
+		}
+		char magic[2];
+		if (fread(magic, 1, 2, f) != 2 || magic[0] != 'P' || magic[1] != 'K')
+		{
+			fclose(f);
 			return false;
 		}
 		fclose(f);
@@ -313,6 +319,12 @@ bool ODFOOXMLParser::isODFOOXML()
 	{
 		getLogStream() << "Memory buffer is empty.\n";
 		setError(true);
+		return false;
+	}
+	else if (extended_impl->m_buffer_size < 2 ||
+	         extended_impl->m_buffer[0] != 'P' ||
+	         extended_impl->m_buffer[1] != 'K')
+	{
 		return false;
 	}
 	DocToTextUnzip zipfile;

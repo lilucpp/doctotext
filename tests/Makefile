@@ -100,7 +100,8 @@ else
 			ole.odt ole.fodt nested_tables.html first.eml second.eml third.eml fourth.eml \
 			html_with_doc_ext.doc html_with_xls_ext.xls rtf_with_doc_ext.doc \
 			$(addprefix comments_libreoffice_3.5.,odt doc docx rtf) \
-			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf; do \
+			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
+			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf; do \
 		echo TESTING $$f; \
 		if ! $(EXEC) ../build/doctotext $$f | tr -d '\r' | diff -u - $$f.out; then \
 			exit 1; \
@@ -228,7 +229,8 @@ update_tests:
 			ole.odt ole.fodt nested_tables.html gb18030_without_bom.txt utf16_with_bom.txt \
 			html_with_doc_ext.doc html_with_xls_ext.xls rtf_with_doc_ext.doc \
 			$(addprefix comments_libreoffice_3.5.,odt doc docx rtf) \
-			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf; do \
+			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
+			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf; do \
 		echo PROCESSING $$f; \
 		$(EXEC) ../build/doctotext $$f | tr -d '\r' > $$f.out; \
 	done

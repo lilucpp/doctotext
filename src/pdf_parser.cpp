@@ -33,6 +33,7 @@
 *****************************************************************************/
 
 #include "pdf_parser.h"
+#include "plain_text_extractor.h"
 
 #include "data_stream.h"
 #include "exception.h"
@@ -4062,6 +4063,7 @@ struct PDFParser::Implementation
 								hex_char[1] = '0';
 								string.m_value += hex_char_to_single_char(hex_char);
 							}
+							string.m_is_hex = false;
 							return;
 						}
 						normalize_hex_char(ch);
@@ -4270,8 +4272,8 @@ struct PDFParser::Implementation
 								else	//hexadecimal string
 								{
 									value_object = new PDFString;
-									m_data_stream->unGetc('<');
 									m_data_stream->unGetc(ch);
+									m_data_stream->unGetc('<');
 									readString(*(PDFString*)value_object);
 									array.m_objects.push_back(value_object);
 								}
@@ -4671,8 +4673,8 @@ struct PDFParser::Implementation
 									else	//hexadecimal string
 									{
 										value_object = new PDFString;
-										m_data_stream->unGetc('<');
 										m_data_stream->unGetc(ch);
+										m_data_stream->unGetc('<');
 										readString(*(PDFString*)value_object);
 										reading_value = false;
 										reading_key = true;
@@ -4965,8 +4967,8 @@ struct PDFParser::Implementation
 											else	//hexadecimal string
 											{
 												value_object = new PDFString;
-												m_data_stream->unGetc('<');
 												m_data_stream->unGetc(ch);
+												m_data_stream->unGetc('<');
 												readString(*(PDFString*)value_object);
 												reference_info->m_object->m_object = value_object;
 												value_object = NULL;
@@ -5093,6 +5095,174 @@ struct PDFParser::Implementation
 			}
 
 		private:
+			bool rebuildReferenceDataFallback()
+			{
+				try
+				{
+					size_t file_len = m_data_stream->size();
+					if (file_len <= m_header_offset)
+						return false;
+
+					m_references.clear();
+					const size_t chunk_size = 65536;
+					const size_t overlap = 1024;
+					std::vector<char> chunk_buffer(chunk_size);
+					size_t offset = m_header_offset;
+					size_t found_root_id = 0;
+					size_t found_info_id = 0;
+
+					while (offset < file_len)
+					{
+						if (!m_data_stream->seek(offset, SEEK_SET))
+							break;
+						size_t read_size = (file_len - offset) < chunk_size ? (file_len - offset) : chunk_size;
+						if (!m_data_stream->read(&chunk_buffer[0], 1, read_size))
+							break;
+
+						const char* chunk = &chunk_buffer[0];
+						size_t i = 0;
+						while (i < read_size)
+						{
+							if (i + 3 <= read_size && chunk[i] == 'o' && chunk[i + 1] == 'b' && chunk[i + 2] == 'j')
+							{
+								if (i + 3 == read_size || chunk[i + 3] == ' ' || chunk[i + 3] == '\r' || chunk[i + 3] == '\n' || chunk[i + 3] == '<' || chunk[i + 3] == '/')
+								{
+									size_t k = i;
+									while (k > 0 && (chunk[k - 1] == ' ' || chunk[k - 1] == '\t' || chunk[k - 1] == '\r' || chunk[k - 1] == '\n'))
+										--k;
+									size_t gen_end = k;
+									while (k > 0 && chunk[k - 1] >= '0' && chunk[k - 1] <= '9')
+										--k;
+									size_t gen_start = k;
+
+									while (k > 0 && (chunk[k - 1] == ' ' || chunk[k - 1] == '\t' || chunk[k - 1] == '\r' || chunk[k - 1] == '\n'))
+										--k;
+									size_t id_end = k;
+									while (k > 0 && chunk[k - 1] >= '0' && chunk[k - 1] <= '9')
+										--k;
+									size_t id_start = k;
+
+									if (id_start < id_end && gen_start < gen_end)
+									{
+										if (id_start == 0 || chunk[id_start - 1] == ' ' || chunk[id_start - 1] == '\t' || chunk[id_start - 1] == '\r' || chunk[id_start - 1] == '\n' || chunk[id_start - 1] == '%')
+										{
+											size_t obj_id = strtoul(&chunk[id_start], NULL, 10);
+											size_t gen = strtoul(&chunk[gen_start], NULL, 10);
+											size_t obj_offset = offset + id_start;
+
+											if (obj_id > 0 && obj_id < 2000000)
+											{
+												if (obj_id >= m_references.size())
+													m_references.resize(obj_id + 1);
+												m_references[obj_id].m_type = ReferenceInfo::in_use;
+												m_references[obj_id].m_offset = obj_offset;
+												m_references[obj_id].m_generation = gen;
+												m_references[obj_id].m_read = false;
+
+												size_t snippet_len = (read_size - i) > 500 ? 500 : (read_size - i);
+												std::string snippet(&chunk[i], snippet_len);
+												if (snippet.find("/Catalog") != std::string::npos)
+													found_root_id = obj_id;
+
+												size_t rpos = snippet.find("/Root");
+												if (rpos != std::string::npos)
+												{
+													const char* rp = snippet.c_str() + rpos + 5;
+													while (*rp == ' ' || *rp == '\t' || *rp == '\r' || *rp == '\n') ++rp;
+													if (*rp >= '0' && *rp <= '9')
+													{
+														size_t rid = strtoul(rp, NULL, 10);
+														if (rid > 0)
+															found_root_id = rid;
+													}
+												}
+
+												size_t ipos = snippet.find("/Info");
+												if (ipos != std::string::npos)
+												{
+													const char* ip = snippet.c_str() + ipos + 5;
+													while (*ip == ' ' || *ip == '\t' || *ip == '\r' || *ip == '\n') ++ip;
+													if (*ip >= '0' && *ip <= '9')
+													{
+														size_t inf_id = strtoul(ip, NULL, 10);
+														if (inf_id > 0)
+															found_info_id = inf_id;
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+							++i;
+						}
+
+						// Check for trailer keyword in chunk
+						size_t tr_pos = 0;
+						while (tr_pos + 7 <= read_size)
+						{
+							if (chunk[tr_pos] == 't' && memcmp(&chunk[tr_pos], "trailer", 7) == 0)
+							{
+								size_t tr_len = (read_size - tr_pos) > 1024 ? 1024 : (read_size - tr_pos);
+								std::string tr_snippet(&chunk[tr_pos], tr_len);
+								size_t rpos = tr_snippet.find("/Root");
+								if (rpos != std::string::npos)
+								{
+									const char* rp = tr_snippet.c_str() + rpos + 5;
+									while (*rp == ' ' || *rp == '\t' || *rp == '\r' || *rp == '\n') ++rp;
+									if (*rp >= '0' && *rp <= '9')
+									{
+										size_t rid = strtoul(rp, NULL, 10);
+										if (rid > 0)
+											found_root_id = rid;
+									}
+								}
+								size_t ipos = tr_snippet.find("/Info");
+								if (ipos != std::string::npos)
+								{
+									const char* ip = tr_snippet.c_str() + ipos + 5;
+									while (*ip == ' ' || *ip == '\t' || *ip == '\r' || *ip == '\n') ++ip;
+									if (*ip >= '0' && *ip <= '9')
+									{
+										size_t inf_id = strtoul(ip, NULL, 10);
+										if (inf_id > 0)
+											found_info_id = inf_id;
+									}
+								}
+							}
+							++tr_pos;
+						}
+
+						if (offset + read_size >= file_len)
+							break;
+						offset += (read_size - overlap);
+					}
+
+					if (found_root_id > 0 && found_root_id < m_references.size())
+					{
+						m_root_ref->m_index = found_root_id;
+						m_root_ref->m_generation = 0;
+						m_root_ref->m_object = NULL;
+						m_root_ref->m_reader = this;
+						m_got_root = true;
+					}
+					if (found_info_id > 0 && found_info_id < m_references.size())
+					{
+						m_info_ref->m_index = found_info_id;
+						m_info_ref->m_generation = 0;
+						m_info_ref->m_object = NULL;
+						m_info_ref->m_reader = this;
+						m_got_info = true;
+					}
+
+					return m_got_root;
+				}
+				catch (...)
+				{
+					return false;
+				}
+			}
+
 			void readReferenceData()
 			{
 				try
@@ -5214,8 +5384,11 @@ struct PDFParser::Implementation
 				}
 				catch (doctotextex::CustomException& ex)
 				{
-					ex.appendError("PDF Reader: Error while reading reference data");
-					throw;
+					if (!rebuildReferenceDataFallback())
+					{
+						ex.appendError("PDF Reader: Error while reading reference data");
+						throw;
+					}
 				}
 			}
 
@@ -8157,9 +8330,9 @@ struct PDFParser::Implementation
 		return val;
 	}
 
-	void parseAnnotations(PDFReader::PDFDictionary* page_obj, std::string& text)
+	void parseAnnotations(PDFReader::PDFDictionary* page_obj, std::string& text, int depth = 0)
 	{
-		if (!page_obj)
+		if (!page_obj || depth >= 5)
 			return;
 		PDFReader::PDFArray* annots = page_obj->getObjAsArray("Annots");
 		if (!annots)
@@ -8175,20 +8348,66 @@ struct PDFParser::Implementation
 			if (subtype == "Popup")
 				continue;
 
-			PDFReader::PDFString* contents_str = annot_dict->getObjAsString("Contents");
-			if (!contents_str)
-				continue;
-
-			std::string contents = decode_pdf_string(contents_str);
-			if (contents.empty())
-				continue;
-
 			std::string author = decode_pdf_string(annot_dict->getObjAsString("T"));
+			std::string subject = decode_pdf_string(annot_dict->getObjAsString("Subj"));
+			std::string contents = decode_pdf_string(annot_dict->getObjAsString("Contents"));
 
-			if (!author.empty())
-				text += "\nComment [" + author + "]: " + contents + "\n";
-			else
-				text += "\nComment: " + contents + "\n";
+			std::string comment_header = "Comment";
+			if (!author.empty() && !subject.empty())
+				comment_header += " [" + author + "] (" + subject + ")";
+			else if (!author.empty())
+				comment_header += " [" + author + "]";
+			else if (!subject.empty())
+				comment_header += " (" + subject + ")";
+
+			if (!contents.empty())
+				text += "\n" + comment_header + ": " + contents + "\n";
+			else if (!author.empty() || !subject.empty())
+				text += "\n" + comment_header + "\n";
+
+			if (subtype == "FileAttachment")
+			{
+				PDFReader::PDFDictionary* fs_dict = annot_dict->getObjAsDictionary("FS");
+				if (fs_dict)
+				{
+					PDFReader::PDFDictionary* ef_dict = fs_dict->getObjAsDictionary("EF");
+					if (ef_dict)
+					{
+						PDFReader::PDFStream* file_stream = ef_dict->getObjAsStream("F");
+						if (!file_stream)
+							file_stream = ef_dict->getObjAsStream("UF");
+						if (!file_stream)
+							file_stream = ef_dict->getObjAsStream("DOS");
+						if (!file_stream)
+							file_stream = ef_dict->getObjAsStream("Mac");
+						if (!file_stream)
+							file_stream = ef_dict->getObjAsStream("Unix");
+
+						if (file_stream)
+						{
+							std::vector<unsigned char> stream_bytes;
+							if (file_stream->getDecodedStreamBytes(stream_bytes) && !stream_bytes.empty())
+							{
+								try
+								{
+									doctotext::PlainTextExtractor nested_extractor;
+									std::string nested_text;
+									if (nested_extractor.processFile((const char*)&stream_bytes[0], stream_bytes.size(), nested_text))
+									{
+										if (!nested_text.empty())
+										{
+											text += "\n" + nested_text + "\n";
+										}
+									}
+								}
+								catch (...)
+								{
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 

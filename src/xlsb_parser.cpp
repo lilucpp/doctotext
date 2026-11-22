@@ -675,6 +675,25 @@ void XLSBParser::setLogStream(std::ostream& log_stream)
 
 bool XLSBParser::isXLSB()
 {
+	if (!impl->m_buffer)
+	{
+		FILE* f = fopen(impl->m_file_name.c_str(), "rb");
+		if (f == NULL)
+			return false;
+		char magic[2];
+		if (fread(magic, 1, 2, f) != 2 || magic[0] != 'P' || magic[1] != 'K')
+		{
+			fclose(f);
+			return false;
+		}
+		fclose(f);
+	}
+	else if (impl->m_buffer_size < 2 ||
+	         impl->m_buffer[0] != 'P' ||
+	         impl->m_buffer[1] != 'K')
+	{
+		return false;
+	}
 	DocToTextUnzip unzip;
 	if (impl->m_buffer)
 		unzip.setBuffer(impl->m_buffer, impl->m_buffer_size);
