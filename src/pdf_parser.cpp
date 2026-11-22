@@ -46,6 +46,9 @@
 #include <map>
 #include "poppler_ccitt.h"
 #include "jbig2.h"
+#include "xml_stream.h"
+#include <libxml/xmlreader.h>
+#include <libxml/tree.h>
 #include "metadata.h"
 #include "misc.h"
 #include <new>
@@ -8474,7 +8477,7 @@ struct PDFParser::Implementation
 				continue;
 
 			std::string subtype = annot_dict->getValAsString("Subtype", "");
-			if (subtype == "Popup")
+			if (subtype == "Popup" || subtype == "Widget")
 				continue;
 
 			std::string author = decode_pdf_string(annot_dict->getObjAsString("T"));
@@ -8552,6 +8555,21 @@ struct PDFParser::Implementation
 			return;
 
 		PDFReader::PDFStream::PDFStreamIterator iterator = page_content->getIterator();
+		parseContentStreamIterator(iterator, fonts_for_page, page_text, current_resources,
+		                           page_index, processed_images, depth);
+	}
+
+	void parseContentStreamIterator(PDFReader::PDFStream::PDFStreamIterator& iterator,
+	                                PDFContent::FontsByNames* fonts_for_page,
+	                                PDFContent::PageText& page_text,
+	                                PDFReader::PDFDictionary* current_resources,
+	                                size_t page_index,
+	                                std::set<std::string>& processed_images,
+	                                int depth = 0)
+	{
+		if (depth >= 10)
+			return;
+
 		std::string last_name;
 		std::string last_string;
 		bool in_text = false;
@@ -8832,6 +8850,306 @@ struct PDFParser::Implementation
 		iterator.levelUp();
 	}
 
+	static std::string trim_ascii_ws(const std::string& s)
+	{
+		size_t start = s.find_first_not_of(" \t\r\n");
+		if (start == std::string::npos)
+			return "";
+		size_t end = s.find_last_not_of(" \t\r\n");
+		return s.substr(start, end - start + 1);
+	}
+
+	static std::string decode_pdf_stream_to_string(PDFReader::PDFStream* s)
+	{
+		std::vector<unsigned char> bytes;
+		if (!s || !s->getDecodedStreamBytes(bytes) || bytes.empty())
+			return "";
+		return std::string(reinterpret_cast<const char*>(&bytes[0]), bytes.size());
+	}
+
+	static std::string xml_node_text(xmlNodePtr node)
+	{
+		if (!node)
+			return "";
+		xmlChar* raw = xmlNodeGetContent(node);
+		if (!raw)
+			return "";
+		std::string res = trim_ascii_ws(reinterpret_cast<const char*>(raw));
+		xmlFree(raw);
+		return res;
+	}
+
+	static xmlNodePtr find_xml_element(xmlNodePtr node, const char* local_name, int depth = 0)
+	{
+		if (!node || depth >= 32)
+			return NULL;
+		for (xmlNodePtr cur = node; cur; cur = cur->next)
+		{
+			if (cur->type == XML_ELEMENT_NODE)
+			{
+				if (cur->name && xmlStrEqual(cur->name, BAD_CAST local_name))
+					return cur;
+				if (xmlNodePtr found = find_xml_element(cur->children, local_name, depth + 1))
+					return found;
+			}
+		}
+		return NULL;
+	}
+
+	static xmlNodePtr find_direct_child(xmlNodePtr parent, const char* local_name)
+	{
+		if (!parent)
+			return NULL;
+		for (xmlNodePtr cur = parent->children; cur; cur = cur->next)
+		{
+			if (cur->type == XML_ELEMENT_NODE && cur->name && xmlStrEqual(cur->name, BAD_CAST local_name))
+				return cur;
+		}
+		return NULL;
+	}
+
+	static xmlNodePtr expand_xml_root(XmlStream& xs)
+	{
+		while (xs)
+		{
+			if (xmlNodePtr root = xs.expand())
+				return root;
+			xs.next();
+		}
+		return NULL;
+	}
+
+	static void collect_xfa_labels(xmlNodePtr node, std::map<std::string, std::string>& labels, int depth = 0)
+	{
+		if (!node || depth >= 64)
+			return;
+		for (xmlNodePtr cur = node; cur; cur = cur->next)
+		{
+			if (cur->type != XML_ELEMENT_NODE)
+				continue;
+			if (cur->name && xmlStrEqual(cur->name, BAD_CAST "field"))
+			{
+				xmlChar* name_attr = xmlGetProp(cur, BAD_CAST "name");
+				if (name_attr)
+				{
+					std::string fname(reinterpret_cast<const char*>(name_attr));
+					xmlFree(name_attr);
+					if (!fname.empty() && labels.find(fname) == labels.end())
+					{
+						std::string label;
+						if (xmlNodePtr assist = find_direct_child(cur, "assist"))
+						{
+							label = xml_node_text(find_direct_child(assist, "toolTip"));
+							if (label.empty())
+								label = xml_node_text(find_direct_child(assist, "speak"));
+						}
+						if (label.empty())
+							label = xml_node_text(find_direct_child(cur, "caption"));
+						if (!label.empty())
+							labels[fname] = label;
+					}
+				}
+			}
+			collect_xfa_labels(cur->children, labels, depth + 1);
+		}
+	}
+
+	static void extract_xfa_data_nodes(xmlNodePtr node, const std::map<std::string, std::string>& labels, std::string& out, int depth = 0)
+	{
+		if (!node || depth >= 64)
+			return;
+		for (xmlNodePtr cur = node; cur; cur = cur->next)
+		{
+			if (cur->type != XML_ELEMENT_NODE || !cur->name)
+				continue;
+			xmlNodePtr first_child_elem = NULL;
+			for (xmlNodePtr c = cur->children; c; c = c->next)
+			{
+				if (c->type == XML_ELEMENT_NODE)
+				{
+					first_child_elem = c;
+					break;
+				}
+			}
+			// XFA rich text leaves embed XHTML (<body>/<p>) rather than nested subforms/fields
+			bool is_rich_text_leaf = first_child_elem && first_child_elem->ns && first_child_elem->ns->href &&
+			                         strstr(reinterpret_cast<const char*>(first_child_elem->ns->href), "xhtml") != NULL;
+			if (first_child_elem && !is_rich_text_leaf)
+			{
+				extract_xfa_data_nodes(cur->children, labels, out, depth + 1);
+			}
+			else
+			{
+				std::string val = xml_node_text(cur);
+				if (!val.empty())
+				{
+					std::string fname(reinterpret_cast<const char*>(cur->name));
+					std::map<std::string, std::string>::const_iterator it = labels.find(fname);
+					const std::string& label = (it != labels.end()) ? it->second : fname;
+					out += label + ": " + val + "\n";
+				}
+			}
+		}
+	}
+
+	static void extract_xfa_from_roots(xmlNodePtr tpl_root, xmlNodePtr ds_root, std::string& out)
+	{
+		if (!ds_root)
+			return;
+		std::map<std::string, std::string> labels;
+		if (tpl_root)
+		{
+			if (xmlNodePtr tpl_elem = find_xml_element(tpl_root, "template"))
+				collect_xfa_labels(tpl_elem->children, labels);
+		}
+		xmlNodePtr data_node = find_xml_element(ds_root, "data");
+		if (data_node)
+			extract_xfa_data_nodes(data_node->children, labels, out);
+	}
+
+	static std::string extract_acroform_value(PDFReader::PDFDictionary* field_dict, const std::string& ft)
+	{
+		if (PDFReader::PDFString* v_str = field_dict->getObjAsString("V"))
+			return decode_pdf_string(v_str);
+		if (PDFReader::PDFName* v_name = field_dict->getObjAsName("V"))
+		{
+			const std::string& name_val = (*v_name)();
+			if (ft == "Btn" && name_val == "Off")
+				return "";
+			return name_val;
+		}
+		if (PDFReader::PDFArray* v_arr = field_dict->getObjAsArray("V"))
+		{
+			std::string joined = "[";
+			size_t count = 0;
+			for (size_t i = 0; i < v_arr->Size(); ++i)
+			{
+				std::string item;
+				if (PDFReader::PDFString* s = v_arr->getObjAsString(i))
+					item = decode_pdf_string(s);
+				else if (PDFReader::PDFName* n = v_arr->getObjAsName(i))
+					item = (*n)();
+				if (!item.empty())
+				{
+					if (count > 0)
+						joined += ", ";
+					joined += item;
+					++count;
+				}
+			}
+			joined += "]";
+			return count > 0 ? joined : "";
+		}
+		return "";
+	}
+
+	static void parseAcroFormFields(PDFReader::PDFArray* fields, const std::string& parent_name,
+	                                const std::string& inherited_ft, std::string& out,
+	                                std::set<PDFReader::PDFDictionary*>& visited, int depth = 0)
+	{
+		if (!fields || depth >= 16)
+			return;
+		for (size_t i = 0; i < fields->Size(); ++i)
+		{
+			PDFReader::PDFDictionary* field_dict = fields->getObjAsDictionary(i);
+			if (!field_dict || !visited.insert(field_dict).second)
+				continue;
+
+			std::string t = decode_pdf_string(field_dict->getObjAsString("T"));
+			std::string full_name = parent_name.empty() ? t : (t.empty() ? parent_name : parent_name + "." + t);
+			std::string ft = inherited_ft;
+			if (PDFReader::PDFName* ft_obj = field_dict->getObjAsName("FT"))
+				ft = (*ft_obj)();
+
+			std::string val = extract_acroform_value(field_dict, ft);
+			if (!val.empty())
+			{
+				std::string label = !full_name.empty() ? full_name : decode_pdf_string(field_dict->getObjAsString("TU"));
+				if (!label.empty())
+					out += label + ": " + val + "\n";
+			}
+
+			if (PDFReader::PDFArray* kids = field_dict->getObjAsArray("Kids"))
+				parseAcroFormFields(kids, full_name, ft, out, visited, depth + 1);
+		}
+	}
+
+	void parseAcroForm(PDFReader& pdf_reader, std::string& text)
+	{
+		if (!pdf_reader.m_root_dictionary)
+			return;
+		PDFReader::PDFDictionary* acroform = pdf_reader.m_root_dictionary->getObjAsDictionary("AcroForm");
+		if (!acroform)
+			return;
+
+		std::string form_text;
+		PDFReader::PDFStream* xfa_stream = acroform->getObjAsStream("XFA");
+		PDFReader::PDFArray* xfa_array = xfa_stream ? NULL : acroform->getObjAsArray("XFA");
+		if (xfa_stream)
+		{
+			std::string xml = decode_pdf_stream_to_string(xfa_stream);
+			if (!xml.empty())
+			{
+				XmlStream xs(xml, true, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_RECOVER);
+				xmlNodePtr root = expand_xml_root(xs);
+				extract_xfa_from_roots(root, root, form_text);
+			}
+		}
+		else if (xfa_array)
+		{
+			std::string template_xml;
+			std::string datasets_xml;
+			std::string all_packets_xml;
+			for (size_t i = 0; i + 1 < xfa_array->Size(); i += 2)
+			{
+				PDFReader::PDFString* pkt_name_obj = xfa_array->getObjAsString(i);
+				PDFReader::PDFStream* pkt_stream = xfa_array->getObjAsStream(i + 1);
+				if (!pkt_name_obj || !pkt_stream)
+					continue;
+				std::string pkt_name = decode_pdf_string(pkt_name_obj);
+				std::string pkt_xml = decode_pdf_stream_to_string(pkt_stream);
+				if (pkt_name == "template")
+					template_xml = pkt_xml;
+				else if (pkt_name == "datasets")
+					datasets_xml = pkt_xml;
+				all_packets_xml += pkt_xml;
+			}
+			if (!datasets_xml.empty())
+			{
+				XmlStream xs_ds(datasets_xml, true, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_RECOVER);
+				xmlNodePtr ds_root = expand_xml_root(xs_ds);
+				if (!template_xml.empty())
+				{
+					XmlStream xs_tpl(template_xml, true, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_RECOVER);
+					xmlNodePtr tpl_root = expand_xml_root(xs_tpl);
+					extract_xfa_from_roots(tpl_root, ds_root, form_text);
+				}
+				else
+				{
+					extract_xfa_from_roots(NULL, ds_root, form_text);
+				}
+			}
+			else if (!all_packets_xml.empty())
+			{
+				XmlStream xs(all_packets_xml, true, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_RECOVER);
+				xmlNodePtr root = expand_xml_root(xs);
+				extract_xfa_from_roots(root, root, form_text);
+			}
+		}
+
+		if (form_text.empty())
+		{
+			if (PDFReader::PDFArray* fields = acroform->getObjAsArray("Fields"))
+			{
+				std::set<PDFReader::PDFDictionary*> visited;
+				parseAcroFormFields(fields, "", "", form_text, visited);
+			}
+		}
+
+		if (!form_text.empty())
+			text += form_text + "\n";
+	}
+
 	void parseText(std::string& text)
 	{
 		for (size_t i = 0; i < m_pdf_content.m_pages.size(); ++i)
@@ -8853,13 +9171,38 @@ struct PDFParser::Implementation
 
 				PDFContent::PageText page_text;
 				std::set<std::string> processed_images;
+				std::vector<PDFReader::PDFStream*> valid_contents;
 				for (size_t j = 0; j < contents.size(); ++j)
 				{
-					PDFReader::PDFStream* page_content = contents[j];
-					if (page_content)
+					if (contents[j])
+						valid_contents.push_back(contents[j]);
+				}
+				if (valid_contents.size() == 1)
+				{
+					parseSingleContentStream(valid_contents[0], fonts_for_page, page_text,
+					                         m_pdf_content.m_pages_resources[i], i, processed_images, 0);
+				}
+				else if (valid_contents.size() > 1)
+				{
+					std::vector<char> combined_stream;
+					combined_stream.push_back('[');
+					for (size_t j = 0; j < valid_contents.size(); ++j)
 					{
-						parseSingleContentStream(page_content, fonts_for_page, page_text,
-						                         m_pdf_content.m_pages_resources[i], i, processed_images, 0);
+						std::vector<unsigned char> chunk;
+						if (valid_contents[j]->getDecodedStreamBytes(chunk) && !chunk.empty())
+						{
+							combined_stream.insert(combined_stream.end(),
+							                       reinterpret_cast<const char*>(&chunk[0]),
+							                       reinterpret_cast<const char*>(&chunk[0]) + chunk.size());
+						}
+					}
+					combined_stream.push_back(']');
+					if (combined_stream.size() > 2)
+					{
+						PDFReader::PDFStream::PDFStreamIterator iterator;
+						iterator.init(&combined_stream[0], combined_stream.size());
+						parseContentStreamIterator(iterator, fonts_for_page, page_text,
+						                           m_pdf_content.m_pages_resources[i], i, processed_images, 0);
 					}
 				}
 				if (page_text.m_text_elements.empty() && m_image_callback)
@@ -9160,6 +9503,7 @@ std::string PDFParser::plainText(const FormattingStyle& formatting)
 		impl->parsePagesTree(pdf_reader);
 		impl->parseFonts();
 		impl->parseText(text);
+		impl->parseAcroForm(pdf_reader, text);
 	}
 	catch (std::bad_alloc& ba)
 	{
