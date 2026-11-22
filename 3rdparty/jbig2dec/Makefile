@@ -1,6 +1,6 @@
 CC ?= gcc
 AR ?= ar
-CFLAGS ?= -O2
+CFLAGS ?= -O2 -std=gnu89
 
 SRCS = jbig2.c jbig2_arith.c jbig2_arith_int.c jbig2_arith_iaid.c \
        jbig2_huffman.c jbig2_segment.c jbig2_page.c \

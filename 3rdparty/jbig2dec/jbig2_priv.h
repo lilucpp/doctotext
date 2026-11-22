@@ -16,7 +16,9 @@
 /* library internals */
 
 typedef uint8_t byte;
+#if !defined(__cplusplus) && !defined(bool) && (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L)
 typedef int bool;
+#endif
 
 #ifndef TRUE
 #define TRUE 1

@@ -224,7 +224,7 @@ unzip: unzip101e/unzip.o
 jbig2dec: jbig2dec/libjbig2dec.a
 
 jbig2dec/libjbig2dec.a:
-	cd jbig2dec && $(MAKE) CC="$(CC)" CFLAGS="$(ARCH_FLAGS) -O2"
+	cd jbig2dec && $(MAKE) CC="$(CC)" CFLAGS="$(ARCH_FLAGS) -O2 -std=gnu89"
 
 poppler_ccitt: poppler_ccitt/libpoppler_ccitt.a
 

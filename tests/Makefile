@@ -65,6 +65,7 @@ CXXFLAGS += -D_GLIBCXX_USE_CXX11_ABI=0
 endif
 
 ifeq ($(WIN),1)
+CFLAGS += -I../3rdparty/pthreads/include
 CXXFLAGS += -I../3rdparty/pthreads/include
 LDFLAGS += -L../3rdparty/pthreads/lib -lpthreadGC2 
 else
@@ -286,7 +287,7 @@ c_api_status_test$(EXEEXT): c_api_status_test.c ../build/doctotext_c_api.h ../bu
 	$(STRIP) c_api_status_test$(EXEEXT)
 
 c_api_embedded_test$(EXEEXT): c_api_embedded_test.c ../build/doctotext_c_api.h ../build/$(SOPRE)doctotext$(SOEXT)
-	$(LIB_PATH) $(CC) -o c_api_embedded_test$(EXEEXT) c_api_embedded_test.c -L../build/ -ldoctotext $(LDFLAGS) $(ARCH_FLAGS)
+	$(LIB_PATH) $(CC) -o c_api_embedded_test$(EXEEXT) c_api_embedded_test.c -L../build/ -ldoctotext $(CFLAGS) $(LDFLAGS) $(ARCH_FLAGS)
 	$(STRIP) c_api_embedded_test$(EXEEXT)
 
 pdf_embedded_and_glyph_test$(EXEEXT): pdf_embedded_and_glyph_test.cpp ../src/pdf_parser.h ../build/plain_text_extractor.h ../build/$(SOPRE)doctotext$(SOEXT)
