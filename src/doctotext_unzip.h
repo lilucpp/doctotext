@@ -2,6 +2,7 @@
 #define DOCTOTEXT_UNZIP_H
 
 #include <string>
+#include <vector>
 
 class DocToTextUnzip
 {
@@ -30,6 +31,8 @@ class DocToTextUnzip
 			Load and cache zip file directory. Speed up locating files dramatically. Use before multiple read() calls.
 		**/
 		bool loadDirectory();
+		/// Populates `files` with all entry paths inside the opened zip archive.
+		bool getFileList(std::vector<std::string>& files);
 };
 
 #endif

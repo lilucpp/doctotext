@@ -213,6 +213,8 @@ struct DocToTextExtractorParams
 	doctotext_image_parser_callback m_image_callback;
 	void* m_image_user_data;
 	CImageCallbackWrapperData m_wrapper_data;
+	int m_parse_embedded_files;
+	bool m_parse_embedded_override;
 
 	DocToTextExtractorParams()
 	{
@@ -222,6 +224,8 @@ struct DocToTextExtractorParams
 		m_manage_xml_parser = 1;
 		m_image_callback = NULL;
 		m_image_user_data = NULL;
+		m_parse_embedded_files = 1;
+		m_parse_embedded_override = false;
 	}
 };
 
@@ -282,6 +286,8 @@ void DOCTOTEXT_CALL doctotext_extractor_params_set_formatting_style(DocToTextExt
 	try
 	{
 		extractor_params->m_formatting_style = formatting_style->m_formatting_style;
+		if (!extractor_params->m_parse_embedded_override)
+			extractor_params->m_parse_embedded_files = formatting_style->m_formatting_style.parse_embedded_files ? 1 : 0;
 	}
 	catch (std::bad_alloc& ba)
 	{
@@ -292,6 +298,12 @@ void DOCTOTEXT_CALL doctotext_extractor_params_set_image_parser_callback(DocToTe
 {
 	extractor_params->m_image_callback = callback;
 	extractor_params->m_image_user_data = user_data;
+}
+
+void DOCTOTEXT_CALL doctotext_extractor_params_set_parse_embedded_files(DocToTextExtractorParams* extractor_params, int enable)
+{
+	extractor_params->m_parse_embedded_files = (enable != 0) ? 1 : 0;
+	extractor_params->m_parse_embedded_override = true;
 }
 
 struct DocToTextException
@@ -729,6 +741,7 @@ static void init_extractor(PlainTextExtractor& extractor, DocToTextExtractorPara
 {
 	extractor.setVerboseLogging(extractor_params->m_verbose);
 	extractor.setFormattingStyle(extractor_params->m_formatting_style);
+	extractor.setParseEmbeddedFiles(extractor_params->m_parse_embedded_files != 0);
 	extractor.setManageXmlParser(extractor_params->m_manage_xml_parser);
 	extractor.setXmlParseMode(extractor_params->m_xml_parse_mode);
 	if (extractor_params->m_image_callback)

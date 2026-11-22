@@ -33,6 +33,7 @@
 *****************************************************************************/
 
 #include "pdf_parser.h"
+#include "embedded_object_extractor.h"
 #include "attachment.h"
 #include "plain_text_extractor.h"
 
@@ -8020,6 +8021,7 @@ struct PDFParser::Implementation
 	PDFContent m_pdf_content;
 	doctotext::ImageParserCallback m_image_callback;
 	void* m_image_user_data;
+	doctotext::FormattingStyle m_formatting_style;
 	std::vector<Attachment> m_attachments;
 	std::set<PDFReader::PDFStream*> m_extracted_attachment_streams;
 
@@ -9131,34 +9133,13 @@ struct PDFParser::Implementation
 		return val;
 	}
 
-	static bool isLikelyTextBuffer(const std::vector<unsigned char>& bytes)
-	{
-		if (bytes.empty())
-			return false;
-		// Allow UTF-16 BOM text files
-		if (bytes.size() >= 2 &&
-		    ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF)))
-			return true;
-		size_t sample_len = std::min(bytes.size(), (size_t)4096);
-		size_t control_count = 0;
-		for (size_t i = 0; i < sample_len; ++i)
-		{
-			unsigned char c = bytes[i];
-			if (c == 0)
-				return false;
-			if (c < 0x20 && c != '\t' && c != '\r' && c != '\n' && c != '\f')
-				++control_count;
-		}
-		return control_count * 20 <= sample_len;
-	}
-
 	void extractFilespecAttachment(PDFReader::PDFDictionary* fs_dict,
 	                                 const std::string& fallback_name,
 	                                 std::string& text)
 	{
-		static thread_local int t_embed_depth = 0;
-		if (!fs_dict || t_embed_depth >= 5)
+		if (!fs_dict)
 			return;
+
 		PDFReader::PDFDictionary* ef_dict = fs_dict->getObjAsDictionary("EF");
 		if (!ef_dict)
 			return;
@@ -9190,56 +9171,25 @@ struct PDFParser::Implementation
 		att.setBinaryContent(std::string(reinterpret_cast<const char*>(&stream_bytes[0]), stream_bytes.size()));
 		m_attachments.push_back(att);
 
-		struct DepthGuard
-		{
-			int& d;
-			DepthGuard(int& v) : d(v) { ++d; }
-			~DepthGuard() { --d; }
-		} depth_guard(t_embed_depth);
+		if (!m_formatting_style.parse_embedded_files)
+			return;
 
-		try
-		{
-			doctotext::PlainTextExtractor nested_extractor;
-			if (m_verbose_logging)
-				nested_extractor.setVerboseLogging(true);
-			if (m_log_stream)
-				nested_extractor.setLogStream(*m_log_stream);
-			if (m_image_callback)
-				nested_extractor.setImageParserCallback(m_image_callback, m_image_user_data);
+		doctotext::EmbeddedExtractionContext fallback_ctx;
+		fallback_ctx.formatting = m_formatting_style;
+		fallback_ctx.verbose_logging = m_verbose_logging;
+		fallback_ctx.log_stream = m_log_stream;
+		fallback_ctx.image_callback = m_image_callback;
+		fallback_ctx.image_user_data = m_image_user_data;
+		doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(fallback_ctx);
+		doctotext::EmbeddedExtractionContext& ctx = tls_scope.context();
+		if (ctx.depth >= ctx.max_depth || ctx.extracted_count >= ctx.max_count)
+			return;
 
-			std::string nested_text;
-			bool extracted = false;
-			if (!file_name.empty())
-			{
-				doctotext::PlainTextExtractor::ParserType ext_type =
-					nested_extractor.parserTypeByFileExtension(file_name);
-				if (ext_type != doctotext::PlainTextExtractor::PARSER_AUTO &&
-				    ext_type != doctotext::PlainTextExtractor::PARSER_ARCHIVE &&
-				    ext_type != doctotext::PlainTextExtractor::PARSER_IMAGE)
-				{
-					extracted = nested_extractor.processFile(ext_type, false,
-					                                         reinterpret_cast<const char*>(&stream_bytes[0]),
-					                                         stream_bytes.size(), nested_text);
-				}
-			}
-			if (!extracted)
-			{
-				extracted = nested_extractor.processFile(reinterpret_cast<const char*>(&stream_bytes[0]),
-				                                         stream_bytes.size(), nested_text);
-			}
-			if (!extracted && isLikelyTextBuffer(stream_bytes))
-			{
-				extracted = nested_extractor.processFile(doctotext::PlainTextExtractor::PARSER_TXT, false,
-				                                         reinterpret_cast<const char*>(&stream_bytes[0]),
-				                                         stream_bytes.size(), nested_text);
-			}
-			if (extracted && !nested_text.empty())
-			{
-				text += "\n" + nested_text + "\n";
-			}
-		}
-		catch (...)
+		std::string extracted_block;
+		if (doctotext::extractFromEmbeddedBuffer(&stream_bytes[0], stream_bytes.size(), file_name, ctx, extracted_block) &&
+		    !extracted_block.empty())
 		{
+			text += "\n" + extracted_block + "\n";
 		}
 	}
 
@@ -10403,6 +10353,7 @@ std::string PDFParser::plainText(const FormattingStyle& formatting)
 	std::string text;
 	impl->m_error = false;
 	impl->m_encrypted = false;
+	impl->m_formatting_style = formatting;
 	impl->m_attachments.clear();
 	impl->m_extracted_attachment_streams.clear();
 	if (!impl->m_data_stream->open())
@@ -10413,6 +10364,14 @@ std::string PDFParser::plainText(const FormattingStyle& formatting)
 	}
 	try
 	{
+		doctotext::EmbeddedExtractionContext root_ctx;
+		root_ctx.formatting = formatting;
+		root_ctx.verbose_logging = impl->m_verbose_logging;
+		root_ctx.log_stream = impl->m_log_stream;
+		root_ctx.image_callback = impl->m_image_callback;
+		root_ctx.image_user_data = impl->m_image_user_data;
+		doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
+
 		Implementation::PDFReader pdf_reader(impl->m_data_stream, &impl->m_encrypted);
 		impl->parsePagesTree(pdf_reader);
 		impl->parseFonts();

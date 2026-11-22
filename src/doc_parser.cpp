@@ -33,6 +33,7 @@
 *****************************************************************************/
 
 #include "doc_parser.h"
+#include "embedded_object_extractor.h"
 #include <iostream>
 
 #include "misc.h"
@@ -52,6 +53,7 @@
 #include "wv2/paragraphproperties.h"
 #include "wv2/parserfactory.h"
 #include <stdio.h>
+#include <memory>
 #include <sstream>
 #include <unistd.h>
 #include "wv2/ustring.h"
@@ -952,44 +954,88 @@ void DOCParser::getLinks(std::vector<Link>& links)
 	#warning TODO: Implement this functionality.
 }
 
+namespace
+{
+	class NonOwningOLEStorageView : public wvWare::AbstractOLEStorage
+	{
+		private:
+			ThreadSafeOLEStorage& m_storage;
+		public:
+			explicit NonOwningOLEStorageView(ThreadSafeOLEStorage& storage) : m_storage(storage) {}
+			bool isValid() const { return m_storage.isValid(); }
+			bool open(Mode mode) { return m_storage.open(mode); }
+			void close() {}
+			std::string name() const { return m_storage.name(); }
+			bool readDirectFromBuffer(unsigned char* buf, int size, int offset)
+			{
+				return m_storage.readDirectFromBuffer(buf, size, offset);
+			}
+			wvWare::AbstractOLEStreamReader* createStreamReader(const std::string& stream)
+			{
+				return m_storage.createStreamReader(stream);
+			}
+		private:
+			void streamDestroyed(wvWare::OLEStream*) {}
+	};
+}
+
 std::string DOCParser::plainText(const FormattingStyle& formatting)
 {
 	impl->m_error = false;
 	impl->m_encrypted = false;
-	CurrentState curr_state;
 	if (impl->m_verbose_logging)
 		*impl->m_log_stream << "Opening " << impl->m_file_name << " as OLE file to parse all embedded objects in supported formats.\n";
-	//Pointer to storage will be passed to parser from wv2 library. This pointer will be deleted, so allocate storage on heap
-	ThreadSafeOLEStorage* storage = NULL;
+	std::unique_ptr<ThreadSafeOLEStorage> storage;
 	if (impl->m_buffer)
-		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
+		storage.reset(new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size));
 	else
-		storage = new ThreadSafeOLEStorage(impl->m_file_name);
+		storage.reset(new ThreadSafeOLEStorage(impl->m_file_name));
 	if (!storage->isValid())
 	{
 		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
 		impl->m_error = true;
-		delete storage;
 		return "";
 	}
-	if (is_encrypted_doc_ole(*storage))
+	return plainText(*storage, formatting);
+}
+
+std::string DOCParser::plainText(ThreadSafeOLEStorage& storage, const FormattingStyle& formatting)
+{
+	impl->m_error = false;
+	impl->m_encrypted = false;
+	if (!storage.isValid())
+	{
+		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
+		impl->m_error = true;
+		return "";
+	}
+	if (is_encrypted_doc_ole(storage))
 	{
 		*impl->m_log_stream << "DOC file is encrypted and requires a password.\n";
 		impl->m_encrypted = true;
 		impl->m_error = true;
-		delete storage;
 		return "";
 	}
-	if (storage->enterDirectory("ObjectPool"))
+	CurrentState curr_state;
+	doctotext::EmbeddedExtractionContext root_ctx;
+	root_ctx.formatting = formatting;
+	root_ctx.verbose_logging = impl->m_verbose_logging;
+	root_ctx.log_stream = impl->m_log_stream;
+	root_ctx.image_callback = impl->m_image_callback;
+	root_ctx.image_user_data = impl->m_image_user_data;
+	doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
+	doctotext::EmbeddedExtractionContext& embed_ctx = tls_scope.context();
+
+	if (formatting.parse_embedded_files && storage.enterDirectory("ObjectPool"))
 	{
 		if (impl->m_verbose_logging)
 			*impl->m_log_stream << "ObjectPool found, embedded OLE objects probably exist.\n";
 		std::vector<std::string> obj_list;
-		if (!storage->getStreamsAndStoragesList(obj_list))
+		if (!storage.getStreamsAndStoragesList(obj_list))
 		{
-			*impl->m_log_stream << storage->getLastError() << "\n";
+			*impl->m_log_stream << storage.getLastError() << "\n";
+			storage.leaveDirectory();
 			impl->m_error = true;
-			delete storage;
 			return "";
 		}
 		for (size_t i = 0; i < obj_list.size(); ++i)
@@ -997,39 +1043,38 @@ std::string DOCParser::plainText(const FormattingStyle& formatting)
 			if (impl->m_verbose_logging)
 				*impl->m_log_stream << "OLE object entry found: " << obj_list[i] << "\n";
 			std::string obj_text;
-			if (storage->enterDirectory(obj_list[i]))
+			if (storage.enterDirectory(obj_list[i]))
 			{
-				std::vector<std::string> obj_list;
-				if (!storage->getStreamsAndStoragesList(obj_list))
+				std::vector<std::string> inner_list;
+				if (!storage.getStreamsAndStoragesList(inner_list))
 				{
-					*impl->m_log_stream << storage->getLastError() << "\n";
+					*impl->m_log_stream << storage.getLastError() << "\n";
+					storage.leaveDirectory();
+					storage.leaveDirectory();
 					impl->m_error = true;
-					delete storage;
 					return "";
 				}
-				if (find(obj_list.begin(), obj_list.end(), "Workbook") != obj_list.end())
+				if (find(inner_list.begin(), inner_list.end(), "Workbook") != inner_list.end())
 				{
 					*impl->m_log_stream << "Embedded MS Excel workbook detected.\n";
 					*impl->m_log_stream << "Using XLS parser.\n";
-					XLSParser xls("");
-					std::string xls_text = xls.plainText(*storage, formatting);
-					if (!xls.error())
-						obj_text = xls_text;
 				}
-				storage->leaveDirectory();
+				doctotext::extractFromOLEStorage(storage, obj_list[i], embed_ctx, obj_text);
+				storage.leaveDirectory();
 			}
 			curr_state.obj_texts.push_back(obj_text);
 		}
+		storage.leaveDirectory();
 	}
 	else
 	{
 		if (impl->m_verbose_logging)
 			*impl->m_log_stream << "No ObjectPool found, embedded OLE objects probably do not exist.\n";
 	}
-	storage->leaveDirectory();
 	curr_state.obj_texts_iter = curr_state.obj_texts.begin();
 	impl->modifyCerr();
-	SharedPtr<Parser> parser = ParserFactory::createParser(storage);
+	//wv2 ParserFactory owns and deletes the AbstractOLEStorage wrapper we allocate here.
+	SharedPtr<Parser> parser = ParserFactory::createParser(new NonOwningOLEStorageView(storage));
 	impl->restoreCerr();
 	if (!parser || !parser->isOk())
 	{
@@ -1056,6 +1101,16 @@ std::string DOCParser::plainText(const FormattingStyle& formatting)
 		return "";
 	}
 	text_handler.endOfDocument();
+	while (curr_state.obj_texts_iter != curr_state.obj_texts.end())
+	{
+		if (!curr_state.obj_texts_iter->empty())
+		{
+			if (!text.isEmpty() && text[text.length() - 1] != '\n')
+				text += UString("\n");
+			text += utf8_to_ustring(*curr_state.obj_texts_iter);
+		}
+		++curr_state.obj_texts_iter;
+	}
 	if (curr_state.header_footer.header != "")
 		text = curr_state.header_footer.header + UString("\n") + text;
 	if (curr_state.header_footer.footer != "")

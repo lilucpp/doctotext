@@ -452,3 +452,17 @@ bool DocToTextUnzip::loadDirectory()
 	}
 	return true;
 }
+
+bool DocToTextUnzip::getFileList(std::vector<std::string>& files)
+{
+	files.clear();
+	if (Impl->m_directory.empty() && !loadDirectory())
+		return false;
+	files.reserve(Impl->m_directory.size());
+	for (std::map<std::string, unz_file_pos>::const_iterator it = Impl->m_directory.begin();
+	     it != Impl->m_directory.end(); ++it)
+	{
+		files.push_back(it->first);
+	}
+	return true;
+}

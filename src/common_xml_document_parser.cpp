@@ -326,6 +326,11 @@ class CommonXMLDocumentParser::CommandHandlersSet
 								bool& children_processed, std::string& level_suffix, bool first_on_level,
 								std::vector<Link>& links)
 		{
+			if (!options.parse_embedded_files)
+			{
+				children_processed = true;
+				return;
+			}
 			if (parser.verbose())
 				parser.getLogStream() << "ODF_OBJECT command.\n";
 			std::string href = xml_stream.attribute("href");

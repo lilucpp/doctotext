@@ -127,6 +127,13 @@ namespace doctotext
 			void setImageParserCallback(ImageParserCallback callback, void* user_data = NULL);
 
 			/**
+				Enables or disables extracting and parsing embedded files/objects across supported document formats.
+				Enabled (true) by default.
+				\param parse_embedded true to parse embedded files, false to skip embedded files.
+			**/
+			void setParseEmbeddedFiles(bool parse_embedded);
+
+			/**
 				Enables or disables managing libxml2 parser by the object.
 				If it is enabled (default) PlainTextExtractor object calls xmlInitParser() and xmlCleanupParser()
 				functions automatically. All PlainTextExtractor objects uses a common thread-safe counter for this

@@ -34,7 +34,13 @@
 
 #include "ppt_parser.h"
 
+#include "embedded_object_extractor.h"
+#include "formatting_style.h"
+#include <algorithm>
+#include <climits>
 #include <iostream>
+#include <memory>
+#include <zlib.h>
 #include <map>
 #include <cmath>
 #include "metadata.h"
@@ -61,6 +67,7 @@ enum RecordType
 	RT_DOCUMENT = 0x03E8,
 	RT_DRAWING = 0x040C,
 	RT_END_DOCUMENT_ATOM = 0x03EA,
+	RT_EX_OLE_OBJ_STG = 0x0FC1,
 	RT_LIST = 0x07D0,
 	RT_MAIN_MASTER = 0x03F8,
 	RT_SLIDE_BASE = 0x03EC, // Not in MS specification
@@ -85,6 +92,7 @@ struct PPTParser::Implementation
 	size_t m_buffer_size;
 	doctotext::ImageParserCallback m_image_callback;
 	void* m_image_user_data;
+	doctotext::FormattingStyle m_formatting_style;
 
 	U16 getU16LittleEndian(std::vector<unsigned char>::const_iterator buffer)
 	{
@@ -96,7 +104,7 @@ struct PPTParser::Implementation
 		return (unsigned long)(*buffer) | ((unsigned long)(*(buffer +1 )) << 8L) | ((unsigned long)(*(buffer + 2)) << 16L) | ((unsigned long)(*(buffer + 3)) << 24L);
 	}
 
-	void parseRecord(int rec_type, unsigned long rec_len, ThreadSafeOLEStreamReader& reader, std::string& text)
+	void parseRecord(int rec_type, unsigned long rec_len, U16 rec_inst, ThreadSafeOLEStreamReader& reader, std::string& text)
 	{
 		switch(rec_type)
 		{
@@ -204,6 +212,67 @@ struct PPTParser::Implementation
 				text += '\n';
 				break;
 			}
+			case RT_EX_OLE_OBJ_STG:
+			{
+				if (m_verbose_logging)
+					*m_log_stream << "RT_ExOleObjStg\n";
+				int cur_pos = reader.tell();
+				size_t stream_size = reader.size();
+				size_t avail = (cur_pos >= 0 && (size_t)cur_pos < stream_size) ? (stream_size - (size_t)cur_pos) : 0;
+				unsigned long len = rec_len;
+				if (len > avail)
+				{
+					*m_log_stream << "Warning: Read past EOF\n";
+					len = (unsigned long)avail;
+				}
+				if (!m_formatting_style.parse_embedded_files || len == 0 || len > doctotext::kMaxEmbedBytes)
+				{
+					size_t skip = (size_t)len;
+					while (skip > 0)
+					{
+						int step = (int)std::min(skip, (size_t)INT_MAX);
+						if (!reader.seek(step, SEEK_CUR))
+							break;
+						skip -= (size_t)step;
+					}
+					break;
+				}
+				std::vector<unsigned char> raw(len);
+				if (!reader.read(raw.data(), len))
+					break;
+
+				std::vector<unsigned char> ole_buf;
+				if (rec_inst == 0)
+				{
+					ole_buf.swap(raw);
+				}
+				else if (rec_inst == 1 && len > 4)
+				{
+					U32 uncomp_len = getU32LittleEndian(raw.begin());
+					if (uncomp_len > 0 && uncomp_len <= doctotext::kMaxEmbedBytes)
+					{
+						ole_buf.resize(uncomp_len);
+						uLongf dest_len = (uLongf)uncomp_len;
+						if (uncompress(ole_buf.data(), &dest_len, raw.data() + 4, (uLong)(len - 4)) == Z_OK && dest_len > 0)
+							ole_buf.resize(dest_len);
+						else
+							ole_buf.clear();
+					}
+				}
+				if (!ole_buf.empty())
+				{
+					doctotext::EmbeddedExtractionContext fallback_ctx;
+					fallback_ctx.formatting = m_formatting_style;
+					fallback_ctx.verbose_logging = m_verbose_logging;
+					fallback_ctx.log_stream = m_log_stream;
+					fallback_ctx.image_callback = m_image_callback;
+					fallback_ctx.image_user_data = m_image_user_data;
+					doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(fallback_ctx);
+					doctotext::extractFromEmbeddedContainerBuffer(
+						ole_buf.data(), ole_buf.size(), "embedded_ppt_ole", tls_scope.context(), text);
+				}
+				break;
+			}
 			case OFFICE_ART_CLIENT_TEXTBOX:
 				if (m_verbose_logging)
 					*m_log_stream << "OfficeArtClientTextbox\n";
@@ -274,11 +343,12 @@ struct PPTParser::Implementation
 			read_status = reader.read(&*rec.begin(), 8);
 			if (oleEof(reader))
 			{
-				parseRecord(RT_END_DOCUMENT_ATOM, 0, reader, text);
+				parseRecord(RT_END_DOCUMENT_ATOM, 0, 0, reader, text);
 				return;
 			}
 			if (rec.size() < 8)
 				break;
+			U16 rec_inst = getU16LittleEndian(rec.begin()) >> 4;
 			int rec_type = getU16LittleEndian(rec.begin() + 2);
 			U32 rec_len = getU32LittleEndian(rec.begin() + 4);
 			if (m_verbose_logging)
@@ -291,7 +361,7 @@ struct PPTParser::Implementation
 				*m_log_stream << indend << "record=0x" << std::hex << rec_type << ", begin=0x" << pos << ", end=0x" << pos + rec_len - 1 << "\n";
 				container_ends.push(pos + rec_len - 1);
 			}
-			parseRecord(rec_type, rec_len, reader, text);
+			parseRecord(rec_type, rec_len, rec_inst, reader, text);
 		}
 	}
 };
@@ -458,29 +528,42 @@ std::string PPTParser::plainText(const FormattingStyle& formatting)
 {
 	impl->m_error = false;
 	impl->m_encrypted = false;
-	ThreadSafeOLEStorage* storage = NULL;
+	impl->m_formatting_style = formatting;
+	std::unique_ptr<ThreadSafeOLEStorage> storage;
 	if (impl->m_buffer)
-		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
+		storage.reset(new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size));
 	else
-		storage = new ThreadSafeOLEStorage(impl->m_file_name);
+		storage.reset(new ThreadSafeOLEStorage(impl->m_file_name));
 	if (!storage->isValid())
 	{
 		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
 		impl->m_error = true;
-		delete storage;
 		return "";
 	}
-	if (is_encrypted_ppt_ole(*storage))
+	return plainText(*storage, formatting);
+}
+
+std::string PPTParser::plainText(ThreadSafeOLEStorage& storage, const FormattingStyle& formatting)
+{
+	impl->m_error = false;
+	impl->m_encrypted = false;
+	impl->m_formatting_style = formatting;
+	if (!storage.isValid())
+	{
+		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
+		impl->m_error = true;
+		return "";
+	}
+	if (is_encrypted_ppt_ole(storage))
 	{
 		*impl->m_log_stream << "PPT file is encrypted and requires a password.\n";
 		impl->m_encrypted = true;
 		impl->m_error = true;
-		delete storage;
 		return "";
 	}
 	std::string text;
 	std::vector<std::string> dirs;
-	if (storage->getStreamsAndStoragesList(dirs))
+	if (storage.getStreamsAndStoragesList(dirs))
 	{
 		for (size_t i = 0; i < dirs.size(); ++i)
 		{
@@ -492,34 +575,38 @@ std::string PPTParser::plainText(const FormattingStyle& formatting)
 			#warning TODO: Check if there is a better way to get PowerPoint version.
 			if (dirs[i] == "Text_Content")
 			{
-				ThreadSafeOLEStreamReader* reader = (ThreadSafeOLEStreamReader*)storage->createStreamReader("Text_Content");
+				ThreadSafeOLEStreamReader* reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader("Text_Content");
 				if (reader != NULL)
 				{
-					impl->parseOldPPT(*storage, *reader, text);
+					impl->parseOldPPT(storage, *reader, text);
 					delete reader;
 				}
 				else
 				{
-					*impl->m_log_stream << storage->getLastError() + "\n";
+					*impl->m_log_stream << storage.getLastError() + "\n";
 					impl->m_error = true;
 				}
-				delete storage;
 				return text;
 			}
 		}
 	}
-	ThreadSafeOLEStreamReader* reader = (ThreadSafeOLEStreamReader*)storage->createStreamReader("PowerPoint Document");
+	ThreadSafeOLEStreamReader* reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader("PowerPoint Document");
 	if (reader == NULL)
 	{
 		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
 		impl->m_error = true;
-		delete storage;
 		return "";
 	}
+	doctotext::EmbeddedExtractionContext root_ctx;
+	root_ctx.formatting = formatting;
+	root_ctx.verbose_logging = impl->m_verbose_logging;
+	root_ctx.log_stream = impl->m_log_stream;
+	root_ctx.image_callback = impl->m_image_callback;
+	root_ctx.image_user_data = impl->m_image_user_data;
+	doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
 	impl->parsePPT(*reader, text);
 	delete reader;
-	parse_ppt_pictures(*storage, impl->m_image_callback, impl->m_image_user_data, *impl->m_log_stream, text);
-	delete storage;
+	parse_ppt_pictures(storage, impl->m_image_callback, impl->m_image_user_data, *impl->m_log_stream, text);
 	return text;
 }
 

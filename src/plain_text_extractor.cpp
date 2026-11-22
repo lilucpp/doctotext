@@ -68,6 +68,7 @@ struct PlainTextExtractor::Implementation
 {
 	ParserType m_parser_type;
 	FormattingStyle m_formatting_style;
+	bool m_parse_embedded_override;
 	XmlParseMode m_xml_parse_mode;
 	bool m_verbose_logging;
 	std::ostream* m_log_stream;
@@ -653,6 +654,8 @@ PlainTextExtractor::PlainTextExtractor(ParserType parser_type)
 	impl->m_formatting_style.table_style = TABLE_STYLE_TABLE_LOOK;
 	impl->m_formatting_style.list_style.setPrefix(" * ");
 	impl->m_formatting_style.url_style = URL_STYLE_UNDERSCORED;
+	impl->m_formatting_style.parse_embedded_files = true;
+	impl->m_parse_embedded_override = false;
 	impl->m_xml_parse_mode = PARSE_XML;
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -673,6 +676,12 @@ void PlainTextExtractor::setImageParserCallback(ImageParserCallback callback, vo
 	impl->m_image_user_data = user_data;
 }
 
+void PlainTextExtractor::setParseEmbeddedFiles(bool parse_embedded)
+{
+	impl->m_formatting_style.parse_embedded_files = parse_embedded;
+	impl->m_parse_embedded_override = true;
+}
+
 void PlainTextExtractor::setVerboseLogging(bool verbose)
 {
 	impl->m_verbose_logging = verbose;
@@ -685,7 +694,10 @@ void PlainTextExtractor::setLogStream(std::ostream& log_stream)
 
 void PlainTextExtractor::setFormattingStyle(const FormattingStyle& style)
 {
+	bool prev_parse_embedded = impl->m_formatting_style.parse_embedded_files;
 	impl->m_formatting_style = style;
+	if (impl->m_parse_embedded_override)
+		impl->m_formatting_style.parse_embedded_files = prev_parse_embedded;
 }
 
 void PlainTextExtractor::setXmlParseMode(XmlParseMode mode)

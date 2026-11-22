@@ -16,8 +16,12 @@ tests/test_img_runner
 tests/test_img_runner.exe
 tests/c_api_status_test
 tests/c_api_status_test.exe
+tests/c_api_embedded_test
+tests/c_api_embedded_test.exe
 tests/pdf_embedded_and_glyph_test
 tests/pdf_embedded_and_glyph_test.exe
+tests/office_embedded_test
+tests/office_embedded_test.exe
 tests/pdf_image_callback_test
 tests/pdf_image_callback_test.exe
 3rdparty/jbig2dec/*.a

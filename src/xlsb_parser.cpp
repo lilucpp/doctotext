@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include "doctotext_unzip.h"
+#include "embedded_object_extractor.h"
 #include <iostream>
 #include <map>
 #include "metadata.h"
@@ -804,6 +805,15 @@ std::string XLSBParser::plainText(const FormattingStyle& formatting)
 		return text;
 	}
 	impl->parseXLSB(unzip, text);
+	if (formatting.parse_embedded_files && !impl->m_error)
+	{
+		doctotext::EmbeddedExtractionContext root_ctx;
+		root_ctx.formatting = formatting;
+		root_ctx.verbose_logging = impl->m_verbose_logging;
+		root_ctx.log_stream = impl->m_log_stream;
+		doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
+		doctotext::extractZipEmbeddings(unzip, true, tls_scope.context(), text);
+	}
 	unzip.close();
 	return text;
 }

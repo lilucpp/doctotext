@@ -36,6 +36,7 @@
 
 #include "xml_fixer.h"
 #include "doctotext_unzip.h"
+#include "embedded_object_extractor.h"
 #include <fstream>
 #include <iostream>
 #include <libxml/xmlreader.h>
@@ -606,6 +607,20 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		}
 	}
 	decodeSpecialLinkBlocks(text, getInnerLinks(), getLogStream());
+	if (options.parse_embedded_files)
+	{
+		doctotext::EmbeddedExtractionContext root_ctx;
+		root_ctx.formatting = options;
+		root_ctx.xml_parse_mode = mode;
+		root_ctx.manage_xml_parser = manageXmlParser();
+		root_ctx.verbose_logging = verbose();
+		root_ctx.log_stream = &getLogStream();
+		root_ctx.image_callback = getImageParserCallback();
+		root_ctx.image_user_data = getImageParserUserData();
+		doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
+		bool is_ooxml = (main_file_name != "content.xml");
+		doctotext::extractZipEmbeddings(zipfile, is_ooxml, tls_scope.context(), text);
+	}
 	zipfile.close();
 	return text;
 }

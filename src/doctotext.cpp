@@ -85,6 +85,9 @@ static void help()
 	);
 	printf("--verbose\tturn on verbose logging\n");
 	printf("--log-file=[PATH]\twrite logs to specified file.\n");
+	printf("--compact-whitespace\tcollapse excess whitespace and blank lines.\n");
+	printf("--parse-embedded\tenable parsing embedded files/objects (default).\n");
+	printf("--no-parse-embedded\tdisable parsing embedded files/objects.\n");
 }
 
 int main(int argc, char* argv[])
@@ -194,6 +197,10 @@ int main(int argc, char* argv[])
 			verbose = true;
 		if (arg.find("compact-whitespace", 0) != std::string::npos)
 			options.compact_whitespace = true;
+		if (arg == "--parse-embedded")
+			options.parse_embedded_files = true;
+		if (arg == "--no-parse-embedded")
+			options.parse_embedded_files = false;
 		if (arg.find("log-file=", 0) != std::string::npos)
 			log_stream = new ofstream(arg.substr(arg.find("log-file=", 0) + 9).c_str());
 	}

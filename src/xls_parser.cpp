@@ -34,6 +34,8 @@
 
 #include "xls_parser.h"
 
+#include "embedded_object_extractor.h"
+#include <algorithm>
 #include <iostream>
 #include <map>
 #include <cmath>
@@ -1044,6 +1046,55 @@ std::string XLSParser::plainText(ThreadSafeOLEStorage& storage, const Formatting
 	std::string text;
 	impl->parseXLS(*reader, text);
 	delete reader;
+	if (formatting.parse_embedded_files && !impl->m_error)
+	{
+		doctotext::EmbeddedExtractionContext root_ctx;
+		root_ctx.formatting = formatting;
+		root_ctx.verbose_logging = impl->m_verbose_logging;
+		root_ctx.log_stream = impl->m_log_stream;
+		root_ctx.image_callback = impl->m_image_callback;
+		root_ctx.image_user_data = impl->m_image_user_data;
+		doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
+		doctotext::EmbeddedExtractionContext& embed_ctx = tls_scope.context();
+
+		std::vector<std::string> entries;
+		if (storage.getStreamsAndStoragesList(entries))
+		{
+			std::sort(entries.begin(), entries.end());
+			for (size_t i = 0; i < entries.size(); ++i)
+			{
+				const std::string& name = entries[i];
+				if (name == "ObjectPool")
+				{
+					if (storage.enterDirectory(name))
+					{
+						std::vector<std::string> pool_entries;
+						if (storage.getStreamsAndStoragesList(pool_entries))
+						{
+							std::sort(pool_entries.begin(), pool_entries.end());
+							for (size_t j = 0; j < pool_entries.size(); ++j)
+							{
+								if (storage.enterDirectory(pool_entries[j]))
+								{
+									doctotext::extractFromOLEStorage(storage, pool_entries[j], embed_ctx, text);
+									storage.leaveDirectory();
+								}
+							}
+						}
+						storage.leaveDirectory();
+					}
+				}
+				else if (name.size() >= 3 && name.compare(0, 3, "MBD") == 0)
+				{
+					if (storage.enterDirectory(name))
+					{
+						doctotext::extractFromOLEStorage(storage, name, embed_ctx, text);
+						storage.leaveDirectory();
+					}
+				}
+			}
+		}
+	}
 	return text;
 }
 

@@ -1,7 +1,7 @@
 CXXFLAGS = -O2 -std=c++14 -I../3rdparty/wv2/include -I../3rdparty/unzip101e -I../3rdparty/htmlcxx/include -I../3rdparty/jbig2dec -I../3rdparty/poppler_ccitt -I../3rdparty/poppler_decrypt
 LDFLAGS = ../3rdparty/unzip101e/ioapi.o ../3rdparty/unzip101e/unzip.o ../3rdparty/jbig2dec/libjbig2dec.a ../3rdparty/poppler_ccitt/libpoppler_ccitt.a ../3rdparty/poppler_decrypt/libpoppler_decrypt.a
 
-COMMON_OBJECTS = data_stream.o doc_parser.o entities.o exception.o list_style.o rtf_parser.o odf_ooxml_parser.o html_parser.o iwork_parser.o metadata.o misc.o xml_fixer.o doctotext_unzip.o \
+COMMON_OBJECTS = data_stream.o doc_parser.o embedded_object_extractor.o entities.o exception.o list_style.o rtf_parser.o odf_ooxml_parser.o html_parser.o iwork_parser.o metadata.o misc.o xml_fixer.o doctotext_unzip.o \
 	oshared.o pdf_parser.o plain_text_extractor.o ppt_parser.o xls_parser.o xlsb_parser.o thread_safe_ole_storage.o thread_safe_ole_stream_reader.o txt_parser.o \
 	attachment.o eml_parser.o variant.o link.o odfxml_parser.o common_xml_document_parser.o xml_stream.o
 
@@ -13,7 +13,7 @@ OBJECTS = doctotext.o $(COMMON_OBJECTS)
 LIB_OBJECTS = doctotext_c_api.o $(COMMON_OBJECTS)
 ALL_OBJECTS = doctotext.o doctotext_c_api.o $(COMMON_OBJECTS)
 
-HEADERS = ../version.h data_stream.h doc_parser.h exception.h html_parser.h iwork_parser.h metadata.h oshared.h rtf_parser.h odf_ooxml_parser.h misc.h \
+HEADERS = ../version.h data_stream.h doc_parser.h embedded_object_extractor.h exception.h html_parser.h iwork_parser.h metadata.h oshared.h rtf_parser.h odf_ooxml_parser.h misc.h \
 	xml_fixer.h doctotext_unzip.h pdf_parser.h ppt_parser.h xls_parser.h xlsb_parser.h thread_safe_ole_storage.h thread_safe_ole_stream_reader.h txt_parser.h \
 	attachment.h eml_parser.h variant.h doctotext_c_api.h odfxml_parser.h xml_stream.h common_xml_document_parser.h
 

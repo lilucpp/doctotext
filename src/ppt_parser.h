@@ -14,6 +14,7 @@ namespace doctotext
 	                                          size_t image_size,
 	                                          void* user_data);
 }
+class ThreadSafeOLEStorage;
 
 using namespace doctotext;
 
@@ -33,6 +34,7 @@ class PPTParser
 		bool isPPT();
 		void getLinks(std::vector<Link>& links);
 		std::string plainText(const FormattingStyle& formatting);
+		std::string plainText(ThreadSafeOLEStorage& storage, const FormattingStyle& formatting);
 		Metadata metaData();
 		bool error();
 		bool encrypted();

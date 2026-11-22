@@ -188,6 +188,14 @@ typedef const char* (DOCTOTEXT_CALL *doctotext_image_parser_callback)(const char
  */
 void DOCTOTEXT_CALL doctotext_extractor_params_set_image_parser_callback(DocToTextExtractorParams* extractor_params, doctotext_image_parser_callback callback, void* user_data);
 
+/**
+ * @brief Enables or disables parsing embedded files/objects inside documents (PDF, Office, ODF).
+ * Enabled (non-zero) by default.
+ * @param extractor_params - object which holds parameters for data extractor
+ * @param enable - non-zero to extract embedded files, 0 to skip embedded files
+ */
+void DOCTOTEXT_CALL doctotext_extractor_params_set_parse_embedded_files(DocToTextExtractorParams* extractor_params, int enable);
+
 /*-------------------------------------------------------------------------------------------------------------------------*/
 
 typedef struct DocToTextException DocToTextException;

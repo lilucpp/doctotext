@@ -31,11 +31,13 @@ namespace doctotext
 		UrlStyle url_style;
 		ListStyle list_style;
 		bool compact_whitespace;
+		bool parse_embedded_files;
 
 		FormattingStyle()
 			: table_style(TABLE_STYLE_TABLE_LOOK),
 			  url_style(URL_STYLE_UNDERSCORED),
-			  compact_whitespace(false)
+			  compact_whitespace(false),
+			  parse_embedded_files(true)
 		{
 		}
 	};
