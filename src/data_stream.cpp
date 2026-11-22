@@ -245,7 +245,7 @@ int BufferStream::getc()
 {
 	if (impl->m_size - impl->m_pointer < 1)
 		return EOF;
-	return impl->m_buffer[impl->m_pointer++];
+	return (unsigned char)impl->m_buffer[impl->m_pointer++];
 }
 
 bool BufferStream::unGetc(int ch)

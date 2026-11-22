@@ -146,6 +146,8 @@ static std::string unicode_codepoint_to_utf8(unsigned int codepoint)
 
 static std::string utf8_codepoint_to_utf8(unsigned int utf8_codepoint)
 {
+	if (utf8_codepoint == 0)
+		return "";
 	char out[4];
 	if (utf8_codepoint < 0x100)
 	{
@@ -4560,13 +4562,101 @@ struct PDFParser::Implementation
 					{
 						#warning TODO: Add support for reading from external files
 						stream.m_is_in_external_file = true;
+						skipKeyword("endstream");
 					}
 					else
 					{
-						if (!m_data_stream->seek(stream.m_size, SEEK_CUR))
-							throw doctotextex::CustomException("PDF Reader: Error while reading a stream: cant skip stream data");
+						const char* es_kw = "endstream";
+						const size_t es_len = 9;
+						bool found_endstream = false;
+						bool seeked_expected = (stream.m_size <= 0x7FFFFFFFUL &&
+						                        stream.m_size <= (size_t)-1 - stream.m_position &&
+						                        m_data_stream->seek((int)stream.m_size, SEEK_CUR));
+
+						auto probe_from_cur = [&](size_t max_bytes, char* buf, size_t& match_idx) -> bool
+						{
+							size_t n = 0;
+							while (n < max_bytes)
+							{
+								int c = m_data_stream->getc();
+								if (c == EOF)
+									break;
+								buf[n++] = (char)c;
+							}
+							for (size_t i = 0; i + es_len <= n; ++i)
+							{
+								if (memcmp(buf + i, es_kw, es_len) == 0)
+								{
+									match_idx = i;
+									return true;
+								}
+							}
+							return false;
+						};
+
+						char probe_buf[48];
+						size_t match_idx = 0;
+
+						// 1. Normal fast path: sequential check right after expected_end
+						if (seeked_expected && probe_from_cur(32 + es_len, probe_buf, match_idx))
+						{
+							size_t expected_end = stream.m_position + stream.m_size;
+							if (expected_end <= 0x7FFFFFFFUL)
+								m_data_stream->seek((int)(expected_end + match_idx + es_len), SEEK_SET);
+							found_endstream = true;
+						}
+
+						// 2. Overshot /Length tolerance: check up to 32 bytes before expected_end
+						if (!found_endstream && seeked_expected && stream.m_size > 0)
+						{
+							size_t expected_end = stream.m_position + stream.m_size;
+							size_t back = stream.m_size < 32 ? stream.m_size : 32;
+							size_t probe_start = expected_end - back;
+							if (probe_start <= 0x7FFFFFFFUL && m_data_stream->seek((int)probe_start, SEEK_SET) &&
+							    probe_from_cur(back + es_len, probe_buf, match_idx))
+							{
+								size_t real_end = probe_start + match_idx;
+								stream.m_size = real_end - stream.m_position;
+								if (match_idx > 0 && stream.m_size > 0 && probe_buf[match_idx - 1] == '\n')
+								{
+									--stream.m_size;
+									if (match_idx >= 2 && stream.m_size > 0 && probe_buf[match_idx - 2] == '\r')
+										--stream.m_size;
+								}
+								if (real_end + es_len <= 0x7FFFFFFFUL)
+									m_data_stream->seek((int)(real_end + es_len), SEEK_SET);
+								found_endstream = true;
+							}
+						}
+
+						// 3. Valid /Length with >32B leading whitespace/comments before endstream
+						if (!found_endstream && seeked_expected)
+						{
+							size_t expected_end = stream.m_position + stream.m_size;
+							if (expected_end <= 0x7FFFFFFFUL && m_data_stream->seek((int)expected_end, SEEK_SET))
+							{
+								try
+								{
+									skipKeyword("endstream");
+									found_endstream = true;
+								}
+								catch (doctotextex::CustomException&)
+								{
+								}
+							}
+						}
+
+						// 4. Fallback: wildly overstated /Length -> scan from stream.m_position
+						if (!found_endstream)
+						{
+							if (stream.m_position > 0x7FFFFFFFUL || !m_data_stream->seek((int)stream.m_position, SEEK_SET))
+								throw doctotextex::CustomException("PDF Reader: Error while reading a stream: cant seek to stream start");
+							skipKeyword("endstream");
+							size_t after_es = m_data_stream->tell();
+							if (after_es >= stream.m_position + es_len)
+								stream.m_size = after_es - es_len - stream.m_position;
+						}
 					}
-					skipKeyword("endstream");
 				}
 				catch (doctotextex::CustomException& ex)
 				{
@@ -8094,6 +8184,17 @@ struct PDFParser::Implementation
 				}
 			}
 		}
+		if (!font.m_multibyte && font.m_font_type != "Type3" &&
+		    !font.m_cmap.m_ready && !font.m_predefined_simple_encoding && !font.m_predefined_cmap)
+		{
+			font.m_predefined_simple_encoding = true;
+			if (font.m_base_font == "Symbol" || font.m_base_font.find("+Symbol") != std::string::npos)
+				font.m_simple_encoding_table = (unsigned int*)SymbolEncodingUtf8;
+			else if (font.m_base_font == "ZapfDingbats" || font.m_base_font.find("+ZapfDingbats") != std::string::npos)
+				font.m_simple_encoding_table = (unsigned int*)ZapfDingbatsEncodingUtf8;
+			else
+				font.m_simple_encoding_table = (unsigned int*)StandardEncodingUtf8;
+		}
 	}
 
 	void parsePredefinedCMap(PDFContent::Font& font, const std::string& cid_to_unicode_cmap)
@@ -9189,14 +9290,31 @@ struct PDFParser::Implementation
 
 	void parseText(std::string& text)
 	{
+		bool any_page_ok = false;
+		bool has_error = false;
+		doctotextex::CustomException first_error;
+
 		for (size_t i = 0; i < m_pdf_content.m_pages.size(); ++i)
 		{
+			PDFReader::PDFDictionary* page_obj = m_pdf_content.m_pages[i];
+			PDFContent::PageText page_text;
+			PDFReader::PDFArray* page_box = page_obj->getObjAsArray("CropBox");
+			if (!page_box)
+				page_box = page_obj->getObjAsArray("MediaBox");
+			if (page_box && page_box->Size() >= 4)
+			{
+				double h = std::abs(page_box->getValAsDouble(3, 792.0) - page_box->getValAsDouble(1, 0.0));
+				if (h >= 72.0 && h <= 5000.0)
+					page_text.m_page_height = h;
+			}
+			std::set<std::string> processed_images;
+			bool page_failed = false;
+
 			try
 			{
 				PDFContent::FontsByNames* fonts_for_page = &m_pdf_content.m_fonts_for_pages[i];
 				std::vector<PDFReader::PDFStream*> contents;
 
-				PDFReader::PDFDictionary* page_obj = m_pdf_content.m_pages[i];
 				PDFReader::PDFArray* page_contents_array = page_obj->getObjAsArray("Contents");
 				if (page_contents_array)
 				{
@@ -9206,17 +9324,6 @@ struct PDFParser::Implementation
 				else
 					contents.push_back(page_obj->getObjAsStream("Contents"));
 
-				PDFContent::PageText page_text;
-				PDFReader::PDFArray* page_box = page_obj->getObjAsArray("CropBox");
-				if (!page_box)
-					page_box = page_obj->getObjAsArray("MediaBox");
-				if (page_box && page_box->Size() >= 4)
-				{
-					double h = std::abs(page_box->getValAsDouble(3, 792.0) - page_box->getValAsDouble(1, 0.0));
-					if (h >= 72.0 && h <= 5000.0)
-						page_text.m_page_height = h;
-				}
-				std::set<std::string> processed_images;
 				std::vector<PDFReader::PDFStream*> valid_contents;
 				for (size_t j = 0; j < contents.size(); ++j)
 				{
@@ -9251,49 +9358,71 @@ struct PDFParser::Implementation
 						                           m_pdf_content.m_pages_resources[i], i, processed_images, 0);
 					}
 				}
-				if (page_text.m_text_elements.empty() && m_image_callback)
+			}
+			catch (doctotextex::CustomException& ex)
+			{
+				page_failed = true;
+				ex.appendError("Error while parsing page number: " + uint_to_string(i));
+				*m_log_stream << "Warning: " + ex.getBacktrace();
+				if (!has_error)
 				{
-					PDFReader::PDFDictionary* resources = m_pdf_content.m_pages_resources[i];
-					if (!resources)
-						resources = m_pdf_content.m_pages[i]->getObjAsDictionary("Resources");
-					if (resources)
+					first_error = ex;
+					has_error = true;
+				}
+			}
+
+			if (!page_failed || !page_text.m_text_elements.empty())
+			{
+				any_page_ok = true;
+				try
+				{
+					if (!page_failed && page_text.m_text_elements.empty() && m_image_callback)
 					{
-						PDFReader::PDFDictionary* xobjects = resources->getObjAsDictionary("XObject");
-						if (xobjects)
+						PDFReader::PDFDictionary* resources = m_pdf_content.m_pages_resources[i];
+						if (!resources)
+							resources = m_pdf_content.m_pages[i]->getObjAsDictionary("Resources");
+						if (resources)
 						{
-							for (std::map<std::string, PDFReader::PDFObject*>::iterator xit = xobjects->m_objects.begin();
-							     xit != xobjects->m_objects.end(); ++xit)
+							PDFReader::PDFDictionary* xobjects = resources->getObjAsDictionary("XObject");
+							if (xobjects)
 							{
-								if (processed_images.find(xit->first) != processed_images.end())
-									continue;
-								PDFReader::PDFStream* img_stream = xobjects->getObjAsStream(xit->first);
-								if (!img_stream)
-									continue;
-								std::vector<char> img_bytes;
-								std::string img_filename;
-								if (extractXObjectImage(img_stream, xit->first, img_bytes, img_filename))
+								for (std::map<std::string, PDFReader::PDFObject*>::iterator xit = xobjects->m_objects.begin();
+								     xit != xobjects->m_objects.end(); ++xit)
 								{
-									processed_images.insert(xit->first);
-									std::string ocr_text = m_image_callback(img_filename, img_bytes.data(), img_bytes.size(), m_image_user_data);
-									if (!ocr_text.empty())
+									if (processed_images.find(xit->first) != processed_images.end())
+										continue;
+									PDFReader::PDFStream* img_stream = xobjects->getObjAsStream(xit->first);
+									if (!img_stream)
+										continue;
+									std::vector<char> img_bytes;
+									std::string img_filename;
+									if (extractXObjectImage(img_stream, xit->first, img_bytes, img_filename))
 									{
-										page_text.addImageText(0, 0, 612.0, 792.0, ocr_text);
+										processed_images.insert(xit->first);
+										std::string ocr_text = m_image_callback(img_filename, img_bytes.data(), img_bytes.size(), m_image_user_data);
+										if (!ocr_text.empty())
+										{
+											page_text.addImageText(0, 0, 612.0, 792.0, ocr_text);
+										}
 									}
 								}
 							}
 						}
 					}
+					page_text.getText(text);
+					parseAnnotations(page_obj, text);
+					text += "\n\n";
 				}
-				page_text.getText(text);
-				parseAnnotations(page_obj, text);
-				text += "\n\n";
-			}
-			catch (doctotextex::CustomException& ex)
-			{
-				ex.appendError("Error while parsing page number: " + uint_to_string(i));
-				throw;
+				catch (doctotextex::CustomException& ex)
+				{
+					ex.appendError("Error while post-processing page number: " + uint_to_string(i));
+					*m_log_stream << "Warning: " + ex.getBacktrace();
+				}
 			}
 		}
+
+		if (!any_page_ok && has_error)
+			throw first_error;
 	}
 
 	void parseMetadata(PDFReader& pdf_reader, Metadata& metadata)

@@ -102,7 +102,7 @@ else
 			$(addprefix comments_libreoffice_3.5.,odt doc docx rtf) \
 			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
 			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf testPDF_JBIG2.pdf testPDF_CCITT_G4.pdf testPDF_CCITT_G3.pdf \
-			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf; do \
+			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf; do \
 		echo TESTING $$f; \
 		if ! $(EXEC) ../build/doctotext $$f | tr -d '\r' | diff -u - $$f.out; then \
 			exit 1; \
@@ -240,7 +240,7 @@ update_tests:
 			$(addprefix comments_libreoffice_3.5.,odt doc docx rtf) \
 			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
 			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf testPDF_JBIG2.pdf testPDF_CCITT_G4.pdf testPDF_CCITT_G3.pdf \
-			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf; do \
+			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf; do \
 		echo PROCESSING $$f; \
 		$(EXEC) ../build/doctotext $$f | tr -d '\r' > $$f.out; \
 	done
