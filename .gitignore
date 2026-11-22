@@ -45,3 +45,5 @@ doc/html/
 3rdparty_backup.tar.gz
 *.log
 examples/example2_ppocr_extractor
+__pycache__/
+*.pyc

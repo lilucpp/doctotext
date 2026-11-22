@@ -1,0 +1,1868 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocToText Inspector — 文件对比预览工作台</title>
+<style>
+  :root {
+    --bg-canvas: #F6F5F1;
+    --bg-surface: #FFFFFF;
+    --bg-inset: #FAF9F5;
+    --bg-hover: #F0EDE5;
+    --bg-active: #E4EFECE6;
+    --border: #E2DFD6;
+    --border-strong: #CCC7BA;
+    --ink: #1B1C1E;
+    --ink-2: #52514D;
+    --ink-muted: #88847B;
+    --accent: #1F5E5B;
+    --accent-soft: #E6F1F0;
+    --accent-ink: #144240;
+    --ws-mark: #B85620;
+    --ok-ink: #17663D;
+    --ok-bg: #E8F5ED;
+    --enc-ink: #94520B;
+    --enc-bg: #FDF2E1;
+    --err-ink: #A32424;
+    --err-bg: #FCE9E9;
+    --match-bg: #FBE489;
+    --match-active: #F59E0B;
+    --font-sans: "Inter", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "JetBrains Mono", "Fira Code", "Noto Sans Mono CJK SC", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --topbar-h: 48px;
+    --sidebar-w: 272px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button, input, select {
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--ink);
+  }
+
+  /* Top Bar */
+  .topbar {
+    min-height: 46px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    user-select: none;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 13.5px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    padding-right: 6px;
+    white-space: nowrap;
+  }
+  .brand-mark {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    background: var(--accent);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+
+  .sep {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  .btn {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 5px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-surface);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+  }
+  .btn:hover { background: var(--bg-hover); }
+  .btn:active { transform: translateY(0.5px); }
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 500;
+  }
+  .btn.primary:hover { background: var(--accent-ink); border-color: var(--accent-ink); }
+  .btn.active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 500;
+  }
+  .btn.icon-only { padding: 0 7px; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .dir-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 220px;
+  }
+  .input {
+    height: 28px;
+    padding: 0 9px;
+    border-radius: 5px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-inset);
+    outline: none;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .input:focus {
+    border-color: var(--accent);
+    background: #fff;
+  }
+  .dir-input {
+    flex: 1;
+    min-width: 120px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+  .select {
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-surface);
+    outline: none;
+    cursor: pointer;
+  }
+  .select:focus { border-color: var(--accent); }
+
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+  .preset-chip {
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-inset);
+    color: var(--ink-2);
+    font-size: 11.5px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .preset-chip:hover {
+    background: var(--bg-hover);
+    color: var(--ink);
+  }
+  .preset-chip.active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 500;
+  }
+
+  .engine-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .check-pill {
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg-inset);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    font-size: 11.5px;
+    color: var(--ink-2);
+  }
+  .check-pill input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+
+  /* Workspace Shell */
+  .workspace {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Left File Rail */
+  .sidebar {
+    width: var(--sidebar-w);
+    min-width: 180px;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 5;
+    overflow: hidden;
+  }
+  .sidebar.collapsed {
+    display: none;
+  }
+
+  .sidebar-head {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sidebar-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--ink-2);
+  }
+  .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .filter-input {
+    flex: 1;
+    height: 26px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .file-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 6px 12px;
+  }
+  .tree-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    user-select: none;
+    line-height: 1.3;
+    border: 1px solid transparent;
+  }
+  .tree-item:hover { background: var(--bg-hover); }
+  .tree-item.selected {
+    background: var(--accent-soft);
+    border-color: rgba(31, 94, 91, 0.25);
+    color: var(--accent-ink);
+    font-weight: 500;
+  }
+  .tree-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12.5px;
+  }
+  .tree-size {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--ink-muted);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+  .ext-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #EDEAE1;
+    color: #535049;
+    flex-shrink: 0;
+    min-width: 34px;
+    text-align: center;
+  }
+  .ext-badge.pdf { background: #FDE8E8; color: #9B1C1C; }
+  .ext-badge.doc, .ext-badge.docx, .ext-badge.odt, .ext-badge.rtf { background: #E4EEF9; color: #1E429F; }
+  .ext-badge.xls, .ext-badge.xlsx, .ext-badge.xlsb, .ext-badge.ods { background: #E3F5EA; color: #166534; }
+  .ext-badge.ppt, .ext-badge.pptx, .ext-badge.odp { background: #FCECDD; color: #9A3412; }
+  .ext-badge.png, .ext-badge.jpg, .ext-badge.jpeg, .ext-badge.bmp, .ext-badge.gif, .ext-badge.webp, .ext-badge.tiff {
+    background: #F1E8FC; color: #6B21A8;
+  }
+
+  /* Split Comparison Area */
+  .compare-area {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 220px;
+    height: 100%;
+    background: var(--bg-surface);
+    overflow: hidden;
+    position: relative;
+  }
+  .pane-left {
+    width: 50%;
+    flex-shrink: 0;
+  }
+  .pane-right {
+    flex: 1;
+    min-width: 220px;
+  }
+
+  .splitter {
+    width: 6px;
+    background: var(--bg-canvas);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    cursor: col-resize;
+    flex-shrink: 0;
+    position: relative;
+    transition: background 0.12s;
+  }
+  .splitter::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 1px;
+    width: 2px;
+    height: 36px;
+    transform: translateY(-50%);
+    border-radius: 2px;
+    background: var(--border-strong);
+  }
+  .splitter:hover, .splitter.dragging {
+    background: var(--accent-soft);
+  }
+  .splitter:hover::after, .splitter.dragging::after {
+    background: var(--accent);
+  }
+
+  body.resizing iframe, body.resizing embed {
+    pointer-events: none;
+  }
+
+  .pane-header {
+    min-height: 40px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .pane-title-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+  .pane-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .file-crumb {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .seg {
+    display: inline-flex;
+    background: var(--bg-canvas);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .seg-btn {
+    border: none;
+    background: transparent;
+    padding: 3px 7px;
+    border-radius: 3.5px;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .seg-btn:hover { color: var(--ink); }
+  .seg-btn.active {
+    background: var(--bg-surface);
+    color: var(--accent-ink);
+    font-weight: 500;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+
+  .pane-subbar {
+    min-height: 36px;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-inset);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .pane-body {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    background: var(--bg-inset);
+    overflow: auto;
+  }
+  .pane-body.no-scroll {
+    overflow: hidden;
+  }
+
+  /* Left Preview Modes */
+  .pdf-embed {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+    background: #525659;
+  }
+  .html-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+    background: #FFFFFF;
+  }
+  .raster-stage {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 18px;
+    gap: 12px;
+    background: #E8E5DC;
+  }
+  .raster-img {
+    max-width: 100%;
+    background: #fff;
+    box-shadow: 0 3px 16px rgba(27, 28, 30, 0.14);
+    border: 1px solid rgba(0,0,0,0.08);
+    transform-origin: top center;
+  }
+  .source-pre {
+    margin: 0;
+    padding: 16px 18px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--ink);
+  }
+
+  .empty-state, .notice-state {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 32px;
+    color: var(--ink-2);
+    gap: 10px;
+  }
+  .notice-card {
+    max-width: 440px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 20px 24px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+  }
+  .notice-card h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .notice-card p {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--ink-2);
+    word-break: break-word;
+  }
+
+  /* Right Extraction View */
+  .telemetry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .status-pill {
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .status-pill.OK { background: var(--ok-bg); color: var(--ok-ink); }
+  .status-pill.ENCRYPTED { background: var(--enc-bg); color: var(--enc-ink); }
+  .status-pill.ERROR { background: var(--err-bg); color: var(--err-ink); }
+  .stat-chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-2);
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+
+  .search-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 140px;
+    flex: 1;
+    max-width: 280px;
+  }
+  .search-input {
+    flex: 1;
+    min-width: 80px;
+    height: 25px;
+    font-size: 11.5px;
+  }
+  .match-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-muted);
+    min-width: 42px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .code-viewer {
+    display: flex;
+    min-height: 100%;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.62;
+    color: var(--ink);
+  }
+  .line-gutter {
+    padding: 14px 10px 14px 12px;
+    text-align: right;
+    color: var(--ink-muted);
+    background: #F3F1EA;
+    border-right: 1px solid var(--border);
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+  .line-gutter.hidden { display: none; }
+  .code-content {
+    flex: 1;
+    padding: 14px 18px;
+    margin: 0;
+    min-width: 0;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .code-content.wrap {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .ws-char {
+    color: var(--ws-mark);
+    opacity: 0.6;
+  }
+  .ws-trail {
+    background: rgba(184, 86, 32, 0.14);
+    border-radius: 2px;
+  }
+  mark.hl {
+    background: var(--match-bg);
+    color: var(--ink);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  mark.hl.current {
+    background: var(--match-active);
+    color: #fff;
+  }
+
+  /* Tika Split / Diff View */
+  .tika-split {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+  }
+  .tika-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+  }
+  .tika-col:last-child { border-right: none; }
+  .tika-col-head {
+    padding: 6px 12px;
+    font-size: 11.5px;
+    font-weight: 600;
+    background: #F3F1EA;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .tika-col-body {
+    flex: 1;
+    overflow: auto;
+    padding: 12px 14px;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.58;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .diff-line-add { background: #E6F6EC; color: #12582F; display: block; }
+  .diff-line-del { background: #FDEAEA; color: #921D1D; display: block; }
+  .diff-line-hunk { background: #EAF1FB; color: #1E429F; display: block; font-weight: 600; }
+
+  /* Drag drop overlay */
+  .drop-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(31, 94, 91, 0.12);
+    border: 3px dashed var(--accent);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 99;
+    pointer-events: none;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent-ink);
+  }
+  .drop-overlay.active { display: flex; }
+
+  .toast {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    background: var(--ink);
+    color: #fff;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.18s, transform 0.18s;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  .tool-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+
+  @media (max-width: 1120px) {
+    .sidebar { width: 220px; min-width: 160px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <button class="btn icon-only" id="toggleSidebarBtn" title="收起/展开文件栏 (B)">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/>
+      <line x1="6" y1="2.5" x2="6" y2="13.5"/>
+    </svg>
+  </button>
+
+  <div class="brand">
+    <span class="brand-mark">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M2.5 2.5h4.5v11H2.5zM9 2.5h4.5v11H9z"/>
+      </svg>
+    </span>
+    <span>DocToText Inspector</span>
+  </div>
+
+  <div class="dir-bar">
+    <input class="input dir-input" id="dirInput" type="text" placeholder="输入本地文件夹路径，例如 ./tests 或文档目录">
+    <button class="btn" id="goDirBtn">打开目录</button>
+    <label class="btn" title="通过浏览器系统对话框选择整个本地文件夹">
+      <span>选文件夹</span>
+      <input id="folderPicker" type="file" webkitdirectory directory multiple hidden>
+    </label>
+    <label class="btn" title="选择单个或多个文件上传对比">
+      <span>选文件</span>
+      <input id="filePicker" type="file" multiple hidden>
+    </label>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="engine-group">
+    <select class="select" id="engineSelect" title="解析引擎">
+      <option value="doctotext">doctotext (标准)</option>
+      <option value="doctotext_compact">doctotext --compact-whitespace</option>
+      <option value="ppocr">C API + PP-OCRv6 (含图片OCR)</option>
+    </select>
+    <select class="select" id="hintSelect" title="强制指定解析器类型 (--pdf/--doc 等)">
+      <option value="">自动检测格式</option>
+      <option value="pdf">--pdf</option>
+      <option value="doc">--doc</option>
+      <option value="ooxml">--ooxml / --odf</option>
+      <option value="xls">--xls</option>
+      <option value="xlsb">--xlsb</option>
+      <option value="ppt">--ppt</option>
+      <option value="rtf">--rtf</option>
+      <option value="html">--html</option>
+      <option value="eml">--eml</option>
+      <option value="image">--image</option>
+      <option value="txt">--txt</option>
+    </select>
+    <label class="check-pill" title="开启 --verbose 日志">
+      <input type="checkbox" id="verboseCheck">
+      <span>Verbose</span>
+    </label>
+    <button class="btn primary" id="reExtractBtn" title="重新运行解析 (R)">重新解析</button>
+  </div>
+</header>
+
+<div class="workspace">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="presets" id="presetsBar"></div>
+      <div class="sidebar-meta-row">
+        <button class="btn" id="parentDirBtn" style="height:24px;padding:0 7px;font-size:11.5px;">↑ 上级目录</button>
+        <span id="fileCountLabel">0 个项目</span>
+      </div>
+      <div class="filter-row">
+        <input class="input filter-input" id="fileFilterInput" type="text" placeholder="筛选文件名 / 后缀...">
+        <label class="check-pill" style="height:26px;padding:0 6px;" title="关闭后显示 .out / .log 等非文档文件">
+          <input type="checkbox" id="onlyDocsCheck" checked>
+          <span>仅文档</span>
+        </label>
+      </div>
+    </div>
+    <div class="file-list" id="fileList"></div>
+  </aside>
+
+  <main class="compare-area" id="compareArea">
+    <!-- Left Pane: Source Preview -->
+    <section class="pane pane-left" id="leftPane">
+      <div class="pane-header">
+        <div class="pane-title-group">
+          <span class="pane-label">源文件预览</span>
+          <span class="file-crumb" id="leftFileCrumb">未选择文件</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div class="seg" id="previewModeSeg" style="display:none;">
+            <button class="seg-btn active" data-mode="plugin">插件预览</button>
+            <button class="seg-btn" data-mode="raster">按页栅格</button>
+          </div>
+          <div class="seg" id="htmlModeSeg" style="display:none;">
+            <button class="seg-btn active" data-mode="rendered">网页预览</button>
+            <button class="seg-btn" data-mode="source">HTML源码</button>
+          </div>
+          <a class="btn" id="openNewTabBtn" href="#" target="_blank" style="display:none;text-decoration:none;height:26px;font-size:11.5px;">新标签打开</a>
+        </div>
+      </div>
+
+      <div class="pane-subbar" id="rasterControls" style="display:none;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="btn" id="prevPageBtn" style="height:24px;padding:0 8px;">上一页</button>
+          <span id="pageIndicator" style="font-family:var(--font-mono);font-size:11.5px;">1 / 1</span>
+          <button class="btn" id="nextPageBtn" style="height:24px;padding:0 8px;">下一页</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <select class="select" id="dpiSelect" style="height:24px;font-size:11px;">
+            <option value="110">110 DPI</option>
+            <option value="150" selected>150 DPI</option>
+            <option value="220">220 DPI</option>
+          </select>
+          <button class="btn" id="zoomOutBtn" style="height:24px;padding:0 7px;">-</button>
+          <span id="zoomLabel" style="font-family:var(--font-mono);font-size:11px;min-width:40px;text-align:center;">自适应</span>
+          <button class="btn" id="zoomInBtn" style="height:24px;padding:0 7px;">+</button>
+          <button class="btn" id="zoomResetBtn" style="height:24px;padding:0 7px;">重置</button>
+        </div>
+      </div>
+
+      <div class="pane-body" id="previewBody">
+        <div class="empty-state">
+          <div class="notice-card">
+            <h4>左侧源文件预览区</h4>
+            <p>从左栏选择任意文件（或拖入文件 / 点击顶部「选文件夹」），这里会自动使用浏览器 PDF 插件、LibreOffice 转换视图、图片查看器或沙箱网页展示原文。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="splitter" id="splitter" title="左右拖动调整宽度，双击重置 50/50"></div>
+
+    <!-- Right Pane: Extracted Content -->
+    <section class="pane pane-right" id="rightPane">
+      <div class="pane-header">
+        <div class="seg" id="rightTabSeg">
+          <button class="seg-btn active" data-tab="text">提取正文</button>
+          <button class="seg-btn" data-tab="meta">元数据</button>
+          <button class="seg-btn" data-tab="tika" id="tikaTabBtn">对比 Tika</button>
+          <button class="seg-btn" data-tab="logs">日志</button>
+        </div>
+        <div class="telemetry">
+          <span class="status-pill OK" id="statusPill" style="display:none;">OK</span>
+          <span class="stat-chip" id="timeChip" style="display:none;">0 ms</span>
+          <span class="stat-chip" id="charChip" style="display:none;">0 字 · 0 行</span>
+        </div>
+      </div>
+
+      <div class="pane-subbar">
+        <div class="search-group">
+          <input class="input search-input" id="textSearchInput" type="text" placeholder="搜索提取正文 (Ctrl+F)...">
+          <span class="match-count" id="matchCountLabel"></span>
+          <button class="btn" id="prevMatchBtn" style="height:24px;padding:0 6px;">↑</button>
+          <button class="btn" id="nextMatchBtn" style="height:24px;padding:0 6px;">↓</button>
+        </div>
+        <div class="tool-actions">
+          <button class="btn" id="toggleWsBtn" style="height:25px;padding:0 7px;font-size:11.5px;" title="可视化空格(·)、制表符(→)和换行符(↵)">空白符</button>
+          <button class="btn active" id="toggleLinesBtn" style="height:25px;padding:0 7px;font-size:11.5px;">行号</button>
+          <button class="btn active" id="toggleWrapBtn" style="height:25px;padding:0 7px;font-size:11.5px;">换行</button>
+          <button class="btn" id="tikaDiffToggleBtn" style="height:25px;padding:0 7px;font-size:11.5px;display:none;">Unified Diff</button>
+          <button class="btn" id="copyTextBtn" style="height:25px;padding:0 7px;font-size:11.5px;">复制</button>
+          <button class="btn" id="downloadTextBtn" style="height:25px;padding:0 7px;font-size:11.5px;">导出</button>
+        </div>
+      </div>
+
+      <div class="pane-body" id="rightBody">
+        <div class="empty-state">
+          <div class="notice-card">
+            <h4>右侧 DocToText 解析结果区</h4>
+            <p>支持标准 <code>doctotext</code>、<code>--compact-whitespace</code>、<code>PP-OCRv6</code> 图片回调引擎，以及与 Apache Tika 的并排 / Diff 对比。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="drop-overlay" id="dropOverlay">松开以打开并对比文件</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const state = {
+    capabilities: null,
+    currentDir: "",
+    virtualMode: false,
+    virtualFiles: [],
+    dirs: [],
+    files: [],
+    selectedItem: null,
+    previewMode: "plugin", // plugin | raster
+    htmlMode: "rendered",  // rendered | source
+    pdfPage: 1,
+    pdfTotalPages: 0,
+    zoomPct: 0, // 0 = fit width
+    rightTab: "text", // text | meta | tika | logs
+    tikaDiffMode: false,
+    showWhitespace: false,
+    showLineNumbers: true,
+    wrapText: true,
+    extractCache: {}, // key -> result
+    searchQuery: "",
+    matchIndex: 0,
+    totalMatches: 0,
+  };
+
+  const els = {
+    toggleSidebarBtn: document.getElementById("toggleSidebarBtn"),
+    sidebar: document.getElementById("sidebar"),
+    presetsBar: document.getElementById("presetsBar"),
+    dirInput: document.getElementById("dirInput"),
+    goDirBtn: document.getElementById("goDirBtn"),
+    folderPicker: document.getElementById("folderPicker"),
+    filePicker: document.getElementById("filePicker"),
+    parentDirBtn: document.getElementById("parentDirBtn"),
+    fileCountLabel: document.getElementById("fileCountLabel"),
+    fileFilterInput: document.getElementById("fileFilterInput"),
+    onlyDocsCheck: document.getElementById("onlyDocsCheck"),
+    fileList: document.getElementById("fileList"),
+    engineSelect: document.getElementById("engineSelect"),
+    hintSelect: document.getElementById("hintSelect"),
+    verboseCheck: document.getElementById("verboseCheck"),
+    reExtractBtn: document.getElementById("reExtractBtn"),
+    leftPane: document.getElementById("leftPane"),
+    splitter: document.getElementById("splitter"),
+    leftFileCrumb: document.getElementById("leftFileCrumb"),
+    previewModeSeg: document.getElementById("previewModeSeg"),
+    htmlModeSeg: document.getElementById("htmlModeSeg"),
+    openNewTabBtn: document.getElementById("openNewTabBtn"),
+    rasterControls: document.getElementById("rasterControls"),
+    prevPageBtn: document.getElementById("prevPageBtn"),
+    nextPageBtn: document.getElementById("nextPageBtn"),
+    pageIndicator: document.getElementById("pageIndicator"),
+    dpiSelect: document.getElementById("dpiSelect"),
+    zoomOutBtn: document.getElementById("zoomOutBtn"),
+    zoomInBtn: document.getElementById("zoomInBtn"),
+    zoomResetBtn: document.getElementById("zoomResetBtn"),
+    zoomLabel: document.getElementById("zoomLabel"),
+    previewBody: document.getElementById("previewBody"),
+    rightTabSeg: document.getElementById("rightTabSeg"),
+    tikaTabBtn: document.getElementById("tikaTabBtn"),
+    statusPill: document.getElementById("statusPill"),
+    timeChip: document.getElementById("timeChip"),
+    charChip: document.getElementById("charChip"),
+    textSearchInput: document.getElementById("textSearchInput"),
+    matchCountLabel: document.getElementById("matchCountLabel"),
+    prevMatchBtn: document.getElementById("prevMatchBtn"),
+    nextMatchBtn: document.getElementById("nextMatchBtn"),
+    toggleWsBtn: document.getElementById("toggleWsBtn"),
+    toggleLinesBtn: document.getElementById("toggleLinesBtn"),
+    toggleWrapBtn: document.getElementById("toggleWrapBtn"),
+    tikaDiffToggleBtn: document.getElementById("tikaDiffToggleBtn"),
+    copyTextBtn: document.getElementById("copyTextBtn"),
+    downloadTextBtn: document.getElementById("downloadTextBtn"),
+    rightBody: document.getElementById("rightBody"),
+    dropOverlay: document.getElementById("dropOverlay"),
+    toast: document.getElementById("toast"),
+  };
+
+  function showToast(msg) {
+    els.toast.textContent = msg;
+    els.toast.classList.add("show");
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(() => els.toast.classList.remove("show"), 2000);
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes && bytes !== 0) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  async function apiGet(url) {
+    const res = await fetch(url);
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const j = await res.json();
+        if (j.error) msg = j.error;
+      } catch (_) {}
+      throw new Error(msg);
+    }
+    return res;
+  }
+
+  async function apiJson(url, bodyObj = null) {
+    const opts = bodyObj
+      ? {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bodyObj),
+        }
+      : { method: "GET" };
+    const res = await fetch(url, opts);
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    return data;
+  }
+
+  function restoreSplitter() {
+    const saved = localStorage.getItem("doctotext_split_pct");
+    if (saved) {
+      const pct = Math.min(80, Math.max(20, parseFloat(saved)));
+      if (!Number.isNaN(pct)) {
+        els.leftPane.style.width = `${pct}%`;
+      }
+    }
+  }
+
+  function initSplitter() {
+    let dragging = false;
+    const parent = document.getElementById("compareArea");
+    els.splitter.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      dragging = true;
+      els.splitter.classList.add("dragging");
+      document.body.classList.add("resizing");
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const rect = parent.getBoundingClientRect();
+      const offset = e.clientX - rect.left;
+      const pct = Math.min(80, Math.max(20, (offset / rect.width) * 100));
+      els.leftPane.style.width = `${pct.toFixed(2)}%`;
+      localStorage.setItem("doctotext_split_pct", pct.toFixed(2));
+    });
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      els.splitter.classList.remove("dragging");
+      document.body.classList.remove("resizing");
+    });
+    els.splitter.addEventListener("dblclick", () => {
+      els.leftPane.style.width = "50%";
+      localStorage.setItem("doctotext_split_pct", "50");
+    });
+  }
+
+  async function loadDirectory(dirPath) {
+    state.virtualMode = false;
+    const allFlag = els.onlyDocsCheck.checked ? "0" : "1";
+    const data = await apiJson(`/api/browse?dir=${encodeURIComponent(dirPath)}&all=${allFlag}`);
+    state.currentDir = data.dir;
+    state.parentDir = data.parent;
+    state.dirs = data.dirs;
+    state.files = data.files;
+    els.dirInput.value = data.dir;
+    els.parentDirBtn.disabled = !data.parent;
+    updatePresetHighlight();
+    renderFileList();
+  }
+
+  function updatePresetHighlight() {
+    const chips = els.presetsBar.querySelectorAll(".preset-chip");
+    chips.forEach((chip) => {
+      chip.classList.toggle("active", !state.virtualMode && chip.dataset.path === state.currentDir);
+    });
+  }
+
+  function renderFileList() {
+    const q = els.fileFilterInput.value.trim().toLowerCase();
+    const list = els.fileList;
+    list.innerHTML = "";
+
+    if (state.virtualMode) {
+      const matched = state.virtualFiles.filter((f) =>
+        !q || f.relName.toLowerCase().includes(q)
+      );
+      els.fileCountLabel.textContent = `已选 ${matched.length} 个文件`;
+      matched.forEach((vf) => {
+        const div = document.createElement("div");
+        const isSel = state.selectedItem && state.selectedItem.virtualId === vf.virtualId;
+        div.className = "tree-item" + (isSel ? " selected" : "");
+        const ext = (vf.name.split(".").pop() || "file").toLowerCase();
+        div.innerHTML = `
+          <span class="ext-badge ${escapeHtml(ext)}">${escapeHtml(ext.slice(0, 5))}</span>
+          <span class="tree-name" title="${escapeHtml(vf.relName)}">${escapeHtml(vf.relName)}</span>
+          <span class="tree-size">${formatBytes(vf.file.size)}</span>
+        `;
+        div.addEventListener("click", () => selectVirtualFile(vf));
+        list.appendChild(div);
+      });
+      return;
+    }
+
+    const dirs = state.dirs.filter((d) => !q || d.name.toLowerCase().includes(q));
+    const files = state.files.filter((f) => !q || f.name.toLowerCase().includes(q));
+    els.fileCountLabel.textContent = `${dirs.length} 目录 · ${files.length} 文件`;
+
+    dirs.forEach((d) => {
+      const div = document.createElement("div");
+      div.className = "tree-item";
+      div.innerHTML = `
+        <span style="font-size:13px;line-height:1;">📁</span>
+        <span class="tree-name" title="${escapeHtml(d.path)}">${escapeHtml(d.name)}</span>
+      `;
+      div.addEventListener("click", () => loadDirectory(d.path));
+      list.appendChild(div);
+    });
+
+    files.forEach((f) => {
+      const div = document.createElement("div");
+      const isSel = state.selectedItem && state.selectedItem.path === f.path;
+      div.className = "tree-item" + (isSel ? " selected" : "");
+      div.dataset.path = f.path;
+      div.innerHTML = `
+        <span class="ext-badge ${escapeHtml(f.ext)}">${escapeHtml(f.ext.slice(0, 5))}</span>
+        <span class="tree-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+        <span class="tree-size">${formatBytes(f.size)}</span>
+      `;
+      div.addEventListener("click", () => selectDiskFile(f));
+      list.appendChild(div);
+    });
+  }
+
+  async function selectVirtualFile(vf) {
+    if (!vf.uploadedInfo) {
+      showToast(`正在载入 ${vf.name}...`);
+      const res = await fetch(`/api/upload?filename=${encodeURIComponent(vf.name)}`, {
+        method: "POST",
+        body: vf.file,
+      });
+      const info = await res.json();
+      if (!res.ok) {
+        showToast(info.error || "载入失败");
+        return;
+      }
+      vf.uploadedInfo = { ...info, virtualId: vf.virtualId, relName: vf.relName };
+    }
+    await openItem(vf.uploadedInfo);
+  }
+
+  async function selectDiskFile(fileObj) {
+    await openItem(fileObj);
+  }
+
+  async function openItem(item) {
+    state.selectedItem = item;
+    state.extractCache = {};
+    state.pdfPage = 1;
+    state.pdfTotalPages = 0;
+    state.zoomPct = 0;
+    els.leftFileCrumb.textContent = `${item.name} (${formatBytes(item.size)})`;
+    renderFileList();
+
+    await Promise.all([
+      renderLeftPreview(),
+      runRightExtraction(),
+    ]);
+  }
+
+  function updatePreviewHeaderControls(kind) {
+    const isPdfLike = kind === "pdf" || kind === "office_pdf";
+    const isRasterView = isPdfLike && state.previewMode === "raster";
+    const isImg = kind === "image";
+
+    els.previewModeSeg.style.display = isPdfLike ? "inline-flex" : "none";
+    els.previewModeSeg.querySelectorAll(".seg-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.mode === state.previewMode);
+    });
+
+    els.htmlModeSeg.style.display = kind === "html" ? "inline-flex" : "none";
+    els.htmlModeSeg.querySelectorAll(".seg-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.mode === state.htmlMode);
+    });
+
+    els.rasterControls.style.display = (isRasterView || isImg) ? "flex" : "none";
+    els.prevPageBtn.style.display = isRasterView ? "inline-flex" : "none";
+    els.nextPageBtn.style.display = isRasterView ? "inline-flex" : "none";
+    els.pageIndicator.style.display = isRasterView ? "inline" : "none";
+    els.dpiSelect.style.display = isRasterView ? "inline-block" : "none";
+
+    if (state.selectedItem) {
+      els.openNewTabBtn.style.display = "inline-flex";
+      els.openNewTabBtn.href = `/api/preview?path=${encodeURIComponent(state.selectedItem.path)}`;
+    } else {
+      els.openNewTabBtn.style.display = "none";
+    }
+  }
+
+  async function renderLeftPreview() {
+    const item = state.selectedItem;
+    if (!item) return;
+    const kind = item.preview_kind;
+    updatePreviewHeaderControls(kind);
+
+    const previewUrl = `/api/preview?path=${encodeURIComponent(item.path)}&t=${Date.now()}`;
+    const body = els.previewBody;
+    body.classList.remove("no-scroll");
+
+    if (kind === "pdf" || kind === "office_pdf") {
+      if (state.previewMode === "plugin") {
+        if (kind === "office_pdf" && state.capabilities && !state.capabilities.libreoffice_available) {
+          body.innerHTML = `
+            <div class="notice-state">
+              <div class="notice-card">
+                <h4>未检测到 LibreOffice</h4>
+                <p>当前环境未安装 <code>libreoffice</code>，无法将 Office/ODF 文档转换为左侧插件预览。请安装 LibreOffice（如 <code>sudo apt install libreoffice</code>），右侧仍可直接查看 DocToText 提取结果。</p>
+              </div>
+            </div>`;
+          return;
+        }
+        body.innerHTML = `<div class="empty-state"><p>${
+          kind === "office_pdf" ? "正在通过 LibreOffice 生成插件预览 PDF..." : "正在加载 PDF 插件视图..."
+        }</p></div>`;
+        try {
+          await apiJson(`/api/preview?path=${encodeURIComponent(item.path)}&check=1`);
+        } catch (err) {
+          body.innerHTML = `
+            <div class="notice-state">
+              <div class="notice-card">
+                <h4>无法生成插件预览</h4>
+                <p>${escapeHtml(err.message)}</p>
+                <p style="margin-top:8px;color:var(--ink-muted);">提示：若为密码加密文件，请在右侧查看 DocToText 的加密状态探测结果。</p>
+              </div>
+            </div>`;
+          return;
+        }
+        if (!state.selectedItem || state.selectedItem.path !== item.path) return;
+        body.classList.add("no-scroll");
+        body.innerHTML = `<iframe class="pdf-embed" src="${previewUrl}#toolbar=1&navpanes=0"></iframe>`;
+        return;
+      }
+
+      // Raster mode via pdftoppm
+      body.innerHTML = `<div class="empty-state"><p>正在渲染页面栅格...</p></div>`;
+      try {
+        const info = await apiJson(`/api/pdf_info?path=${encodeURIComponent(item.path)}`);
+        state.pdfTotalPages = Math.max(1, info.page_count || 1);
+      } catch (err) {
+        body.innerHTML = `<div class="notice-state"><div class="notice-card"><h4>按页渲染失败</h4><p>${escapeHtml(err.message)}</p></div></div>`;
+        return;
+      }
+      if (!state.selectedItem || state.selectedItem.path !== item.path) return;
+      renderRasterPage();
+      return;
+    }
+
+    if (kind === "image") {
+      body.innerHTML = `
+        <div class="raster-stage">
+          <img class="raster-img" id="previewImgEl" src="${previewUrl}" alt="${escapeHtml(item.name)}">
+        </div>`;
+      applyZoomToImage();
+      return;
+    }
+
+    if (kind === "html") {
+      if (state.htmlMode === "rendered") {
+        body.classList.add("no-scroll");
+        body.innerHTML = `<iframe class="html-frame" sandbox="allow-same-origin" src="${previewUrl}"></iframe>`;
+      } else {
+        const res = await apiGet(`/api/preview?path=${encodeURIComponent(item.path)}&raw=1`);
+        const txt = await res.text();
+        body.innerHTML = `<pre class="source-pre">${escapeHtml(txt)}</pre>`;
+      }
+      return;
+    }
+
+    if (kind === "text") {
+      const res = await apiGet(previewUrl);
+      const txt = await res.text();
+      body.innerHTML = `<pre class="source-pre">${escapeHtml(txt)}</pre>`;
+      return;
+    }
+
+    body.innerHTML = `
+      <div class="notice-state">
+        <div class="notice-card">
+          <h4>暂不支持此格式的直接渲染 (${escapeHtml(item.ext || "binary")})</h4>
+          <p>请直接查看右侧 DocToText 解析结果。</p>
+        </div>
+      </div>`;
+  }
+
+  function renderRasterPage() {
+    const item = state.selectedItem;
+    if (!item) return;
+    state.pdfPage = Math.max(1, Math.min(state.pdfPage, state.pdfTotalPages || 1));
+    els.pageIndicator.textContent = `${state.pdfPage} / ${state.pdfTotalPages || "?"}`;
+    els.prevPageBtn.disabled = state.pdfPage <= 1;
+    els.nextPageBtn.disabled = state.pdfPage >= state.pdfTotalPages;
+
+    const dpi = els.dpiSelect.value;
+    const src = `/api/pdf_page?path=${encodeURIComponent(item.path)}&page=${state.pdfPage}&dpi=${dpi}`;
+    els.previewBody.innerHTML = `
+      <div class="raster-stage">
+        <img class="raster-img" id="previewImgEl" src="${src}" alt="Page ${state.pdfPage}">
+      </div>`;
+    applyZoomToImage();
+  }
+
+  function applyZoomToImage() {
+    const img = document.getElementById("previewImgEl");
+    if (!img) return;
+    if (state.zoomPct <= 0) {
+      img.style.width = "";
+      img.style.maxWidth = "100%";
+      els.zoomLabel.textContent = "自适应";
+    } else {
+      img.style.maxWidth = "none";
+      img.style.width = `${state.zoomPct}%`;
+      els.zoomLabel.textContent = `${state.zoomPct}%`;
+    }
+  }
+
+  async function fetchEngineResult(engineKey) {
+    const item = state.selectedItem;
+    if (!item) return null;
+    const hint = els.hintSelect.value;
+    const verbose = els.verboseCheck.checked;
+    const cacheKey = `${item.path}|${engineKey}|${hint}|${verbose}`;
+    if (state.extractCache[cacheKey]) {
+      return state.extractCache[cacheKey];
+    }
+    const res = await apiJson("/api/extract", {
+      path: item.path,
+      engine: engineKey,
+      parser_hint: hint,
+      verbose: verbose,
+    });
+    state.extractCache[cacheKey] = res;
+    return res;
+  }
+
+  async function runRightExtraction() {
+    const item = state.selectedItem;
+    if (!item) return;
+    const activeEngine = els.engineSelect.value;
+
+    els.rightBody.innerHTML = `<div class="empty-state"><p>正在运行解析引擎...</p></div>`;
+    els.tikaDiffToggleBtn.style.display = state.rightTab === "tika" ? "inline-flex" : "none";
+
+    try {
+      const mainRes = await fetchEngineResult(activeEngine);
+      if (!state.selectedItem || state.selectedItem.path !== item.path) return;
+      updateTelemetry(mainRes);
+
+      if (state.rightTab === "text" || state.rightTab === "logs") {
+        renderRightView();
+        return;
+      }
+
+      if (state.rightTab === "meta") {
+        const metaRes = await fetchEngineResult("doctotext_meta");
+        if (!state.selectedItem || state.selectedItem.path !== item.path) return;
+        renderCodeText(metaRes.text || metaRes.logs || "(无元数据输出)", metaRes);
+        return;
+      }
+
+      if (state.rightTab === "tika") {
+        const tikaRes = await fetchEngineResult("tika");
+        if (!state.selectedItem || state.selectedItem.path !== item.path) return;
+        await renderTikaCompare(mainRes, tikaRes);
+        return;
+      }
+    } catch (err) {
+      els.rightBody.innerHTML = `
+        <div class="notice-state">
+          <div class="notice-card">
+            <h4>调用解析接口失败</h4>
+            <p>${escapeHtml(err.message)}</p>
+          </div>
+        </div>`;
+    }
+  }
+
+  function updateTelemetry(res) {
+    if (!res) return;
+    els.statusPill.style.display = "inline-block";
+    els.statusPill.className = `status-pill ${res.status || "ERROR"}`;
+    els.statusPill.textContent = `${res.status || "ERROR"} · ${res.exit_code}`;
+
+    els.timeChip.style.display = "inline-block";
+    els.timeChip.textContent = `${res.elapsed_ms ?? 0} ms`;
+
+    els.charChip.style.display = "inline-block";
+    els.charChip.textContent = `${res.char_count ?? 0} 字 · ${res.line_count ?? 0} 行`;
+  }
+
+  function getCurrentMainResult() {
+    const item = state.selectedItem;
+    if (!item) return null;
+    const key = `${item.path}|${els.engineSelect.value}|${els.hintSelect.value}|${els.verboseCheck.checked}`;
+    return state.extractCache[key] || null;
+  }
+
+  function renderRightView() {
+    const res = getCurrentMainResult();
+    if (!res) return;
+    if (state.rightTab === "logs") {
+      const logContent = [
+        res.command ? `$ ${res.command}` : "",
+        "",
+        res.logs || "(无 stderr / 日志输出，可勾选右上角 Verbose 查看详细解析过程)",
+      ].join("\n");
+      renderCodeText(logContent, res);
+      return;
+    }
+    const text = res.text || "";
+    if (!text && res.logs) {
+      renderCodeText(text, res, res.logs);
+    } else {
+      renderCodeText(text, res);
+    }
+  }
+
+  function highlightAndFormatLine(line, searchLower) {
+    // Tokenize search matches first on raw text, then format whitespace safely
+    let parts = [{ text: line, match: false }];
+    if (searchLower) {
+      const next = [];
+      const lower = line.toLowerCase();
+      let idx = 0;
+      while (idx < line.length) {
+        const found = lower.indexOf(searchLower, idx);
+        if (found === -1) {
+          next.push({ text: line.slice(idx), match: false });
+          break;
+        }
+        if (found > idx) {
+          next.push({ text: line.slice(idx, found), match: false });
+        }
+        next.push({ text: line.slice(found, found + searchLower.length), match: true });
+        idx = found + searchLower.length;
+      }
+      parts = next;
+    }
+
+    const trailLen = state.showWhitespace ? (line.length - line.replace(/[ \t]+$/, "").length) : 0;
+    const trailStart = line.length - trailLen;
+    let cursor = 0;
+    let out = "";
+
+    for (const part of parts) {
+      let inner = "";
+      for (let i = 0; i < part.text.length; i++, cursor++) {
+        const ch = part.text[i];
+        const isTrailing = state.showWhitespace && cursor >= trailStart;
+        if (state.showWhitespace && ch === " ") {
+          inner += isTrailing
+            ? `<span class="ws-char ws-trail">·</span>`
+            : `<span class="ws-char">·</span>`;
+        } else if (state.showWhitespace && ch === "\t") {
+          inner += isTrailing
+            ? `<span class="ws-char ws-trail">→\t</span>`
+            : `<span class="ws-char">→\t</span>`;
+        } else {
+          inner += escapeHtml(ch);
+        }
+      }
+      if (part.match) {
+        out += `<mark class="hl">${inner}</mark>`;
+      } else {
+        out += inner;
+      }
+    }
+    if (state.showWhitespace) {
+      out += `<span class="ws-char">↵</span>`;
+    }
+    return out;
+  }
+
+  function renderCodeText(rawText, res, emptyNotice = "") {
+    if (!rawText && emptyNotice) {
+      els.rightBody.innerHTML = `
+        <div class="notice-state">
+          <div class="notice-card">
+            <h4>提取正文为空 (${escapeHtml(res.status || "ERROR")})</h4>
+            <p>${escapeHtml(emptyNotice)}</p>
+          </div>
+        </div>`;
+      els.matchCountLabel.textContent = "";
+      return;
+    }
+
+    const lines = rawText.split("\n");
+    const searchLower = state.searchQuery.trim().toLowerCase();
+    const gutterHtml = lines.map((_, idx) => `${idx + 1}`).join("\n");
+    const bodyHtml = lines.map((line) => highlightAndFormatLine(line, searchLower)).join("\n");
+
+    els.rightBody.innerHTML = `
+      <div class="code-viewer">
+        <pre class="line-gutter ${state.showLineNumbers ? "" : "hidden"}">${gutterHtml}</pre>
+        <pre class="code-content ${state.wrapText ? "wrap" : ""}" id="codeContentEl">${bodyHtml}</pre>
+      </div>`;
+
+    updateMatchNavigation();
+  }
+
+  function updateMatchNavigation() {
+    const marks = els.rightBody.querySelectorAll("mark.hl");
+    state.totalMatches = marks.length;
+    if (!state.searchQuery.trim()) {
+      els.matchCountLabel.textContent = "";
+      return;
+    }
+    if (marks.length === 0) {
+      els.matchCountLabel.textContent = "0/0";
+      return;
+    }
+    state.matchIndex = ((state.matchIndex % marks.length) + marks.length) % marks.length;
+    marks.forEach((m, i) => m.classList.toggle("current", i === state.matchIndex));
+    els.matchCountLabel.textContent = `${state.matchIndex + 1}/${marks.length}`;
+    marks[state.matchIndex].scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  async function renderTikaCompare(mainRes, tikaRes) {
+    if (state.tikaDiffMode) {
+      const diffData = await apiJson("/api/diff", {
+        left: mainRes.text || "",
+        right: tikaRes.text || "",
+        left_label: "DocToText",
+        right_label: "Apache Tika",
+      });
+      const lines = (diffData.diff || "(无文本差异 — 完全一致)").split("\n");
+      const html = lines.map((ln) => {
+        if (ln.startsWith("+++") || ln.startsWith("---") || ln.startsWith("@@")) {
+          return `<span class="diff-line-hunk">${escapeHtml(ln)}</span>`;
+        }
+        if (ln.startsWith("+")) return `<span class="diff-line-add">${escapeHtml(ln)}</span>`;
+        if (ln.startsWith("-")) return `<span class="diff-line-del">${escapeHtml(ln)}</span>`;
+        return escapeHtml(ln) + "\n";
+      }).join("");
+      els.rightBody.innerHTML = `
+        <div style="padding:8px 14px;background:#F3F1EA;border-bottom:1px solid var(--border);font-size:12px;">
+          文本相似度：<strong>${diffData.similarity}%</strong>
+          （DocToText: ${mainRes.char_count} 字符 / ${mainRes.elapsed_ms} ms ｜ Apache Tika: ${tikaRes.char_count} 字符 / ${tikaRes.elapsed_ms} ms）
+        </div>
+        <pre class="code-content wrap">${html}</pre>`;
+      return;
+    }
+
+    els.rightBody.innerHTML = `
+      <div class="tika-split">
+        <div class="tika-col">
+          <div class="tika-col-head">
+            <span>DocToText (${escapeHtml(mainRes.status)})</span>
+            <span style="font-family:var(--font-mono);font-weight:400;">${mainRes.char_count} chars · ${mainRes.elapsed_ms} ms</span>
+          </div>
+          <pre class="tika-col-body">${escapeHtml(mainRes.text || mainRes.logs || "")}</pre>
+        </div>
+        <div class="tika-col">
+          <div class="tika-col-head">
+            <span>Apache Tika (${escapeHtml(tikaRes.status)})</span>
+            <span style="font-family:var(--font-mono);font-weight:400;">${tikaRes.char_count} chars · ${tikaRes.elapsed_ms} ms</span>
+          </div>
+          <pre class="tika-col-body">${escapeHtml(tikaRes.text || tikaRes.logs || "")}</pre>
+        </div>
+      </div>`;
+  }
+
+  function bindEvents() {
+    els.toggleSidebarBtn.addEventListener("click", () => {
+      els.sidebar.classList.toggle("collapsed");
+    });
+
+    els.goDirBtn.addEventListener("click", () => {
+      const dir = els.dirInput.value.trim();
+      if (dir) loadDirectory(dir).catch((e) => showToast(e.message));
+    });
+    els.dirInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") els.goDirBtn.click();
+    });
+    els.parentDirBtn.addEventListener("click", () => {
+      if (state.parentDir) loadDirectory(state.parentDir).catch((e) => showToast(e.message));
+    });
+    els.onlyDocsCheck.addEventListener("change", () => {
+      if (!state.virtualMode && state.currentDir) {
+        loadDirectory(state.currentDir).catch((e) => showToast(e.message));
+      }
+    });
+    els.fileFilterInput.addEventListener("input", renderFileList);
+
+    // Client OS folder/file pickers
+    els.folderPicker.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+      state.virtualMode = true;
+      state.virtualFiles = files
+        .map((f, idx) => ({
+          virtualId: `vf_${idx}_${f.name}`,
+          name: f.name,
+          relName: f.webkitRelativePath || f.name,
+          file: f,
+          uploadedInfo: null,
+        }))
+        .sort((a, b) => a.relName.localeCompare(b.relName));
+      updatePresetHighlight();
+      renderFileList();
+      if (state.virtualFiles.length > 0) {
+        await selectVirtualFile(state.virtualFiles[0]);
+      }
+    });
+
+    els.filePicker.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+      state.virtualMode = true;
+      state.virtualFiles = files.map((f, idx) => ({
+        virtualId: `up_${idx}_${f.name}`,
+        name: f.name,
+        relName: f.name,
+        file: f,
+        uploadedInfo: null,
+      }));
+      updatePresetHighlight();
+      renderFileList();
+      await selectVirtualFile(state.virtualFiles[0]);
+    });
+
+    // Drag and drop single file
+    window.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      els.dropOverlay.classList.add("active");
+    });
+    window.addEventListener("dragleave", (e) => {
+      if (e.relatedTarget === null) els.dropOverlay.classList.remove("active");
+    });
+    window.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      els.dropOverlay.classList.remove("active");
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (!files.length) return;
+      state.virtualMode = true;
+      state.virtualFiles = files.map((f, idx) => ({
+        virtualId: `drop_${idx}_${f.name}`,
+        name: f.name,
+        relName: f.name,
+        file: f,
+        uploadedInfo: null,
+      }));
+      renderFileList();
+      await selectVirtualFile(state.virtualFiles[0]);
+    });
+
+    // Engine & Parser options
+    els.engineSelect.addEventListener("change", runRightExtraction);
+    els.hintSelect.addEventListener("change", runRightExtraction);
+    els.verboseCheck.addEventListener("change", runRightExtraction);
+    els.reExtractBtn.addEventListener("click", () => {
+      state.extractCache = {};
+      runRightExtraction();
+    });
+
+    // Preview mode toggles
+    els.previewModeSeg.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn) return;
+      state.previewMode = btn.dataset.mode;
+      renderLeftPreview();
+    });
+    els.htmlModeSeg.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn) return;
+      state.htmlMode = btn.dataset.mode;
+      renderLeftPreview();
+    });
+    els.prevPageBtn.addEventListener("click", () => {
+      if (state.pdfPage > 1) { state.pdfPage--; renderRasterPage(); }
+    });
+    els.nextPageBtn.addEventListener("click", () => {
+      if (state.pdfPage < state.pdfTotalPages) { state.pdfPage++; renderRasterPage(); }
+    });
+    els.dpiSelect.addEventListener("change", renderRasterPage);
+    els.zoomInBtn.addEventListener("click", () => {
+      state.zoomPct = state.zoomPct === 0 ? 120 : Math.min(300, state.zoomPct + 25);
+      applyZoomToImage();
+    });
+    els.zoomOutBtn.addEventListener("click", () => {
+      state.zoomPct = state.zoomPct === 0 ? 80 : Math.max(30, state.zoomPct - 25);
+      applyZoomToImage();
+    });
+    els.zoomResetBtn.addEventListener("click", () => {
+      state.zoomPct = 0;
+      applyZoomToImage();
+    });
+
+    // Right Tabs
+    els.rightTabSeg.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn) return;
+      state.rightTab = btn.dataset.tab;
+      els.rightTabSeg.querySelectorAll(".seg-btn").forEach((b) =>
+        b.classList.toggle("active", b.dataset.tab === state.rightTab)
+      );
+      runRightExtraction();
+    });
+
+    els.tikaDiffToggleBtn.addEventListener("click", () => {
+      state.tikaDiffMode = !state.tikaDiffMode;
+      els.tikaDiffToggleBtn.classList.toggle("active", state.tikaDiffMode);
+      runRightExtraction();
+    });
+
+    // Text inspection tools
+    els.textSearchInput.addEventListener("input", () => {
+      state.searchQuery = els.textSearchInput.value;
+      state.matchIndex = 0;
+      if (state.rightTab === "text" || state.rightTab === "logs") {
+        renderRightView();
+      } else {
+        runRightExtraction();
+      }
+    });
+    els.prevMatchBtn.addEventListener("click", () => {
+      state.matchIndex--;
+      updateMatchNavigation();
+    });
+    els.nextMatchBtn.addEventListener("click", () => {
+      state.matchIndex++;
+      updateMatchNavigation();
+    });
+    els.toggleWsBtn.addEventListener("click", () => {
+      state.showWhitespace = !state.showWhitespace;
+      els.toggleWsBtn.classList.toggle("active", state.showWhitespace);
+      if (state.rightTab === "text" || state.rightTab === "logs") renderRightView();
+    });
+    els.toggleLinesBtn.addEventListener("click", () => {
+      state.showLineNumbers = !state.showLineNumbers;
+      els.toggleLinesBtn.classList.toggle("active", state.showLineNumbers);
+      const gutter = els.rightBody.querySelector(".line-gutter");
+      if (gutter) gutter.classList.toggle("hidden", !state.showLineNumbers);
+    });
+    els.toggleWrapBtn.addEventListener("click", () => {
+      state.wrapText = !state.wrapText;
+      els.toggleWrapBtn.classList.toggle("active", state.wrapText);
+      const cc = document.getElementById("codeContentEl");
+      if (cc) cc.classList.toggle("wrap", state.wrapText);
+    });
+    els.copyTextBtn.addEventListener("click", async () => {
+      const res = getCurrentMainResult();
+      if (!res) return;
+      try {
+        await navigator.clipboard.writeText(res.text || "");
+        showToast("已复制提取文本到剪贴板");
+      } catch (_) {
+        showToast("剪贴板写入受限");
+      }
+    });
+    els.downloadTextBtn.addEventListener("click", () => {
+      const res = getCurrentMainResult();
+      if (!res || !state.selectedItem) return;
+      const blob = new Blob([res.text || ""], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${state.selectedItem.name}.extracted.txt`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    // Keyboard shortcuts
+    window.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        els.textSearchInput.focus();
+        els.textSearchInput.select();
+      }
+    });
+  }
+
+  async function init() {
+    restoreSplitter();
+    initSplitter();
+    bindEvents();
+
+    try {
+      const caps = await apiJson("/api/capabilities");
+      state.capabilities = caps;
+
+      // Hide unavailable optional engines cleanly
+      if (!caps.pdftoppm_available) {
+        const rasterBtn = els.previewModeSeg.querySelector('[data-mode="raster"]');
+        if (rasterBtn) {
+          rasterBtn.disabled = true;
+          rasterBtn.title = "未检测到 pdftoppm，请安装 poppler-utils";
+        }
+      }
+      if (!caps.ppocr_available) {
+        const opt = els.engineSelect.querySelector('option[value="ppocr"]');
+        if (opt) opt.disabled = true;
+      }
+      if (!caps.tika_available) {
+        els.tikaTabBtn.style.display = "none";
+      }
+
+      // Render preset folder chips
+      els.presetsBar.innerHTML = "";
+      (caps.presets || []).forEach((p) => {
+        const btn = document.createElement("button");
+        btn.className = "preset-chip";
+        btn.dataset.path = p.path;
+        btn.textContent = p.label;
+        btn.addEventListener("click", () => loadDirectory(p.path).catch((e) => showToast(e.message)));
+        els.presetsBar.appendChild(btn);
+      });
+
+      await loadDirectory(caps.initial_dir);
+
+      // Auto-select first supported document for immediate usefulness
+      const preferred =
+        state.files.find((f) => f.name === "testPDF_childAttachments.pdf") ||
+        state.files.find((f) => f.ext === "pdf") ||
+        state.files[0];
+      if (preferred) {
+        await selectDiskFile(preferred);
+      }
+    } catch (err) {
+      showToast(`初始化失败: ${err.message}`);
+    }
+  }
+
+  window.addEventListener("load", () => {
+    setTimeout(init, 0);
+  });
+})();
+</script>
+</body>
+</html>
