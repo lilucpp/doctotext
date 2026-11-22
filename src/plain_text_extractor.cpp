@@ -1064,6 +1064,7 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 	impl->m_is_encrypted = false;
 	if (parser_type == PARSER_AUTO)
 		return processFile(file_name, text);
+	impl->m_attachments.clear();
 
 	bool error = true;
 	switch (parser_type)
@@ -1196,6 +1197,7 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 	impl->m_is_encrypted = false;
 	if (parser_type == PARSER_AUTO)
 		return processFile(buffer, size, text);
+	impl->m_attachments.clear();
 
 	bool error = true;
 	switch (parser_type)
