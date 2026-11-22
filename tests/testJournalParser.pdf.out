@@ -43,7 +43,7 @@ underactuated system.
 
 I.  INTRODUCTION  
 
- 
+
 Microscale  robotic  systems  have many  applications  in 
 areas  such  as  biomedicine  [1],  surveillance  [2],  or 
 microassembly [3]. In [4, 5, 6] a globally controllable 240 μm 
@@ -60,9 +60,6 @@ of  underactuation  presents in  such  systems (all  robots  are
  *Contact: Vahid Foroutan. Tel.: +1 312 509 0620. E-mail address: 
 vforou2@uic.edu 
 
- 
- 
- 
 controlled  by  a  single global  control  signal),  makes  the 
 simultaneous control of several microrobots significantly more 
 challenging than control of single microrobot.  
@@ -103,13 +100,12 @@ discussed in Sec. III. Sec. IV describes the theory, proof, and
 scalability  analysis  for  String-Cluster  System and  ESATC 
 systems. Concluding  discussion  regarding  the  scalability  of 
 these different systems is described in Sec. V.  
- 
 
 
 
 II. STRESS-ENGINEERED MICROROBOT 
 
- 
+
 The stress-engineered MEMS microrobot, MicroStressBot 
 for  short,  consists  of  an  untethered  scratch  drive  actuator 
 (USDA)  [7]  that  provides  forward  motion  and  a  curved 
@@ -119,8 +115,10 @@ MicroStressBot. The USDA is composed of a 120 μm × 60 μm
 backplate and a 1.5-μm-tall bushing. The steering-arm actuator 
 consists of a 120 to 160 μm long cantilever beam with a circular 
 pad and a 0.75 μm-deep dimple.  
- 
- 
+
+
+
+
 
 
 
@@ -142,11 +140,17 @@ pad and a 0.75 μm-deep dimple.
 
 
 
- 
- 
+
+
+
+
+
+
+
 Fig. 1: The schematic of the MicroStressBots.   
 
- 
+
+
 The  MicroStressBots  are  fabricated  using  surface 
 micromachining  PolyMUMPS  foundry  process  [10]. The 
 initially planar steering arms is curved out-of-plane (upwards) 
@@ -171,8 +175,8 @@ state of the steering-arm actuator, and b) power-delivery cycle:
 that provides power to the USDA. The power-delivery cycle 
 consisting of stepping pulses, changing between a maximum 
 (𝑉ℎ𝑖𝑔ℎ) and a minimum (𝑉𝑙𝑜𝑤). In order for the USDA to 
-actuate, 𝑉ℎ𝑖𝑔ℎ must be greater than the minimum voltage (𝑉𝑓𝑙𝑥)  
 
+actuate, 𝑉ℎ𝑖𝑔ℎ must be greater than the minimum voltage (𝑉𝑓𝑙𝑥)  
 at which the backplate of the USDA obtains enough curvature 
 to produce   
 
@@ -197,10 +201,9 @@ contains 2𝑛possible hysteresis states (all 2𝑛 combinations of n
 steering arms being raised or lowered).  
 
 III. GCSR: A STRATEGY FOR MULTI-MICROROBOT CONTROL 
-
 AND ASSEMBLY 
 
- 
+
 As mentioned in [6], GCSR is a strategy to control and 
 maneuver robots to complete the microassembly. GCSR uses 
 design-induced heterogeneity of MicroStressBots and resulting 
@@ -234,7 +237,7 @@ IV. BEYOND STRING CONTROL: ENABELING GCSR THROUGH
 
 CONTROL VOLTAGE DIFFERENTIATION 
 
-  
+
 Successful implementation of GCSR control relies on a set of 
 control primitives that couple the motion of the microrobots in 
 
@@ -254,13 +257,14 @@ hysteresis gaps of the individual robots. Let 𝛿𝑣 be the maximum
 deviation  of  the  transition  voltage  manifested  during  the 
 microrobot operation. We define two transition voltages to be 
 significantly independent if they are separated by at least 2𝛿𝑣. 
- 
+
 
 
 D2 
 
 D1 (i) 
- 
+
+
 
 
 
@@ -280,11 +284,16 @@ D1 (i)
 
 
 
- 
- 
+
+
+
+
+
+
 Fig. 2: Trajectories of MicroStressBots D1 and D2 during partial microassembly. 
 Reproduced with permission from [6]. 
- 
+
+
 Several steering-arm design  configurations (NHG, STRING, 
 and SESat) have been proposed in [6] to achieve GCSR. The 
 objective of all these designs is to reduce the control bandwidth 
@@ -294,7 +303,6 @@ microrobotic system. Per [15],   Nested Hystersis Gaps (NHG)
 is  the  system  of  n steering  arms,  sorted  according  to 
 
 ascending𝑉𝑑𝑖, when (𝑉𝑑𝑖+2𝛿𝑣<𝑉𝑑𝑗) and (𝑉𝑢𝑖  − 2𝛿𝑣>𝑉𝑢𝑗 ), for 
-
 all 𝑖 <𝑗.  NHG systems can access all 2𝑛 hysteresis states. 
 However  each  device  requires  two  unique  control  voltage 
 levels, and so the control voltage bandwidth requirement of this 
@@ -314,7 +322,7 @@ microassembly.  STRING  reduces  the  control  bandwidth
 requirements  from 𝜉𝑛 =2𝑛 (NHG)  to𝜉𝑛 =𝑛+1.  Further, 
 sublinear reduction 𝜉𝑛 has been done under the SESat control 
 strategy [6]. It has been shown in [6] that SESat needs 𝜉𝑛 =
- ⌈2√𝑛⌉ while it can access at least 𝑛+1hysteresis states which 
+⌈2√𝑛⌉ while it can access at least 𝑛+1hysteresis states which 
 are essential for sequential microassembly algorithm.      
 Although   SESat  could  reduce  the  control  bandwidth 
 requirements to 𝑂 (2√𝑛), only 3 out of the 4 hysteresis states 
@@ -336,43 +344,61 @@ Set of all groups of two Microrobots that forms a Nested-
 Hysteresis-Gaps (NHGs) structure is Nested-Group-Microrbots 
 (NGM). 𝑀 is the set of all microrobots in the system. 𝑀 =
 { 𝐷1,𝐷2,…,𝐷𝑛  }; where 𝐷𝑖  is ith Micorobot in the system.  
-  
+
+
 𝑁𝐺𝑀=
- {(𝐷𝑖,𝐷𝑗) |(𝐷𝑖,𝐷𝑗 ∈𝑀 ,    𝑉𝑑𝑗 > 𝑉𝑑𝑖, 𝑉𝑢𝑖 > 𝑉𝑢𝑗)  𝑖,𝑗 ∈𝑁 }       (1) 
- 
+
+{(𝐷𝑖,𝐷𝑗) |(𝐷𝑖,𝐷𝑗 ∈𝑀 ,    𝑉𝑑𝑗 > 𝑉𝑑𝑖, 𝑉𝑢𝑖 > 𝑉𝑢𝑗)  𝑖,𝑗 ∈𝑁 }       (1) 
+
 where Vd and Vu are snap-down and release voltages. 
 Definition. II:  Nested-Group-Microrbots Cluster (Cluster):  
 Each member of NGM is called Cluster. 
    𝐶𝑙𝑢𝑠𝑡𝑒𝑟 =(𝐷𝑖,𝐷𝑗)∈𝑁𝐺𝑀; 𝑖,𝑗 ∈𝑁                             (2) 
 
- 
+
 In  each  Cluster,  we  define 𝑉𝑑𝑙  =𝑀𝑖𝑛 (𝑉𝑑𝑖 ,𝑉𝑑𝑗 ),  𝑉𝑑ℎ  =
 𝑀𝑎𝑥 (𝑉𝑑𝑖 ,𝑉𝑑𝑗 ),𝑉𝑢𝑙  =𝑀𝑖𝑛 (𝑉𝑢𝑖 ,𝑉𝑢𝑗 )      and         𝑉𝑢ℎ  =
 𝑀𝑎𝑥 (𝑉𝑢𝑖 ,𝑉𝑢𝑗 ), respectively.  Fig.  3.  Shows  the  relation 
 between the transition voltages in a Cluster, the snap-down and 
 release  voltages  are  shown  as  circles  and  rectangles, 
 respectively.  
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
-                        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Fig.3. Cluster Structure 
- 
 
 
 
 𝑆𝑡𝑟𝑖𝑛𝑔−𝐶𝑙𝑢𝑠𝑡𝑒𝑟 ={𝐶𝑙𝑢𝑠𝑡𝑒𝑟∈𝑁𝐺𝑀 | ∀𝐶𝑙𝑢𝑠𝑡𝑒𝑟𝑘,𝐶𝑙𝑢𝑠𝑡𝑒𝑟𝑚  (𝑘<
- 
+
+
 Definition.  III:  STRIctly  Non-nested  hysteresis-Gaps 
 (String)-Cluster (String-Cluster) system: 
 This system consists of Clusters where each two microrobots 
@@ -390,11 +416,12 @@ of robots of Clusteri and Clusterj is indistinguishable, and
 four such microrobots in Clusteri  and Clusterj  cannot be 
 controlled  independently.  We  call  such  two  Clusters  a 
 degenerate Cluster pair. Fig. 4 shows String-Cluster system.  
-   
+
+
 Lemma.  1: An  M-  String-Cluster system  has  exactly 
 “n+3=2M+3” accessible hysteresis states, where M= no. 
 Clusters, n = no. Microrobots and M=n/2.   
- Proof: By Induction: 
+Proof: By Induction: 
 Base condition: An String-Cluster system with M=2 has 
 seven accessible states.  
 In each Cluster we have two microrobots sorted in an 
@@ -411,7 +438,6 @@ Let 𝑉δ, … , 𝑉Ψ be significantly independent transition
 voltage levels, ordered such that 𝑉δ <  𝑉γ < 𝑉β < 𝑉α < 𝑉ζ <  
 
 𝑉θ <  𝑉λ  < 𝑉ε < 𝑉φ< 𝑉Ω< 𝑉Ψ with |𝑉Ω− 𝑉φ |= 2𝛿𝑣 and 
-
 |𝑉ζ− 𝑉α|=2𝛿𝑣  .  Let 𝑉𝑑𝑙,1 = 𝑉ε , 𝑉𝑑ℎ,1 = 𝑉φ and  𝑉𝑢𝑙,1 = 𝑉β  
 ,  𝑉𝑢ℎ,1 = 𝑉α. It follows that the snap-down voltage 𝑉𝑑𝑙,2 can 
 have value 𝑉1 ∈  (𝑉φ ,𝑉Ω], or voltage 𝑉2= Vφ and the snap-
@@ -419,40 +445,52 @@ down voltage 𝑉𝑑ℎ,2 can have value 𝑉3  ∈  (𝑉Ω ,𝑉Ψ], or volta
 𝑉4  = 𝑉Ω and|𝑉𝑑ℎ,2−𝑉𝑑𝑙,2 |≥ 2𝛿𝑣. Similarly, the release 
 voltage, 𝑉𝑢ℎ,2 can have the value 𝑉5 ∈  (𝑉ζ, 𝑉𝑟𝑒𝑙 − 2𝛿𝑣] or 
 voltage 𝑉6= 𝑉ζ, and the release voltage 𝑉𝑢𝑙,3 can have the 
-
 value 𝑉7 ∈ (𝑉α, 𝑉ζ] or voltage 𝑉8 = 𝑉αand |𝑉𝑢ℎ,2−𝑉𝑢𝑙,2 |≥
- 2𝛿𝑣. Consequently, for the M+1 Clusters microrobtic system 
+2𝛿𝑣. Consequently, for the M+1 Clusters microrobtic system 
 to remain String-Cluster, one of the following combinations 
 of the snap-down and release voltages for C2 must hold: (𝑉1, 
 𝑉5, 𝑉3, 𝑉7), (𝑉1, 𝑉5, 𝑉3, 𝑉8), (𝑉1, 𝑉6, 𝑉3, 𝑉8), (𝑉2, 𝑉5, 𝑉3, 𝑉7), 
 (𝑉2, 𝑉5, 𝑉3, 𝑉8), (𝑉2, 𝑉6, 𝑉3, 𝑉8), (𝑉2, 𝑉5, 𝑉4, 𝑉7), (𝑉2, 𝑉5, 𝑉4, 
 𝑉8) and (𝑉2, 𝑉6, 𝑉4, 𝑉8). 
- 
- 
 
-  
 𝑚),(𝑉𝑑ℎ,𝑘  ≤ 𝑉𝑑𝑙,𝑚; 𝑉𝑢ℎ,𝑘  ≤  𝑉𝑢𝑙,𝑚   ); 𝑚,𝑘 ∈𝑁 }              (3) 
 
 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Fig. 4.   String-Cluster system 
- 
- 
 
 
 
@@ -493,20 +531,29 @@ Fig. 4.   String-Cluster system
 
 
 
- 
- 
- 
+
+
+
+
+
+
+
+
+
 Fig. 5. Illustration of the proof of Lemma. 1 
- 
- 
-  
+
+
+
+
+
 We examine each case separately:  
- 
+
+
 (𝑉1, 𝑉5, 𝑉3, 𝑉7): because of 𝑉𝑑𝑙,2, 𝑉𝑑ℎ,2are greater than 
 the snap-down voltages of  C1, ( 𝑉𝑑𝑙,2> 𝑉𝑑𝑙,1, 𝑉𝑑𝑙,2> 𝑉𝑑ℎ,1), 
 and ( 𝑉𝑑ℎ,2> 𝑉𝑑𝑙,1, 𝑉𝑑ℎ,2>  𝑉𝑑ℎ,1), we can only snap down the 
 arms of D1 and D2 in C2 after we snap down the arms of C1. 
- Since𝑉𝑢𝑙,2, 𝑉𝑢ℎ,2 is greater than the release voltages of C1, ( 
+Since𝑉𝑢𝑙,2, 𝑉𝑢ℎ,2 is greater than the release voltages of C1, ( 
 𝑉𝑢𝑙,2  > 𝑉𝑢𝑙,1  , 𝑉𝑢𝑙,2 >𝑉𝑢ℎ,1), and (𝑉𝑢ℎ,2 > 𝑉𝑢𝑙,1and 𝑉𝑢ℎ,2 
 >𝑉𝑢ℎ,1), we can only release the arms of C1 after we have 
 released the arms of D1 and D2 in C2. Because the (𝑉𝑑ℎ,2 > 
@@ -521,14 +568,16 @@ to “01”, “10” or “11” when C1 are in state “11”. During all
 other states of the system the state of C2 must remain “00”. 
 Consequently,  the  number  of  accessible  hysteresis  states 
 increase by exactly 3. 
- 
+
+
 (𝑉1,𝑉5, 𝑉3, 𝑉8): This case is similar to (𝑉1, 𝑉5, 𝑉3, 𝑉7), 
 except that the arm of D1 of Cluster C1 is released at the same  
 time as the arm of D2 of Cluster C2. As long as 𝑉𝑑ℎ,2 > 𝑉𝑑𝑙,1, 
 we can snap down the arm of D2 of C2 only after all other 
 clusters are in state “11”. As a consequence the number of 
 accessible hysteresis states increase by exactly 3.  
- 
+
+
 (𝑉2, 𝑉5, 𝑉3, 𝑉7): The snap-down voltage D1 of C2 is equal 
 to the snap-down voltage of D2 of C1, (𝑉𝑑𝑙,2=𝑉𝑑ℎ,1). In this 
 case, the arm of D1 of C2 is snapped down at the same time as 
@@ -540,38 +589,64 @@ C2 must be “00” except when C1, is snapped down, then D1 of
 C2 can be either “00”, “01”, “10” or “11” by varying the 
 release voltages.  Consequently, the number of accessible 
 hysteresis states increases by exactly 3.     
- 
+
+
 (𝑉1, 𝑉6, 𝑉3, 𝑉8): This case is similar to (𝑉1, 𝑉5, 𝑉3, 𝑉8). 
 (𝑉2, 𝑉6, 𝑉3, 𝑉8): This case is similar to (𝑉2, 𝑉5, 𝑉3, 𝑉8). 
 (𝑉2, 𝑉5, 𝑉4, 𝑉7): This case is similar to (𝑉2, 𝑉5, 𝑉3, 𝑉7). 
 (𝑉2, 𝑉5, 𝑉4, 𝑉8): This case is similar to (𝑉2, 𝑉5, 𝑉3, 𝑉8). 
 (𝑉2, 𝑉6, 𝑉4, 𝑉8): This case is similar to (𝑉2, 𝑉5, 𝑉3, 𝑉8).  
- 
- 
- 
- 
-  
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Fig. 6. Illustration of the proof of Lemma. 1 
- 
 
 Inductive step: adding a Cluster (changing the size of the 
 system from M to M+1 Clusters) extends the number of 
@@ -588,7 +663,6 @@ Let 𝑉δ, … , 𝑉Ψ be significantly independent transition
 voltage levels, ordered such that 𝑉δ <  𝑉γ < 𝑉β < 𝑉α < 𝑉ζ <  
 
 𝑉θ <  𝑉λ  < 𝑉ε < 𝑉φ< 𝑉Ω< 𝑉Ψ with |𝑉Ω− 𝑉φ |= 2𝛿𝑣 and 
-
 |𝑉ζ− 𝑉α|=2𝛿𝑣  .    Let 𝑉𝑑𝑙,𝑀 = 𝑉ε  , 𝑉𝑑ℎ,𝑀 = 𝑉φ and  𝑉𝑢𝑙,𝑀 
 =𝑉β,  𝑉𝑢ℎ,𝑀 =𝑉α. It follows that the snap-down  voltage 
 𝑉𝑑𝑙,𝑀+1 can have value 𝑉1  ∈  (𝑉φ ,𝑉Ω], or voltage 𝑉2  = 𝑉φ and 
@@ -604,7 +678,8 @@ voltages for CM+1 must hold: : (𝑉1, 𝑉5, 𝑉3, 𝑉7), (𝑉1, 𝑉5, 𝑉
 𝑉8), (𝑉1, 𝑉6, 𝑉3, 𝑉8), (𝑉2, 𝑉5, 𝑉3, 𝑉7), (𝑉2, 𝑉5, 𝑉3, 𝑉8), (𝑉2, 𝑉6, 
 𝑉3, 𝑉8), (𝑉2, 𝑉5, 𝑉4, 𝑉7), (𝑉2, 𝑉5, 𝑉4, 𝑉8) and (𝑉2, 𝑉6, 𝑉4, 𝑉8).    
 We examine each case separately:  
-      
+
+
 (𝑉1, 𝑉5, 𝑉3, 𝑉7): because of 𝑉𝑑𝑙,𝑀+1, 𝑉𝑑ℎ,𝑀+1 are greater 
 than the snap-down voltages of  C1, … , CM , (𝑉𝑑𝑙,𝑀+1 > 𝑉𝑑𝑙,𝑖, 
 𝑉𝑑ℎ,𝑖)  and (𝑉𝑑ℎ,𝑀+1 > 𝑉𝑑𝑙,𝑖,  𝑉𝑑ℎ,𝑖),  i ∈ ZM  where ZM = {1,…, 
@@ -624,7 +699,8 @@ CM+1 to “01”, “10” or “11” when C1,…, CM  are in state “11”.
 During all other states of the system the state of CM+1 must 
 remain  “00”.  Consequently,  the  number  of  accessible 
 hysteresis states increase by exactly 3. 
- 
+
+
 (𝑉1,𝑉5, 𝑉3, 𝑉8): This case is similar to (𝑉1, 𝑉5, 𝑉3, 𝑉7), 
 except that the arm of D1 of Cluster CM is released at the same 
 time as the arm of D2 of Cluster CM+1. As long as 𝑉𝑑ℎ,𝑀+1 > 
@@ -634,7 +710,8 @@ time as the arm of D2 of Cluster CM+1. As long as 𝑉𝑑ℎ,𝑀+1 >
 
 other clusters are in state “11”. As a consequence the number 
 of accessible hysteresis states increase by exactly 3.    
- 
+
+
 (𝑉2, 𝑉5, 𝑉3, 𝑉7): The snap-down voltage D1 of CM+1 is 
 equal to the snap-down voltage of D2 of CM, 𝑉𝑑𝑙,𝑀+1=𝑉𝑑ℎ,𝑀. 
 In this case, the arm of D1 of CM+1 is snapped down at the 
@@ -647,7 +724,8 @@ CM+1. As in the (𝑉1, 𝑉5, 𝑉3, 𝑉7) case, the state of CM+1 must be
 D1 of CM+1 can be either “00”, “01”, “10” or “11” by varying 
 the release voltages.  Consequently, the number of accessible 
 hysteresis states increases by exactly 3.          
-   
+
+
 (𝑉2, 𝑉5, 𝑉3, 𝑉8): This case is similar to (𝑉1, 𝑉5, 𝑉3, 𝑉7), 
 except that The snap-down voltage D1 of CM+1 is equal to the 
 snap-down voltage of D2 of CM, 𝑉𝑑𝑙,𝑀+1=𝑉𝑑ℎ,𝑀. In this case, 
@@ -661,13 +739,15 @@ be “00” except when C1, … , CM are all snapped down, then
 CM+1 can be either “00”, “01”, “10” or “11” by varying the 
 release  voltages.  Consequently,  the  number  of  accessible 
 hysteresis states increase by exactly 3.     
-     
+
+
 (𝑉2, 𝑉6, 𝑉3, 𝑉8): This case is similar to (𝑉2, 𝑉5, 𝑉3, 𝑉8). 
 (𝑉1, 𝑉6, 𝑉3, 𝑉8): This case is similar to (𝑉1, 𝑉5, 𝑉3, 𝑉8).  
 (𝑉2, 𝑉5, 𝑉4, 𝑉7): This case is similar to (𝑉2, 𝑉5, 𝑉3, 𝑉7). 
 (𝑉2, 𝑉5, 𝑉4, 𝑉8): This case is similar to (𝑉2, 𝑉5, 𝑉3, 𝑉8). 
 (𝑉2, 𝑉6, 𝑉4, 𝑉8): This case is similar to (𝑉2, 𝑉5, 𝑉3, 𝑉8). 
- 
+
+
 We have shown that adding a Cluster to a String-Cluster, 
 such  that  the  resulting  system  remains  a  String-Cluster, 
 increases the  number  of  accessible  hysteresis  states  by 
@@ -690,33 +770,32 @@ control pulses, 𝑃𝑗(𝑆) = (𝑉𝑎,1, 𝑉𝑎,2) with a decision variab
 where  𝑉δ, … , 𝑉Ω represent significantly independent control 
 voltage levels. (𝑆) selects the Hysteresis state of Cj:  
 
- 
- 
 ′00′   𝑤ℎ𝑒𝑛 𝑆 =0
-′01′
- Cj -Hysteresis-States = {       𝑤ℎ𝑒𝑛 𝑆 =1
-′                  (4) 
-′10   𝑤ℎ𝑒𝑛 𝑆 =2
+
+ C -Hysteresis-States = {′01′   𝑤ℎ𝑒𝑛 𝑆 =1       (4) 
+j                              ′10′   𝑤ℎ𝑒𝑛 𝑆 =2
 ′11′    𝑤ℎ𝑒𝑛 𝑆 =3
-  
-   
+
+
+
 We define 𝑃𝑗(𝑆) as 
- 
- 
-(𝑉𝑑𝑙,𝑗,𝑉+
-𝑢𝑙,𝑗)      𝑖𝑓 𝑗 ∈ 𝑍𝑀 , 𝑆=0 
- 
- (𝑉       +
-𝑑ℎ,𝑗,𝑉𝑢𝑙,𝑗)      𝑖𝑓 𝑗 ∈ 𝑍𝑀 , 𝑆 =1 
-𝑃𝑗(𝑆) =              +                                   
- (𝑉𝑑𝑙,𝑗,𝑉𝑢ℎ,𝑗)     𝑖𝑓 𝑗 ∈ 𝑍𝑀 , 𝑆 =2      (5) 
- (𝑉    ,𝑉+
-{   𝑑ℎ,𝑗   𝑢ℎ,𝑗)     𝑖𝑓 𝑗 ∈ 𝑍𝑀 , 𝑆 =3
-     
-      
-+                           +
-where 𝑉𝑢𝑙,𝑗 = 𝑉𝑢𝑙,𝑗 + 𝛿𝑣 and 𝑉𝑢ℎ,𝑗 = 𝑉𝑢ℎ,𝑗+ 𝛿𝑣.   
- 
+
+
+
+(𝑉𝑑𝑙,𝑗,𝑉𝑢𝑙+,𝑗)      𝑖𝑓 𝑗 ∈ 𝑍𝑀 , 𝑆=0 
+
+ (𝑉𝑑ℎ,𝑗,𝑉𝑢𝑙+,𝑗)      𝑖𝑓 𝑗 ∈ 𝑍𝑀 , 𝑆 =1 
+𝑃𝑗(𝑆) =              +                                  (5)  
+ (𝑉𝑑𝑙,𝑗,𝑉𝑢ℎ,𝑗)     𝑖𝑓 𝑗 ∈ 𝑍𝑀 , 𝑆 =2
+
+{(𝑉𝑑ℎ,𝑗,𝑉𝑢+ℎ,𝑗)     𝑖𝑓 𝑗 ∈ 𝑍𝑀 , 𝑆 =3
+
+
+
+
+where 𝑉𝑢𝑙+,𝑗 = 𝑉𝑢𝑙,𝑗 + 𝛿𝑣 and 𝑉𝑢+ℎ,𝑗 = 𝑉𝑢ℎ,𝑗+ 𝛿𝑣.   
+
+
 When  𝑆 =0, the first control pulse (𝑉𝑎,1) snaps down 
 the steering arms of all the Clusters Ci, i ∈ Zj-1, where Zj-1 = 
 {1,…, j-1},  and D1 of cluster Cj. The second control pulse 
@@ -728,43 +807,38 @@ devices D1 of Ck , k > j with 𝑉𝑑𝑙,𝑘 = 𝑉𝑑ℎ,𝑗 and the secon
 control pulse (𝑉𝑎,2) releases all the cluster Ck , k > j and the 
 device D1 of Cj that were snapped down by the first control 
 pulse when 𝑆 =1, because in the case when 𝑉𝑑𝑙,𝑘 = 𝑉𝑑ℎ,𝑗, it 
-𝑉         +
-must hold that  𝑢𝑙,𝑗 < 𝑉𝑢𝑙,𝑗 ≤   𝑉𝑢𝑙,𝑘< 𝑉𝑢ℎ,𝑘.  
- 
+must hold that 𝑉𝑢𝑙,𝑗 < 𝑉𝑢𝑙+,𝑗 ≤   𝑉𝑢𝑙,𝑘< 𝑉𝑢ℎ,𝑘.  
+
+
 For 𝑆 =2, the first control pulse (𝑉𝑎,1) snaps down the 
 steering arms of all the Clusters Ci, i ∈ Zj-1, where Zj-1 = {1,…, 
 j-1},  and D1 of cluster Cj. The second control pulse (𝑉𝑎,2) 
 keeps all the Clusters Ci, i ∈ Zj-1 and D1 of cluster Cj snapped 
 down while all other clusters are released.  
- 
+
+
 Similarly, The first control pulse (𝑉𝑎,1) snaps down the 
 steering arms of all the Clusters Ci, i ∈ Zj, as well as any 
 devices D1 of Ck , k > j with 𝑉𝑑𝑙,𝑘 = 𝑉𝑑ℎ,𝑗 and the second 
 control pulse (𝑉𝑎,2) releases all the cluster Ck, k > j that were  
 snapped down by the first control pulse when 𝑆 =3, because 
-𝑉      𝑉                           𝑉       𝑉+
-in the case when  𝑑𝑙,𝑘=  𝑑ℎ,𝑗, it must hold that  𝑢𝑙,𝑗 <  𝑢𝑙,𝑗 ≤
+in the case when 𝑉𝑑𝑙,𝑘= 𝑉𝑑ℎ,𝑗, it must hold that 𝑉𝑢𝑙,𝑗 < 𝑉𝑢𝑙+,𝑗 ≤
 𝑉𝑢𝑙,𝑘.  
 The 𝑛+3 control primitives generated by 𝑃𝑗(𝑆) form a 
 (𝑛+3)×(𝑛) control matrix (𝐴).  An example of such a 
 control matrix for two clusters (Four Devices) is:  
- 
- 
- 
- 
 
 
 
 0   0   0   0
- 0   1   0   0 
-         
+0   1   0   0
+
  1   0   0   0 
-𝐴= 1   1   0   0                (6) 
- 
+𝐴= 1   1   0   0                 (6) 
  1   1   0   1 
- 1   1   1   0 
+1   1   1   0
 [1   1   1   1]
- 
+
 We refer to 𝐴 as the String-Cluster control matrix, the 
 𝑛+3control primitives contained in M as the String-Cluster 
 control primitives, and the 𝑛+3 hysteresis states accessible 
@@ -781,38 +855,60 @@ maneuver two robots simultaneously which results in time
 efficient and also reconfigurable system because the first two 
 robots that create the assembly point need not to be in a 
 specific configuration.  
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Fig. 7.    Illustration of control cycle in String-Cluster System 
- 
+
+
 
 B. Electromechanically SATurated Cluster system 
 (ESATC) 
 
- 
- Lemma. 2: Any M- Cluster system with no degenerate pairs 
+
+Lemma. 2: Any M- Cluster system with no degenerate pairs 
 of clusters can be sorted such that all “n+3=2M+3” String-
 Cluster hysteresis states are accessible, where M= number 
 of Clusters, n = number of Microrobots and M=n/2.  
- 
+
+
 Proof: By Construction:  
- 
+
+
 Consider an M- Cluster system with(𝐾) independent snap-
 down  voltages,  and  (𝐿) independent  release  voltages. 
 Assuming no degenerate pairs of clusters, it follows that n = 
@@ -826,10 +922,7 @@ ensures  a  monotonic  increase  of  𝑉𝑢𝑙,𝑖 and  𝑉𝑢ℎ,𝑖 wit
 increasing  index    i.    We  call  such  a  system 
 Electromechanically SATurated Cluster system (ESATC). In 
 𝐿                         𝐾
-this system 𝑛 = 2 (𝐾−1)( 
-2) or 𝑛 = 2 (𝐿−1)( 
-2).  
-
+this system 𝑛 = 2 (𝐾−1)( 2) or 𝑛 = 2 (𝐿−1)( 2).  
 For such an order, there exists a formula𝑃𝑗(𝑆), shown in 
 equation  (8),  which  generates  all (𝑛+3) String-Cluster 
 control  primitives.  𝑃𝑗(𝑆) is defined  by  a  control  cycle 
@@ -841,35 +934,35 @@ presented in [6]. The control cycle for each control primitive
 defined by equation (8) contains a sequence exactly 6 control 
 pulses.  Again (𝑆) selects  the  Hysteresis  state  of  Cj in 
 Equation.  7. We  construct  the  control  primitive 𝑃𝑗(𝑆) in 
-𝑉         𝑀𝐴𝑋{𝑉    }                 𝑉+
-Equation. 8, Where  𝑚𝑎𝑥 =            𝑑ℎ,𝑗 , 1≤ j ≤ n ;  𝑢𝑙,𝑗 = 
-𝑉       𝛿𝑣 𝑉+      𝑉               −                              −
-𝑢𝑙,𝑗 +   ,  𝑢ℎ,𝑗 =  𝑢ℎ,𝑗+ 𝛿𝑣, 𝑉𝑢𝑙,𝑗 = 𝑉𝑢𝑙,𝑗 − 𝛿𝑣 and   𝑉𝑑𝑙,𝑗 = 
+Equation. 8, Where 𝑉𝑚𝑎𝑥 =  𝑀𝐴𝑋{𝑉𝑑ℎ,𝑗}, 1≤ j ≤ n ; 𝑉𝑢𝑙+,𝑗 = 
+𝑉𝑢𝑙,𝑗 + 𝛿𝑣, 𝑉𝑢+ℎ,𝑗 = 𝑉𝑢ℎ,𝑗+ 𝛿𝑣, 𝑉𝑢𝑙−,𝑗 = 𝑉𝑢𝑙,𝑗 − 𝛿𝑣 and   𝑉𝑑𝑙−,𝑗 = 
 𝑉𝑑𝑙,𝑗 - 𝛿𝑣.    
- 
+
+
 𝑃𝑗(𝑆) generates 𝑛+3 control primitives that form a 
 String-Cluster matrix, by causing all clusters Ci (i< j) to be 
 in the state “11”, and all cluster Ci (i > j) to be in the state 
 “00”, while based on the value of (𝑆) it assigns the states 
 “01”, “10” or“11” to Cj. Consider the base case, where all Cj, 
 (j ∈ ZM) are in state “00”.  
-   
+
+
 Proof:   
-We define Group (Gi), ( 𝑖 ∈ 𝜇 ={1,…,𝑀⁄𝐾−1} , Where 
+We define Group (Gi), ( 𝑖 ∈ 𝜇 ={1,…,𝑀⁄        } , Where 
+𝐾−1
 𝑀 is  the  number  of  clusters  and 𝑘  is  the  number  of 
 independent snap-down voltages) to be the set of all clusters 
 Cj, (j ∈ ZM) with equal 𝑉𝑢𝑙,𝑗 and 𝑉𝑢ℎ,𝑗.   
-    
- 
-𝐺𝑖 
 
-𝐶𝑙𝑢𝑠𝑡𝑒𝑟           ∀𝐶𝑙𝑢𝑠𝑡𝑒𝑟𝑘,𝐶𝑙𝑢𝑠𝑡𝑒𝑟𝑚   ∈ 𝐺
-      𝑖,
+
+
+𝐺𝑖 
+𝐶𝑙𝑢𝑠𝑡𝑒𝑟                ∀𝐶𝑙𝑢𝑠𝑡𝑒𝑟𝑘,𝐶𝑙𝑢𝑠𝑡𝑒𝑟𝑚   ∈ 𝐺𝑖,
 ={          |                                                               } 
 ∈𝑁𝐺𝑀  (𝑉𝑢𝑙,𝑗   = 𝑉𝑢𝑙,𝑘; 𝑉𝑢ℎ,𝑗   =  𝑉𝑢𝑙,𝑘   ); 𝑚,𝑘 ∈𝑍𝑀  
- 
-                                                                            (7) 
 
+
+                                                                            (7) 
 We make the inductive argument:  
 Base condition: Base case keeps all cluster Cj, (j ∈ ZM) in 
 state“00”. 
@@ -884,49 +977,32 @@ all clusters (C1, …, Cj-1) are in state “11” and all cluster Ci, (i
 
 
 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
-
 Fig. 8. Example of an ESATC 
- 
- 
+
+
+
 > j) are in state “00”.  The 𝑉𝑢𝑙,𝑖 , 𝑉𝑢ℎ,𝑖and 𝑉𝑑𝑙,𝑖, 𝑉𝑑ℎ,𝑖, i ∈ ZM  
 sorting implies that, for a cluster Ck , k > j, only six cases are 
 possible with respect to its transition voltages: 
- 
+
+
 (a)  𝑉𝑑𝑙,𝑗< 𝑉𝑑ℎ,𝑗 < 𝑉𝑑𝑙,𝑘 < 𝑉𝑑ℎ,𝑘 and 𝑉𝑢𝑙,𝑗 =𝑉𝑢𝑙,𝑘 < 
 𝑉𝑢ℎ,𝑗= 𝑉𝑑ℎ,𝑘 (e.g., j = 1 and k = 3 in Fig. 8)  
-  
+
+
 (b)  𝑉𝑑𝑙,𝑗< 𝑉𝑑ℎ,𝑗 < 𝑉𝑑𝑙,𝑘< 𝑉𝑑ℎ,𝑘 and 𝑉𝑢𝑙,𝑗< 𝑉𝑢ℎ,𝑗< 
 𝑉𝑢𝑙,𝑘< 𝑉𝑢ℎ,𝑘 (e.g., j = 1 and k = 6 in Fig. 8)   
- 
+
 
 (c)  𝑉𝑑𝑙,𝑗< 𝑉𝑑ℎ,𝑗= 𝑉𝑑𝑙,𝑘 < 𝑉𝑑ℎ,𝑘 and 𝑉𝑢𝑙,𝑗 =𝑉𝑢𝑙,𝑘 < 
 𝑉𝑢ℎ,𝑗= 𝑉𝑢ℎ,𝑘 (e.g., j = 2 and k = 3 in Fig. 8) 
- 
+
+
 ′00′   𝑤ℎ𝑒𝑛 𝑆 =0
-′                     (8) 
-Cj -Hysteresis-States = {′01   𝑤ℎ𝑒𝑛 𝑆 =1
-′            
-′10   𝑤ℎ𝑒𝑛 𝑆 =2
+
+C -Hysteresis-States = {′01′   𝑤ℎ𝑒𝑛 𝑆 =1  (8) 
+j                              ′10′   𝑤ℎ𝑒𝑛 𝑆 =2
 ′11′   𝑤ℎ𝑒𝑛 𝑆 =3
- 
- 
 
 
 
@@ -934,7 +1010,10 @@ Cj -Hysteresis-States = {′01   𝑤ℎ𝑒𝑛 𝑆 =1
 
 
 
- 
+
+
+
+
 
 
 set Cj to state “01” and Ck =”00” and will release D1 of 
@@ -942,9 +1021,9 @@ all clusters Ci = (i ≤ j) with𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗.  Finally,
 𝑉𝑑𝑙,𝑗+and 𝑉𝑢ℎ,𝑗+will set Cj to state “11” again while 
 keeping Ck in state if 𝑆 =0 then 
 𝑃𝑗(𝑆)=
-
 (𝑉𝑚𝑎𝑥,  𝑉𝑢𝑙,𝑗−,  𝑉𝑑𝑙,𝑗, 𝑉𝑢𝑙,𝑗+, 𝑉𝑑𝑙, 𝑗−, 𝑉𝑢ℎ, 𝑗+)  :  
-  
+
+
 Case (a), (b):  𝑉𝑑𝑙,𝑗 sets cluster Cj to state “10”, while Ck, k 
 > j is in state “00”. 𝑉𝑢𝑙,𝑗+ will set Cj to state “00” and will 
 
@@ -953,75 +1032,74 @@ system with k = 4 and l = 4.
 
 
 
- 
 (d)  𝑉𝑑𝑙,𝑗< 𝑉𝑑ℎ,𝑗= 𝑉𝑑𝑙,𝑘 < 𝑉𝑑ℎ,𝑘 and 𝑉𝑢𝑙,𝑗< 𝑉𝑢ℎ,𝑗 < 
 𝑉𝑢𝑙,𝑘< 𝑉𝑢ℎ,𝑘 (e.g., j = 2 and k = 6 in Fig. 8)  
- 
+
 
 (e)  𝑉𝑑𝑙,𝑘 < 𝑉𝑑ℎ,𝑘 ≤ 𝑉𝑑𝑙,𝑗< 𝑉𝑑ℎ,𝑗 and 𝑉𝑢𝑙,𝑗< 𝑉𝑢ℎ,𝑗 < 
 𝑉𝑢𝑙,𝑘 < 𝑉𝑢ℎ,𝑘 (e.g., j = 2 and k = 4 in Fig. 8) 
- 
+
 
 (f)  𝑉𝑑𝑙,𝑗= 𝑉𝑑𝑙,𝑘= < 𝑉𝑑ℎ,𝑗= 𝑉𝑑ℎ,𝑘 and 𝑉𝑢𝑙,𝑗< 𝑉𝑢ℎ,𝑗 < 
 𝑉𝑢𝑙,𝑘< 𝑉𝑢ℎ,𝑘 (e.g., j = 1 and k = 4 in Fig. 8).  
- 
- 
+
+
+
 
 
 𝑃𝑗(𝑆)= 
-(𝑉𝑚𝑎𝑥,  𝑉𝑢𝑙,𝑗−,  𝑉𝑑𝑙,𝑗, 𝑉𝑢𝑙,𝑗+, 𝑉𝑑𝑙, 𝑗−, 𝑉𝑢ℎ, 𝑗+)  
- 
+
+ (𝑉𝑚𝑎𝑥,  𝑉𝑢𝑙,𝑗−,  𝑉𝑑𝑙,𝑗, 𝑉𝑢𝑙,𝑗+, 𝑉𝑑𝑙, 𝑗−, 𝑉𝑢ℎ, 𝑗+)  
                        𝑖𝑓 𝑗 ∈ 𝑍𝑀 ,   𝑆 =0    
   (𝑉𝑚𝑎𝑥, 𝑉𝑢𝑙,𝑗−, 𝑉𝑑ℎ,𝑗, 𝑉𝑢𝑙,𝑗+, 𝑉𝑑𝑙,𝑗−, 𝑉𝑢ℎ,𝑗+)    
- 𝑖𝑓 𝑗 ∈ 𝑍𝑀 ,     𝑆 =1
-(𝑉𝑚𝑎𝑥, 𝑉𝑢𝑙,𝑗−, 𝑉𝑑𝑙,𝑗, 𝑉𝑢ℎ,𝑗+, 𝑉𝑢ℎ,𝑗+          +   
-                                                         , 𝑉𝑢ℎ,𝑗  )   
-                𝑖𝑓 𝑗 ∈ 𝑍𝑀 ,      𝑆 =2 
-                     −
- (𝑉𝑚𝑎𝑥, 𝑉𝑢𝑙,𝑗 , 𝑉𝑑ℎ,𝑗, 𝑉𝑢𝑙,𝑗+, 𝑉𝑑𝑙,𝑗+, 𝑉𝑢ℎ,𝑗+)   
+𝑖𝑓 𝑗 ∈ 𝑍𝑀 ,     𝑆 =1              
+ (𝑉𝑚𝑎𝑥, 𝑉𝑢𝑙,𝑗−, 𝑉𝑑𝑙,𝑗, 𝑉𝑢ℎ,𝑗+, 𝑉𝑢ℎ,𝑗+, 𝑉𝑢ℎ,𝑗+)   
+𝑖𝑓 𝑗 ∈ 𝑍𝑀 ,      𝑆 =2 
+ (𝑉𝑚𝑎𝑥, 𝑉𝑢𝑙,𝑗−, 𝑉𝑑ℎ,𝑗, 𝑉𝑢𝑙,𝑗+, 𝑉𝑑𝑙,𝑗+, 𝑉𝑢ℎ,𝑗+)   
 {               𝑖𝑓 𝑗 ∈ 𝑍𝑀 ,       𝑆=3
- 
+
+
                                                                     (9) 
 
-   
+
 release D1 of all clusters Ci (i ≤ j) with 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗. By 
 applying the remaining control primitives𝑉𝑑𝑙,𝑗−,𝑉𝑢ℎ,𝑗+, all 
 D1 of all clusters Ci (i ≤ j) with 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗 will snapped 
 down while keeping the state of Cj in “00”.      
- 
- if  𝑆 =1 then  
+
+
+if  𝑆 =1 then  
 𝑃𝑗 (𝑆)= 
  (𝑉𝑚𝑎𝑥, 𝑉𝑢𝑙,𝑗−,𝑉𝑑ℎ,𝑗,𝑉𝑢𝑙,𝑗+,𝑉𝑑𝑙,𝑗−,𝑉𝑢ℎ,𝑗+):  
-   
-
-                                                                                                                   
 
 
 
 It is clear that in case (a) and (b): 𝑉𝑑ℎ,𝑗 sets cluster Cj to state       control primitives 𝑉𝑑𝑙,𝑗−,𝑉𝑢ℎ,𝑗+, all D1 of all clusters Ci (i 
-“11”, while Csd, k > j is in state “00”.  Consequently, 𝑉𝑢𝑙,𝑗+
-k                                                 ≤ j) with 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗 will snapped down while keeping 
+“11”, while Cksd, k > j is in state “00”.  Consequently, 𝑉𝑢𝑙,𝑗+            ≤ j) with 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗 will snapped down while keeping 
 will set Cj to state “01” and will release D1 of all clusters Ci       the state of Cj in “01”.    Case (c), (d):   𝑉𝑑ℎ,𝑗 sets cluster Cj 
-(i ≤ j) with 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗.  By  applying  the  remaining       to state “11” and C                                                  +
-k,  k > j to “10”.  Consequently, 𝑉𝑢𝑙,𝑗   
+(i ≤ j) with 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗.  By  applying  the  remaining       to state “11” and Ck,  k > j to “10”.  Consequently, 𝑉𝑢𝑙,𝑗+  
 
 
- 
- 
+
+
+
 Table 1: Comparison of the control voltage bandwith requirements, ξn , the number of control pulses of n-robot NHG, Reconfigurability and Multi-shape-
 Assembly of STRING, SESat systems, String-Cluster and SESATC. 
 
- 
-                                           NHG    STRING
-                                 ξn                      2n          n+1 
-             No.  control pulses            1             2 
-           Number of robots with        10           19 
-                               ξn=20 
-                        Reconfigurable            YES          NO 
-                  Multi-shapes-Assembly      YES          NO 
- 
- 
- 
+NHG    STRING
+ξn                      2n          n+1 
+
+No.  control pulses            1             2 
+Number of robots with        10           19 
+ξn=20 
+Reconfigurable            YES          NO 
+Multi-shapes-Assembly      YES          NO 
+
+
+
+
+
+
 will set Cj to state “01” and Ck =”00” and will release D1 of 
 all clusters Ci (i ≤ j) with 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗. By applying the 
 remaining control primitives𝑉𝑑𝑙,𝑗−,𝑉𝑢ℎ,𝑗+, all D1 of all 
@@ -1033,33 +1111,33 @@ D1 of all clusters Ci (i ≤ j) with 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗. By app
 the remaining control primitives𝑉𝑑𝑙,𝑗−,𝑉𝑢ℎ,𝑗+, all D1 of all 
 clusters Ci (i ≤ j) 𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗 will snapped down while 
 keeping the state of Cj in “01”.   
- 
- if  𝑆 =2  then  
+
+
+if  𝑆 =2  then  
 𝑃𝑗 (𝑆)= 
 (𝑉𝑚𝑎𝑥,𝑉𝑢𝑙,𝑗−,𝑉𝑑𝑙,𝑗,𝑉𝑢ℎ,𝑗+,𝑉𝑢ℎ,𝑗+,𝑉𝑢ℎ,𝑗+):   
- 
+
+
 Case (a), (b):  𝑉𝑑𝑙,𝑗 sets cluster Cj to state “10”, while Ck, k 
 > j is in state “00”. Consequently, 𝑉𝑢ℎ,𝑗+ will keep Cj in 
 state “01”. Case (c), (d): 𝑉𝑑𝑙,𝑗 sets cluster Cj to state “10”, 
-while C, k > j is in state “00”. Consequently, 𝑉𝑢ℎ,𝑗+
-k                                       will 
+while Ck, k > j is in state “00”. Consequently, 𝑉𝑢ℎ,𝑗+ will 
 keep Cj in state “01”.  Case (e), (f): 𝑉𝑑𝑙,𝑗 sets cluster Cj to 
 state “10”, while Ck, k > j is in state “11”. Consequently, 
 𝑉𝑢ℎ,𝑗+ will keep Cj in state “01” and release cluster Ck.  
 if  𝑆 =3 then   
- 
+
+
 𝑃𝑗 (𝑆)= 
  (𝑉𝑚𝑎𝑥 , 𝑉𝑢𝑙,𝑗−,   𝑉𝑑ℎ,𝑗,𝑉𝑢𝑙,𝑗+,𝑉𝑑𝑙,𝑗+,𝑉𝑢ℎ,𝑗+):  
- 
+
+
 Case (a), (b): 𝑉𝑑ℎ,𝑗 sets cluster Cj to state “11”, while Ck, k 
 > j is in state “00”.   Consequently, 𝑉𝑢𝑙,𝑗+ will set Cj to state 
 “01”  and  will  release  D1 of  all clusters  Ci  = (i ≤ j) 
 with𝑉𝑢ℎ,𝑖 = 𝑉𝑢ℎ,𝑗. Finally, by applying 𝑉𝑑𝑙,𝑗+,𝑉𝑢ℎ,𝑗+, 
 
- 
-
-
-        SESat        String-Cluster          SESATC 
+SESat        String-Cluster          SESATC 
 ⌈2√𝑛⌉               n+2                ⌈1+ 2√𝑛 ⌉ 
 O(n)                  2                         6 
 100                  18                       90 
@@ -1073,22 +1151,26 @@ Cj will be in state “11” and all clusters Ci = (i ≤ j) will be
 snapped down.     
 
 
- 
- 
- 
+
+
+
+
 Case (c), (d): 𝑉𝑑ℎ,𝑗 sets cluster Cj to state “11” and Ck,  k > 
 j to “10”.  Consequently, 𝑉𝑢𝑙,𝑗+ will “00”.   
 Case (e), (f): 𝑉𝑑ℎ,𝑗 sets cluster Cj to state “11” and Ck,  k > j 
 to “11”.  By applying 𝑉𝑢𝑙,𝑗+,𝑉𝑑𝑙,𝑗+,𝑉𝑢ℎ,𝑗+  Cj will be in 
 “11” while Ck is released.     
- 
- 
- 
+
+
+
+
+
 Theorem : An algorithm that can plan the motion (i.e., finds 
 the control sequence) for a String-Cluster system can be 
 applied to plan the motion for any (ESATC) system of 
 stress-engineered microrobots. 
- 
+
+
 Proof:  A consequence of Lemma 2; a string-cluster control 
 matrix can be constructed for any M-(ESATC) microrobotic 
 system.  
@@ -1102,7 +1184,7 @@ microrobots, is 𝑛 = (𝐾−1)( 𝐿) or 𝑛 = (𝐾)( 𝐿−1). It follows
 
 that n is  maximized  when 𝐿 = 𝐾 = 𝜉𝑛/2,  and 𝑛= ⌈1+
 
- √1+4𝑛 ⌉ ≈ ⌈1+ √4𝑛 ⌉= ⌈1+ 2√𝑛 ⌉. We call such a 
+√1+4𝑛 ⌉ ≈ ⌈1+ √4𝑛 ⌉= ⌈1+ 2√𝑛 ⌉. We call such a 
 system symmetric Electromechanically SATurated Cluster 
 system (SESATC). Table. 1 compares the control voltage 
 bandwidth requirements, the number of control pulses in the 
@@ -1114,7 +1196,7 @@ STRING, c) SESat, d) String-Cluster and e) SESATC.
 
 V. CONCLUSION 
 
- 
+
 In this paper, we presented a comprehensive analysis of the 
 scalability  of  different  methods  for  differentiating  the 
 behavior of MicroStressBots using electrostatic hysteresis. 
@@ -1130,7 +1212,7 @@ number of MEMS microrobots.
 
 REFERENCES 
 
- 
+
 
 [1]  P.  Dario,  R.  Valeggi,  M.C.  Carozza,  M.C.  Montesi  and  M. 
 Cocco,”Microactuators for microrobots:a critical survey,”Journal of 
@@ -1159,7 +1241,7 @@ VIII, 2012.
 for microassembly using stress-engineered,” International Journal of 
 Robotics Research, vol. 32, pp. 218–246, January 2013. 
 
- 
+
 
 [7]  B.R. Donald,C.G. Levey,C. McGray,D. Rus and M. Sinclair, “Power 
 delivery and locomotion of untethered microactuators,” Journal of  
@@ -1199,12 +1281,6 @@ resonant gate transistor,” IEEE Transactions on Electron Devices vol.
 [15] B. R. Donald, C. G. Levey, and I. Paprotny, “Planar microassembly by 
 parallel  actuation  of  MEMS  microrobots,”  Journal  of 
 Microelectromechanical Systems, vol. 17, pp. 789–808, August 2008. 
-
- 
-
- 
- 
- 
 
 
 

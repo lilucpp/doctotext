@@ -6686,10 +6686,10 @@ struct PDFParser::Implementation
 			struct TextElement
 			{
 				std::string m_text;
-				double m_x, m_y, m_width, m_height;
+				double m_x, m_y, m_width, m_height, m_base_y;
 				double m_space_size;
 
-				TextElement(double x, double y, double w, double h, double space_size, const std::string& text)
+				TextElement(double x, double y, double w, double h, double space_size, const std::string& text, double base_y = 0.0)
 				{
 					#warning TODO: We have position and size for each string. We can use those values to improve parser
 					m_x = correctSize(x);
@@ -6698,6 +6698,7 @@ struct PDFParser::Implementation
 					m_width = correctSize(w);
 					m_height = correctSize(h);
 					m_space_size = space_size;
+					m_base_y = (base_y != 0.0) ? correctSize(base_y) : m_y;
 				}
 
 				double correctSize(double value)
@@ -6718,20 +6719,18 @@ struct PDFParser::Implementation
 
 				bool operator < (const TextElement& compared) const
 				{
-					double tol = std::max(4.0, std::max(m_height, compared.m_height) * 0.5);
-					if (std::abs(m_y - compared.m_y) > tol)
+					if (m_base_y != compared.m_base_y)
 					{
-						return m_y > compared.m_y;
+						return m_base_y > compared.m_base_y;
 					}
 					return m_x < compared.m_x;
 				}
 
 				bool operator > (const TextElement& compared) const
 				{
-					double tol = std::max(4.0, std::max(m_height, compared.m_height) * 0.5);
-					if (std::abs(m_y - compared.m_y) > tol)
+					if (m_base_y != compared.m_base_y)
 					{
-						return m_y < compared.m_y;
+						return m_base_y < compared.m_base_y;
 					}
 					return m_x > compared.m_x;
 				}
@@ -6882,7 +6881,7 @@ struct PDFParser::Implementation
 
 				bool add_charspace = false;
 				double str_width = 0.0, str_height = 0.0;
-				double x_pos = 0.0, y_pos = 0.0;
+				double x_pos = 0.0, y_pos = 0.0, base_y = 0.0;
 				std::string output;
 				bool first = true, last = false;
 				double space_size = 1.5;	//default space size
@@ -6930,6 +6929,7 @@ struct PDFParser::Implementation
 							{
 								x_pos = x0 < x1 ? x0 : x1;
 								y_pos = y0 < y1 ? y0 : y1;
+								base_y = cid_matrix[5];
 								first = false;
 							}
 							if (last)
@@ -6951,7 +6951,7 @@ struct PDFParser::Implementation
 						}
 					}
 				}
-				TextElement new_element(x_pos, y_pos, str_width, str_height, space_size, output);
+				TextElement new_element(x_pos, y_pos, str_width, str_height, space_size, output, base_y);
 				m_text_elements.insert(new_element);
 			}
 
@@ -7016,48 +7016,129 @@ struct PDFParser::Implementation
 				}
 			}
 
+			struct TextLine
+			{
+				double m_base_y;
+				double m_min_y;
+				double m_height;
+				std::vector<TextElement> m_elements;
+
+				TextLine(const TextElement& e)
+					: m_base_y(e.m_base_y), m_min_y(e.m_y), m_height(e.m_height)
+				{
+					m_elements.push_back(e);
+				}
+			};
+
 			static void formatTextElements(const std::multiset<TextElement>& elements, std::string& output)
 			{
-				std::multiset<TextElement>::const_iterator it = elements.begin();
-				bool first = true;
-				double x_end = 0.0, y = 0.0, x_begin = 0.0;
-				while (it != elements.end())
+				if (elements.empty())
+					return;
+
+				// 1. Cluster elements into lines based on baseline proximity
+				std::vector<TextLine> lines;
+				const double tol = 5.5; // robust tolerance for superscripts/subscripts
+
+				for (std::multiset<TextElement>::const_iterator it = elements.begin(); it != elements.end(); ++it)
 				{
-					//some minimum values for new line and space. Calculated experimentally
-					double new_line_size = (*it).m_height * 0.75 < 4.0 ? 4.0 : (*it).m_height * 0.75;
-					double space_size = (*it).m_space_size < 1.0 ? 1.0 : (*it).m_space_size;
-					space_size *= 2.0;	//decrease number of spaces
-					if (!first)
+					if (it->m_text.empty())
+						continue;
+
+					bool is_ws = (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos);
+
+					TextLine* best_line = NULL;
+					double best_dist = 1e9;
+					for (size_t li = 0; li < lines.size(); ++li)
 					{
-						double dx = (*it).m_x - x_end;
-						double dy = y - ((*it).m_y + (*it).m_height / 2);
-						if (dy >= new_line_size)
+						double dist = std::abs(it->m_base_y - lines[li].m_base_y);
+						if (dist <= tol && dist < best_dist)
 						{
-							while (dy >= new_line_size)
-							{
-								output += '\n';
-								dy -= new_line_size;
-							}
+							best_dist = dist;
+							best_line = &lines[li];
 						}
-						else if ((*it).m_x < x_begin)	//force new line
+					}
+
+					if (best_line)
+					{
+						best_line->m_elements.push_back(*it);
+						if (it->m_y < best_line->m_min_y)
+							best_line->m_min_y = it->m_y;
+						if (!is_ws && it->m_height > best_line->m_height)
+						{
+							best_line->m_height = it->m_height;
+							best_line->m_base_y = it->m_base_y;
+						}
+					}
+					else if (!is_ws)
+					{
+						lines.push_back(TextLine(*it));
+					}
+				}
+
+				if (lines.empty())
+					return;
+
+				// 2. Sort lines from top to bottom (m_base_y descending)
+				std::sort(lines.begin(), lines.end(), [](const TextLine& a, const TextLine& b) {
+					return a.m_base_y > b.m_base_y;
+				});
+
+				// 3. Output lines
+				double prev_center_y = lines[0].m_min_y + lines[0].m_height / 2.0;
+				for (size_t li = 0; li < lines.size(); ++li)
+				{
+					TextLine& line = lines[li];
+
+					// Sort elements within the line from left to right (m_x ascending)
+					std::sort(line.m_elements.begin(), line.m_elements.end(), [](const TextElement& a, const TextElement& b) {
+						if (std::abs(a.m_x - b.m_x) > 0.5)
+							return a.m_x < b.m_x;
+						return a.m_base_y > b.m_base_y;
+					});
+
+					if (li > 0)
+					{
+						double cur_center_y = line.m_min_y + line.m_height / 2.0;
+						double dy = prev_center_y - cur_center_y;
+						double new_line_size = line.m_height * 0.75 < 4.0 ? 4.0 : line.m_height * 0.75;
+						int newlines = 0;
+						while (dy >= new_line_size)
+						{
+							output += '\n';
+							dy -= new_line_size;
+							newlines++;
+						}
+						if (newlines == 0)
 						{
 							output += '\n';
 						}
-						else if (dx >= space_size)
+						prev_center_y = cur_center_y;
+					}
+
+					double x_end = 0.0;
+					bool first_elem = true;
+					for (size_t ei = 0; ei < line.m_elements.size(); ++ei)
+					{
+						const TextElement& elem = line.m_elements[ei];
+						double space_size = elem.m_space_size < 1.0 ? 1.0 : elem.m_space_size;
+						space_size *= 2.0;
+
+						if (!first_elem)
 						{
-							while (dx >= space_size)
+							double dx = elem.m_x - x_end;
+							if (dx >= space_size)
 							{
-								dx -= space_size;
-								output += ' ';
+								while (dx >= space_size)
+								{
+									output += ' ';
+									dx -= space_size;
+								}
 							}
 						}
+						output += elem.m_text;
+						first_elem = false;
+						x_end = elem.m_x + elem.m_width;
 					}
-					output += (*it).m_text;
-					first = false;
-					x_begin = (*it).m_x;
-					x_end = x_begin + (*it).m_width;
-					y = (*it).m_y + (*it).m_height / 2;
-					++it;
 				}
 			}
 
