@@ -37,6 +37,7 @@
 #include "data_stream.h"
 #include "exception.h"
 #include <cmath>
+#include <algorithm>
 #include <cstdint>
 #include <stdint.h>
 #include <iostream>
@@ -100,6 +101,8 @@ static void normalize_hex_char(char& ch)
 
 static std::string unicode_codepoint_to_utf8(unsigned int codepoint)
 {
+	if (codepoint == 0)
+		return "";
 	char out[4];
 	if (codepoint < 0x80)
 	{
@@ -119,7 +122,7 @@ static std::string unicode_codepoint_to_utf8(unsigned int codepoint)
 		out[2] = 0x80 | (codepoint & 0x0000003F);
 		return std::string(out, 3);
 	}
-	else
+	else if (codepoint <= 0x10FFFF)
 	{
 		out[0] = 0xF0 | (codepoint >> 18);
 		out[1] = 0x80 | ((codepoint & 0x0003FFFF) >> 12);
@@ -201,14 +204,19 @@ static std::string utf16be_to_utf8(std::string& utf16be)
 	std::string ret;
 	for (unsigned int index = 0; index < utf16be.length(); index += 4)
 	{
-		if (utf16be[index] == 'D' && utf16be[index + 1] == '8' && index + 8 <= utf16be.length())
+		if ((utf16be[index] == 'D' || utf16be[index] == 'd') &&
+			((utf16be[index + 1] >= '8' && utf16be[index + 1] <= '9') ||
+			 (utf16be[index + 1] >= 'A' && utf16be[index + 1] <= 'B') ||
+			 (utf16be[index + 1] >= 'a' && utf16be[index + 1] <= 'b')) &&
+			index + 8 <= utf16be.length())
 		{
 			utf16 = hex_string_to_uint(&utf16be[index], 8);
 			index += 4;
 		}
 		else
 			utf16 = hex_string_to_uint(&utf16be[index], 4);
-		ret += unichar_to_utf8(utf16);
+		if (utf16 != 0)
+			ret += unichar_to_utf8(utf16);
 	}
 	return ret;
 }
@@ -3040,8 +3048,6 @@ struct PDFParser::Implementation
 								else
 									filter_options.push_back(decode_params_entry->getDictionary());
 							}
-							else
-								filter_options.push_back(NULL);
 
 							if (filter_entry->isArray())
 							{
@@ -3051,6 +3057,9 @@ struct PDFParser::Implementation
 							}
 							else
 								filters.push_back(filter_entry->getName());
+
+							if (!decode_params_entry)
+								filter_options.resize(filters.size(), NULL);
 						}
 						catch (doctotextex::CustomException& ex)
 						{
@@ -4604,7 +4613,8 @@ struct PDFParser::Implementation
 					if (ch == '%')
 					{
 						skipComment();
-						break;
+						ch = 0;
+						continue;
 					}
 					else if (reading_key && ch == '/')
 					{
@@ -6530,7 +6540,8 @@ struct PDFParser::Implementation
 
 				bool operator < (const TextElement& compared) const
 				{
-					if (std::abs(m_y - compared.m_y) > 4.0)	//tolerace
+					double tol = std::max(4.0, std::max(m_height, compared.m_height) * 0.5);
+					if (std::abs(m_y - compared.m_y) > tol)
 					{
 						return m_y > compared.m_y;
 					}
@@ -6539,7 +6550,8 @@ struct PDFParser::Implementation
 
 				bool operator > (const TextElement& compared) const
 				{
-					if (std::abs(m_y - compared.m_y) > 4.0) //tolerace
+					double tol = std::max(4.0, std::max(m_height, compared.m_height) * 0.5);
+					if (std::abs(m_y - compared.m_y) > tol)
 					{
 						return m_y < compared.m_y;
 					}
@@ -6826,13 +6838,12 @@ struct PDFParser::Implementation
 				}
 			}
 
-			void getText(std::string& output)
+			static void formatTextElements(const std::multiset<TextElement>& elements, std::string& output)
 			{
-				#warning TODO: For now we are sorting strings using their x and y positions. Maybe we should implement better algorithms.
-				std::multiset<TextElement>::iterator it = m_text_elements.begin();
+				std::multiset<TextElement>::const_iterator it = elements.begin();
 				bool first = true;
-				double x_end, y, x_begin;
-				while (it != m_text_elements.end())
+				double x_end = 0.0, y = 0.0, x_begin = 0.0;
+				while (it != elements.end())
 				{
 					//some minimum values for new line and space. Calculated experimentally
 					double new_line_size = (*it).m_height * 0.75 < 4.0 ? 4.0 : (*it).m_height * 0.75;
@@ -6870,6 +6881,216 @@ struct PDFParser::Implementation
 					y = (*it).m_y + (*it).m_height / 2;
 					++it;
 				}
+			}
+
+			void getText(std::string& output)
+			{
+				if (m_text_elements.empty())
+					return;
+
+				// Check if multi-column layout is present (e.g. academic journal papers)
+				if (m_text_elements.size() >= 25)
+				{
+					double min_x = 1e9, max_x = -1e9;
+					double min_y = 1e9, max_y = -1e9;
+					for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+					{
+						if (it->m_text.empty()) continue;
+						if (it->m_x < min_x) min_x = it->m_x;
+						if (it->m_x + it->m_width > max_x) max_x = it->m_x + it->m_width;
+						if (it->m_y < min_y) min_y = it->m_y;
+						if (it->m_y + it->m_height > max_y) max_y = it->m_y + it->m_height;
+					}
+
+					double page_w = max_x - min_x;
+					double page_h = max_y - min_y;
+
+					if (page_w >= 350.0 && page_h >= 250.0)
+					{
+						double mid_x = (min_x + max_x) / 2.0;
+						double search_r = 0.06 * page_w;
+
+						double best_split_x = -1.0;
+						double max_gap_len = 0.0;
+						double best_left_max_y = 0.0, best_right_max_y = 0.0;
+						double best_left_min_y = 0.0, best_right_min_y = 0.0;
+
+						for (int xi = (int)(mid_x - search_r); xi <= (int)(mid_x + search_r); xi += 2)
+						{
+							double x_cand = (double)xi;
+							std::vector<double> intersecting_ys;
+							for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+							{
+								if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
+									continue;
+								if (it->m_x <= x_cand && (it->m_x + it->m_width) >= x_cand)
+								{
+									intersecting_ys.push_back(it->m_y);
+								}
+							}
+							std::sort(intersecting_ys.begin(), intersecting_ys.end());
+
+							std::vector<double> pts;
+							pts.push_back(min_y);
+							pts.insert(pts.end(), intersecting_ys.begin(), intersecting_ys.end());
+							pts.push_back(max_y);
+
+							for (size_t pi = 0; pi + 1 < pts.size(); ++pi)
+							{
+								double g = pts[pi + 1] - pts[pi];
+								if (g >= 250.0 && g > max_gap_len)
+								{
+									double cand_y1 = pts[pi];
+									double cand_y2 = pts[pi + 1];
+
+									size_t chars_l = 0, chars_r = 0;
+									size_t cnt_l = 0, cnt_r = 0;
+									double left_min_x = 1e9, left_max_x = -1e9;
+									double right_min_x = 1e9, right_max_x = -1e9;
+									double cur_left_max_y = -1e9, cur_right_max_y = -1e9;
+									double cur_left_min_y = 1e9, cur_right_min_y = 1e9;
+
+									for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+									{
+										if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
+											continue;
+										if (it->m_y >= cand_y1 && it->m_y <= cand_y2)
+										{
+											if (it->m_x + it->m_width <= x_cand + 2.0)
+											{
+												chars_l += it->m_text.length();
+												cnt_l++;
+												if (it->m_x < left_min_x) left_min_x = it->m_x;
+												if (it->m_x + it->m_width > left_max_x) left_max_x = it->m_x + it->m_width;
+												if (it->m_y > cur_left_max_y) cur_left_max_y = it->m_y;
+												if (it->m_y < cur_left_min_y) cur_left_min_y = it->m_y;
+											}
+											else if (it->m_x >= x_cand - 2.0)
+											{
+												chars_r += it->m_text.length();
+												cnt_r++;
+												if (it->m_x < right_min_x) right_min_x = it->m_x;
+												if (it->m_x + it->m_width > right_max_x) right_max_x = it->m_x + it->m_width;
+												if (it->m_y > cur_right_max_y) cur_right_max_y = it->m_y;
+												if (it->m_y < cur_right_min_y) cur_right_min_y = it->m_y;
+											}
+										}
+									}
+
+									if (chars_l >= 300 && chars_r >= 100 && cnt_l >= 15 && cnt_r >= 15)
+									{
+										double left_w = left_max_x - left_min_x;
+										double right_w = right_max_x - right_min_x;
+										if (left_w >= 150.0 && right_w >= 150.0)
+										{
+											double max_w = std::max(left_w, right_w);
+											double diff_ratio = std::abs(left_w - right_w) / max_w;
+											if (diff_ratio <= 0.20)
+											{
+												max_gap_len = g;
+												best_split_x = x_cand;
+												best_left_max_y = cur_left_max_y;
+												best_right_max_y = cur_right_max_y;
+												best_left_min_y = cur_left_min_y;
+												best_right_min_y = cur_right_min_y;
+											}
+										}
+									}
+								}
+							}
+						}
+
+						if (best_split_x > 0.0)
+						{
+							// Find crossing elements at best_split_x to accurately delineate Header and Footer
+							std::vector<double> upper_cross, lower_cross;
+							double mid_y = (min_y + max_y) / 2.0;
+
+							for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+							{
+								if (it->m_text.find_first_not_of(" \t\r\n") == std::string::npos)
+									continue;
+								if (it->m_x < best_split_x && (it->m_x + it->m_width) > best_split_x)
+								{
+									if (it->m_y > mid_y)
+										upper_cross.push_back(it->m_y);
+									else
+										lower_cross.push_back(it->m_y);
+								}
+							}
+
+							double header_y = max_y + 10.0;
+							if (!upper_cross.empty())
+							{
+								header_y = *std::min_element(upper_cross.begin(), upper_cross.end()) - 2.0;
+							}
+
+							double footer_y = min_y - 10.0;
+							if (!lower_cross.empty())
+							{
+								footer_y = *std::max_element(lower_cross.begin(), lower_cross.end()) + 2.0;
+							}
+
+							std::multiset<TextElement> header_elems, left_elems, right_elems, footer_elems, mid_elems;
+							for (std::multiset<TextElement>::const_iterator it = m_text_elements.begin(); it != m_text_elements.end(); ++it)
+							{
+								if (it->m_y >= header_y)
+								{
+									header_elems.insert(*it);
+								}
+								else if (it->m_y <= footer_y)
+								{
+									footer_elems.insert(*it);
+								}
+								else if (it->m_x + it->m_width <= best_split_x + 2.0)
+								{
+									left_elems.insert(*it);
+								}
+								else if (it->m_x >= best_split_x - 2.0)
+								{
+									right_elems.insert(*it);
+								}
+								else
+								{
+									mid_elems.insert(*it);
+								}
+							}
+
+							if (!header_elems.empty())
+							{
+								formatTextElements(header_elems, output);
+								if (!output.empty() && output[output.length() - 1] != '\n')
+									output += "\n\n";
+							}
+							if (!left_elems.empty())
+							{
+								formatTextElements(left_elems, output);
+								if (!output.empty() && output[output.length() - 1] != '\n')
+									output += "\n\n";
+							}
+							if (!right_elems.empty())
+							{
+								formatTextElements(right_elems, output);
+								if (!output.empty() && output[output.length() - 1] != '\n')
+									output += "\n\n";
+							}
+							if (!mid_elems.empty())
+							{
+								formatTextElements(mid_elems, output);
+								if (!output.empty() && output[output.length() - 1] != '\n')
+									output += "\n\n";
+							}
+							if (!footer_elems.empty())
+							{
+								formatTextElements(footer_elems, output);
+							}
+							return;
+						}
+					}
+				}
+
+				// Standard single column or table layout
+				formatTextElements(m_text_elements, output);
 			}
 
 			PageText()
@@ -7760,7 +7981,14 @@ struct PDFParser::Implementation
 							reading_min = true;
 							std::string range;
 							iterator.toHexString(range);
-							cmap.addCodeRange(min, max, hex_string_to_uint(range.c_str(), range.length()), utf16be_to_utf8(range), in_not_def);
+							unsigned int first_cp = hex_string_to_uint(range.c_str(), range.length());
+							if (range.length() == 8 && (first_cp >> 16) >= 0xD800 && (first_cp >> 16) <= 0xDBFF)
+							{
+								unsigned int hi = (first_cp >> 16) & 0x03FF;
+								unsigned int lo = first_cp & 0x03FF;
+								first_cp = 0x10000 + (hi << 10) + lo;
+							}
+							cmap.addCodeRange(min, max, first_cp, utf16be_to_utf8(range), in_not_def);
 						}
 					}
 					else if (in_bf_char)
