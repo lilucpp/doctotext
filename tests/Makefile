@@ -73,7 +73,7 @@ endif
 
 SKIP_TESTS = ! $(shell file ../build/doctotext$(EXEEXT) | grep i386 > /dev/null && ! uname -m | grep 64 > /dev/null; echo $$?)
 
-test: c_api_test$(EXEEXT) cpp_api_test$(EXEEXT) multithreading_test$(EXEEXT) read_from_buffer_test$(EXEEXT)
+test: c_api_test$(EXEEXT) cpp_api_test$(EXEEXT) multithreading_test$(EXEEXT) read_from_buffer_test$(EXEEXT) pdf_image_callback_test$(EXEEXT)
 ifeq ($(SKIP_TESTS),0)
 	@echo
 	@echo WARNING! TESTING 64-BIT BINARIES REQUIRES 64-BIT MACHINE. SKIPPING.
@@ -101,7 +101,7 @@ else
 			html_with_doc_ext.doc html_with_xls_ext.xls rtf_with_doc_ext.doc \
 			$(addprefix comments_libreoffice_3.5.,odt doc docx rtf) \
 			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
-			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf; do \
+			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf testPDF_JBIG2.pdf testPDF_CCITT_G4.pdf testPDF_CCITT_G3.pdf; do \
 		echo TESTING $$f; \
 		if ! $(EXEC) ../build/doctotext $$f | tr -d '\r' | diff -u - $$f.out; then \
 			exit 1; \
@@ -207,6 +207,14 @@ endif
 	done
 	rm log.txt
 	@echo
+	@echo TESTING PDF JBIG2 / CCITT IMAGE CALLBACK DECODING...
+	@echo
+ifneq (,$(filter $(ARCH),win32 win64))
+	$(EXEC) ./pdf_image_callback_test$(EXEEXT)
+else
+	$(EXEC) ./pdf_image_callback_test$(EXEEXT)
+endif
+	@echo
 	@echo TESTS COMPLETE.
 	@echo
 endif
@@ -230,7 +238,7 @@ update_tests:
 			html_with_doc_ext.doc html_with_xls_ext.xls rtf_with_doc_ext.doc \
 			$(addprefix comments_libreoffice_3.5.,odt doc docx rtf) \
 			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
-			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf; do \
+			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf testPDF_JBIG2.pdf testPDF_CCITT_G4.pdf testPDF_CCITT_G3.pdf; do \
 		echo PROCESSING $$f; \
 		$(EXEC) ../build/doctotext $$f | tr -d '\r' > $$f.out; \
 	done
@@ -268,8 +276,12 @@ read_from_buffer_test$(EXEEXT): read_from_buffer_test.cpp ../build/plain_text_ex
 test_img_runner$(EXEEXT): test_img_runner.cpp ../build/plain_text_extractor.h ../build/$(SOPRE)doctotext$(SOEXT)
 	$(LIB_PATH) $(CXX) -o test_img_runner$(EXEEXT) test_img_runner.cpp -I../src -I../build -L../build/ -ldoctotext $(LDFLAGS) $(CXXFLAGS) $(ARCH_FLAGS)
 
+pdf_image_callback_test$(EXEEXT): pdf_image_callback_test.cpp ../build/plain_text_extractor.h ../build/$(SOPRE)doctotext$(SOEXT)
+	$(LIB_PATH) $(CXX) -o pdf_image_callback_test$(EXEEXT) pdf_image_callback_test.cpp -L../build/ -ldoctotext $(LDFLAGS) $(CXXFLAGS) $(ARCH_FLAGS)
+	$(STRIP) pdf_image_callback_test$(EXEEXT)
+
 test_img: test_img_runner$(EXEEXT)
 	$(EXEC) ./test_img_runner$(EXEEXT) ../tests_img
 
 clean:
-	rm -f c_api_test c_api_test.exe cpp_api_test cpp_api_test.exe multithreading_test multithreading_test.exe read_from_buffer_test read_from_buffer_test.exe test_img_runner test_img_runner.exe
+	rm -f c_api_test c_api_test.exe cpp_api_test cpp_api_test.exe multithreading_test multithreading_test.exe read_from_buffer_test read_from_buffer_test.exe test_img_runner test_img_runner.exe pdf_image_callback_test pdf_image_callback_test.exe

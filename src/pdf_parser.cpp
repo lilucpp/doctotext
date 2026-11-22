@@ -44,6 +44,8 @@
 #include <iostream>
 #include <list>
 #include <map>
+#include "poppler_ccitt.h"
+#include "jbig2.h"
 #include "metadata.h"
 #include "misc.h"
 #include <new>
@@ -53,6 +55,11 @@
 #include <string.h>
 #include <vector>
 #include <zlib.h>
+
+static int jbig2_quiet_error_cb(void* /*data*/, const char* /*msg*/, Jbig2Severity /*severity*/, int32_t /*seg_idx*/)
+{
+	return 0;
+}
 
 //some functions specific for this parser
 
@@ -912,6 +919,8 @@ struct PDFParser::Implementation
 				rle,
 				ascii_85,
 				flat,
+				ccitt,
+				jbig2,
 				unknown_compression
 			};
 
@@ -964,6 +973,9 @@ struct PDFParser::Implementation
 						insert(std::pair<std::string, CompressionTypes>("RunLengthDecode", rle));
 						insert(std::pair<std::string, CompressionTypes>("ASCII85Decode", ascii_85));
 						insert(std::pair<std::string, CompressionTypes>("FlateDecode", flat));
+						insert(std::pair<std::string, CompressionTypes>("CCITTFaxDecode", ccitt));
+						insert(std::pair<std::string, CompressionTypes>("CCF", ccitt));
+						insert(std::pair<std::string, CompressionTypes>("JBIG2Decode", jbig2));
 					}
 			};
 
@@ -3025,6 +3037,123 @@ struct PDFParser::Implementation
 						}
 					}
 
+					static void ccitt_decode(std::vector<unsigned char>& src, std::vector<unsigned char>& dest, PDFDictionary* options, PDFDictionary* stream_dict)
+					{
+						poppler_ccitt::CCITTFaxParams ccitt_params;
+						if (stream_dict)
+						{
+							ccitt_params.columns = (int)stream_dict->getValAsInteger("Width", 1728);
+							ccitt_params.rows = (int)stream_dict->getValAsInteger("Height", 0);
+						}
+						if (options)
+						{
+							ccitt_params.encoding = (int)options->getValAsInteger("K", 0);
+							ccitt_params.end_of_line = options->getValAsBoolean("EndOfLine", false);
+							ccitt_params.byte_align = options->getValAsBoolean("EncodedByteAlign", false);
+							ccitt_params.columns = (int)options->getValAsInteger("Columns", ccitt_params.columns);
+							ccitt_params.rows = (int)options->getValAsInteger("Rows", ccitt_params.rows);
+							ccitt_params.end_of_block = options->getValAsBoolean("EndOfBlock", true);
+							ccitt_params.black_is_1 = options->getValAsBoolean("BlackIs1", false);
+						}
+						if (!poppler_ccitt::decodeCCITTFax(src, ccitt_params, dest))
+							throw doctotextex::CustomException("Cannot decode stream using CCITTFax algorithm");
+					}
+
+					static void jbig2_decode(std::vector<unsigned char>& src, std::vector<unsigned char>& dest, PDFDictionary* options)
+					{
+						dest.clear();
+						if (src.empty())
+							throw doctotextex::CustomException("Cannot decode empty JBIG2 stream");
+
+						std::vector<unsigned char> globals_bytes;
+						if (options)
+						{
+							PDFStream* globals_stream = options->getObjAsStream("JBIG2Globals");
+							if (globals_stream)
+								globals_stream->getDecodedStreamBytes(globals_bytes);
+						}
+
+						Jbig2GlobalCtx* global_ctx = NULL;
+						if (!globals_bytes.empty())
+						{
+							Jbig2Ctx* gctx_in = jbig2_ctx_new(NULL, JBIG2_OPTIONS_EMBEDDED, NULL, jbig2_quiet_error_cb, NULL);
+							if (gctx_in)
+							{
+								jbig2_data_in(gctx_in, &globals_bytes[0], globals_bytes.size());
+								global_ctx = jbig2_make_global_ctx(gctx_in);
+							}
+						}
+
+						Jbig2Ctx* ctx = jbig2_ctx_new(NULL, JBIG2_OPTIONS_EMBEDDED, global_ctx, jbig2_quiet_error_cb, NULL);
+						if (!ctx)
+						{
+							if (global_ctx)
+								jbig2_global_ctx_free(global_ctx);
+							throw doctotextex::CustomException("Cannot initialize JBIG2 decoder context");
+						}
+
+						jbig2_data_in(ctx, &src[0], src.size());
+						jbig2_complete_page(ctx);
+						Jbig2Image* image = jbig2_page_out(ctx);
+						if (image && image->data && image->width > 0 && image->height > 0 && image->stride > 0)
+						{
+							size_t row_bytes = (size_t)(image->width + 7) / 8;
+							if (row_bytes <= (size_t)image->stride)
+							{
+								dest.resize(row_bytes * (size_t)image->height);
+								for (int y = 0; y < image->height; ++y)
+								{
+									const uint8_t* s = image->data + (size_t)y * (size_t)image->stride;
+									unsigned char* d = &dest[(size_t)y * row_bytes];
+									// Convert JBIG2 polarity (0=white, 1=black) to PDF DeviceGray (0=black, 1=white)
+									for (size_t x = 0; x < row_bytes; ++x)
+										d[x] = static_cast<unsigned char>(s[x] ^ 0xFF);
+								}
+							}
+							jbig2_release_page(ctx, image);
+						}
+						jbig2_ctx_free(ctx);
+						if (global_ctx)
+							jbig2_global_ctx_free(global_ctx);
+
+						if (dest.empty())
+							throw doctotextex::CustomException("Cannot decode stream using JBIG2 algorithm");
+					}
+
+					static bool applyFilter(const std::string& filter_name,
+					                        std::vector<unsigned char>& src,
+					                        std::vector<unsigned char>& dest,
+					                        PDFDictionary* options,
+					                        PDFDictionary* stream_dict)
+					{
+						switch (PDFReader::getCompressionCode(filter_name))
+						{
+							case ascii_85:
+								ascii_85_decode(src, dest);
+								return true;
+							case lzw:
+								lzw_decode(src, dest, options);
+								return true;
+							case ascii_hex:
+								ascii_hex_decode(src, dest);
+								return true;
+							case flat:
+								flat_decode(src, dest, options);
+								return true;
+							case rle:
+								run_length_decode(src, dest);
+								return true;
+							case ccitt:
+								ccitt_decode(src, dest, options, stream_dict);
+								return true;
+							case jbig2:
+								jbig2_decode(src, dest, options);
+								return true;
+							default:
+								return false;
+						}
+					}
+
 					void decode()
 					{
 						if (m_is_decoded)
@@ -3083,53 +3212,10 @@ struct PDFParser::Implementation
 						{
 							for (size_t i = 0; i < filters.size(); ++i)
 							{
-								switch (PDFReader::getCompressionCode((*filters[i])()))
-								{
-									case ascii_85:
-									{
-										if (i % 2 == 0)
-											ascii_85_decode(stream_first_content, stream_second_content);
-										else
-											ascii_85_decode(stream_second_content, stream_first_content);
-										break;
-									}
-									case lzw:
-									{
-										if (i % 2 == 0)
-											lzw_decode(stream_first_content, stream_second_content, filter_options[i]);
-										else
-											lzw_decode(stream_second_content, stream_first_content, filter_options[i]);
-										break;
-									}
-									case ascii_hex:
-									{
-										if (i % 2 == 0)
-											ascii_hex_decode(stream_first_content, stream_second_content);
-										else
-											ascii_hex_decode(stream_second_content, stream_first_content);
-										break;
-									}
-									case flat:
-									{
-										if (i % 2 == 0)
-											flat_decode(stream_first_content, stream_second_content, filter_options[i]);
-										else
-											flat_decode(stream_second_content, stream_first_content, filter_options[i]);
-										break;
-									}
-									case rle:
-									{
-										if (i % 2 == 0)
-											run_length_decode(stream_first_content, stream_second_content);
-										else
-											run_length_decode(stream_second_content, stream_first_content);
-										break;
-									}
-									default:
-									{
-										throw doctotextex::CustomException("Cannot decode stream: Filter " + (*filters[i])() + " is not supported");
-									}
-								}
+								std::vector<unsigned char>& src = (i % 2 == 0) ? stream_first_content : stream_second_content;
+								std::vector<unsigned char>& dst = (i % 2 == 0) ? stream_second_content : stream_first_content;
+								if (!applyFilter((*filters[i])(), src, dst, filter_options[i], m_dictionary))
+									throw doctotextex::CustomException("Cannot decode stream: Filter " + (*filters[i])() + " is not supported");
 							}
 							if (filters.size() % 2 == 1)
 							{
@@ -3390,6 +3476,8 @@ struct PDFParser::Implementation
 							while (filter_options.size() < filters.size())
 								filter_options.push_back(NULL);
 
+							if (m_size == 0)
+								return false;
 							std::vector<unsigned char> stream_first_content(m_size);
 							std::vector<unsigned char> stream_second_content;
 							stream_second_content.reserve(m_size);
@@ -3406,53 +3494,12 @@ struct PDFParser::Implementation
 									m_reader->seek(current_pos, SEEK_SET);
 									return false;
 								}
-								switch (PDFReader::getCompressionCode((*filters[i])()))
+								std::vector<unsigned char>& src = (i % 2 == 0) ? stream_first_content : stream_second_content;
+								std::vector<unsigned char>& dst = (i % 2 == 0) ? stream_second_content : stream_first_content;
+								if (!applyFilter((*filters[i])(), src, dst, filter_options[i], m_dictionary))
 								{
-									case ascii_85:
-									{
-										if (i % 2 == 0)
-											ascii_85_decode(stream_first_content, stream_second_content);
-										else
-											ascii_85_decode(stream_second_content, stream_first_content);
-										break;
-									}
-									case lzw:
-									{
-										if (i % 2 == 0)
-											lzw_decode(stream_first_content, stream_second_content, filter_options[i]);
-										else
-											lzw_decode(stream_second_content, stream_first_content, filter_options[i]);
-										break;
-									}
-									case ascii_hex:
-									{
-										if (i % 2 == 0)
-											ascii_hex_decode(stream_first_content, stream_second_content);
-										else
-											ascii_hex_decode(stream_second_content, stream_first_content);
-										break;
-									}
-									case flat:
-									{
-										if (i % 2 == 0)
-											flat_decode(stream_first_content, stream_second_content, filter_options[i]);
-										else
-											flat_decode(stream_second_content, stream_first_content, filter_options[i]);
-										break;
-									}
-									case rle:
-									{
-										if (i % 2 == 0)
-											run_length_decode(stream_first_content, stream_second_content);
-										else
-											run_length_decode(stream_second_content, stream_first_content);
-										break;
-									}
-									default:
-									{
-										m_reader->seek(current_pos, SEEK_SET);
-										return false;
-									}
+									m_reader->seek(current_pos, SEEK_SET);
+									return false;
 								}
 							}
 							m_reader->seek(current_pos, SEEK_SET);
@@ -7674,7 +7721,8 @@ struct PDFParser::Implementation
 
 		int width = stream->m_dictionary->getValAsInteger("Width", 0);
 		int height = stream->m_dictionary->getValAsInteger("Height", 0);
-		int bpc = stream->m_dictionary->getValAsInteger("BitsPerComponent", 8);
+		bool is_mask = stream->m_dictionary->getValAsBoolean("ImageMask", false);
+		int bpc = stream->m_dictionary->getValAsInteger("BitsPerComponent", (is_mask || filter == "CCITTFaxDecode" || filter == "JBIG2Decode") ? 1 : 8);
 
 		if (createBMP(decompressed_pixels, width, height, bpc, stream->m_dictionary, out_image_data))
 		{

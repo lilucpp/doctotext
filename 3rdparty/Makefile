@@ -40,8 +40,10 @@ else
 		CONFIG_ARGS = --disable-dependency-tracking
 		WGET = curl -O -L
 		CC=/usr/local/bin/gcc-10
+		CXX=/usr/local/bin/g++-10
 	else
 		UNAME_M = $(shell uname -m)
+		CXX ?= g++
 		ifeq ($(UNAME_M),x86_64)
 			ARCH = x86_64-linux
 			ARCH_FLAGS = -fPIC
@@ -219,6 +221,16 @@ endif
 
 unzip: unzip101e/unzip.o
 
+jbig2dec: jbig2dec/libjbig2dec.a
+
+jbig2dec/libjbig2dec.a:
+	cd jbig2dec && $(MAKE) CC="$(CC)" CFLAGS="$(ARCH_FLAGS) -O2"
+
+poppler_ccitt: poppler_ccitt/libpoppler_ccitt.a
+
+poppler_ccitt/libpoppler_ccitt.a:
+	cd poppler_ccitt && $(MAKE) CXX="$(CXX)" CXXFLAGS="$(ARCH_FLAGS) -O2 -std=c++14"
+
 ifeq ($(WIN),1)
 unzip101e/unzip.o: zlib unzip101e/.unpacked
 	cd unzip101e && $(MAKE) CC=$(CC) CFLAGS="-O2 -std=gnu89 -w -I../zlib/include" unzip.o ioapi.o iowin32.o
@@ -295,3 +307,5 @@ clean:
 	rm -rf wv2
 	rm -rf libcharsetdetect
 	rm -rf mimetic
+	$(MAKE) -C jbig2dec clean
+	$(MAKE) -C poppler_ccitt clean

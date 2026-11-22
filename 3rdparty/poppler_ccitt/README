@@ -1,0 +1,13 @@
+poppler_ccitt
+=============
+
+Lightweight standalone CCITT Group 3 (1D/2D) and Group 4 (T.6) fax decoder
+extracted from upstream Poppler (originally Xpdf):
+
+- `Stream-CCITT.h`: verbatim from `poppler/Stream-CCITT.h`
+- `poppler_ccitt.cpp`: `CCITTFaxStream` from `poppler/Stream.cc`, adapted to
+  operate directly on in-memory `std::vector<unsigned char>` buffers without
+  pulling in Poppler's full object/stream tree.
+
+License: GNU General Public License version 2 or later (GPLv2+).
+Copyright 1996-2003 Glyph & Cog, LLC / Poppler developers.
