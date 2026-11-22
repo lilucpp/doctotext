@@ -326,6 +326,8 @@ struct PlainTextExtractor::Implementation
 			odfooxml.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using ODF/OOXML parser.\n";
 		text = odfooxml.plainText(m_xml_parse_mode, m_formatting_style);
+		if (odfooxml.encrypted())
+			m_is_encrypted = true;
 		m_links.clear();
 		odfooxml.getLinks(m_links);
 		return odfooxml.error();
@@ -341,6 +343,8 @@ struct PlainTextExtractor::Implementation
 			xls.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using XLS parser.\n";
 		text = xls.plainText(m_formatting_style);
+		if (xls.encrypted())
+			m_is_encrypted = true;
 		m_links.clear();
 		xls.getLinks(m_links);
 		return xls.error();
@@ -356,6 +360,8 @@ struct PlainTextExtractor::Implementation
 		if (m_image_callback)
 			doc.setImageParserCallback(m_image_callback, m_image_user_data);
 		text = doc.plainText(m_formatting_style);
+		if (doc.encrypted())
+			m_is_encrypted = true;
 		m_links.clear();
 		doc.getLinks(m_links);
 		return doc.error();
@@ -371,6 +377,8 @@ struct PlainTextExtractor::Implementation
 			ppt.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using PPT parser.\n";
 		text = ppt.plainText(m_formatting_style);
+		if (ppt.encrypted())
+			m_is_encrypted = true;
 		m_links.clear();
 		ppt.getLinks(m_links);
 		return ppt.error();
@@ -410,6 +418,8 @@ struct PlainTextExtractor::Implementation
 			xlsb.setLogStream(*m_log_stream);
 		*m_log_stream << "Using XLSB parser.\n";
 		text = xlsb.plainText(m_formatting_style);
+		if (xlsb.encrypted())
+			m_is_encrypted = true;
 		m_links.clear();
 		xlsb.getLinks(m_links);
 		return xlsb.error();
@@ -517,6 +527,8 @@ struct PlainTextExtractor::Implementation
 			odfooxml.setManageXmlParser(false);
 		*m_log_stream << "Using ODF/OOXML parser.\n";
 		metadata = odfooxml.metaData();
+		if (odfooxml.encrypted())
+			m_is_encrypted = true;
 		return odfooxml.error();
 	}
 
@@ -528,6 +540,8 @@ struct PlainTextExtractor::Implementation
 			xls.setLogStream(*m_log_stream);
 		*m_log_stream << "Using XLS parser.\n";
 		metadata = xls.metaData();
+		if (xls.encrypted())
+			m_is_encrypted = true;
 		return xls.error();
 	}
 
@@ -539,6 +553,8 @@ struct PlainTextExtractor::Implementation
 			doc.setLogStream(*m_log_stream);
 		*m_log_stream << "Using DOC parser.\n";
 		metadata = doc.metaData();
+		if (doc.encrypted())
+			m_is_encrypted = true;
 		return doc.error();
 	}
 
@@ -550,6 +566,8 @@ struct PlainTextExtractor::Implementation
 			ppt.setLogStream(*m_log_stream);
 		*m_log_stream << "Using PPT parser.\n";
 		metadata = ppt.metaData();
+		if (ppt.encrypted())
+			m_is_encrypted = true;
 		return ppt.error();
 	}
 
@@ -583,6 +601,8 @@ struct PlainTextExtractor::Implementation
 			xlsb.setLogStream(*m_log_stream);
 		*m_log_stream << "Using XLSB parser.\n";
 		metadata = xlsb.metaData();
+		if (xlsb.encrypted())
+			m_is_encrypted = true;
 		return xlsb.error();
 	}
 

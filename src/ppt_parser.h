@@ -35,6 +35,7 @@ class PPTParser
 		std::string plainText(const FormattingStyle& formatting);
 		Metadata metaData();
 		bool error();
+		bool encrypted();
 };
 
 #endif

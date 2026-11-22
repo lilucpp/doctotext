@@ -80,6 +80,7 @@ enum RecordType
 struct XLSParser::Implementation
 {
 	bool m_error;
+	bool m_encrypted;
 	const char* m_buffer;
 	size_t m_buffer_size;
 	std::string m_codepage;
@@ -494,6 +495,8 @@ struct XLSParser::Implementation
 				}
 				else
 					*m_log_stream << "Unknown encryption type.\n";
+				m_encrypted = true;
+				m_error = true;
 				return false;
 			}
 			case XLS_FORMAT:
@@ -926,6 +929,7 @@ XLSParser::XLSParser(const std::string& file_name)
 	impl = new Implementation();
 	impl->m_codepage = "cp1251";
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	impl->m_file_name = file_name;
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -940,6 +944,7 @@ XLSParser::XLSParser(const char *buffer, size_t size)
 	impl = new Implementation();
 	impl->m_codepage = "cp1251";
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	impl->m_file_name = "Memory buffer";
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -973,6 +978,7 @@ void XLSParser::setLogStream(std::ostream& log_stream)
 bool XLSParser::isXLS()
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	ThreadSafeOLEStorage* storage;
 	if (impl->m_buffer)
 		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
@@ -1004,6 +1010,7 @@ void XLSParser::getLinks(std::vector<Link>& links)
 std::string XLSParser::plainText(const FormattingStyle& formatting)
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	ThreadSafeOLEStorage* storage;
 	if (impl->m_buffer)
 		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
@@ -1024,6 +1031,7 @@ std::string XLSParser::plainText(const FormattingStyle& formatting)
 std::string XLSParser::plainText(ThreadSafeOLEStorage& storage, const FormattingStyle& formatting)
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	ThreadSafeOLEStreamReader* reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader("Workbook");
 	if (reader == NULL)
 		reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader("Book");
@@ -1043,6 +1051,7 @@ Metadata XLSParser::metaData()
 {
 	ThreadSafeOLEStorage* storage = NULL;
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	Metadata meta;
 	if (impl->m_buffer)
 		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
@@ -1056,4 +1065,9 @@ Metadata XLSParser::metaData()
 bool XLSParser::error()
 {
 	return impl->m_error;
+}
+
+bool XLSParser::encrypted()
+{
+	return impl->m_encrypted;
 }

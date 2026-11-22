@@ -806,6 +806,7 @@ class DocToTextSubDocumentHandler : public SubDocumentHandler
 struct DOCParser::Implementation
 {
 	bool m_error;
+	bool m_encrypted;
 	const char* m_buffer;
 	size_t m_buffer_size;
 	std::string m_file_name;
@@ -844,6 +845,7 @@ DOCParser::DOCParser(const std::string& file_name)
     try {
         impl = new Implementation();
         impl->m_error = false;
+        impl->m_encrypted = false;
         impl->m_file_name = file_name;
         impl->m_verbose_logging = false;
         impl->m_log_stream = &std::cerr;
@@ -866,6 +868,7 @@ DOCParser::DOCParser(const char *buffer, size_t size)
     try {
         impl = new Implementation();
         impl->m_error = false;
+        impl->m_encrypted = false;
         impl->m_file_name = "Memory buffer";
         impl->m_verbose_logging = false;
         impl->m_log_stream = &std::cerr;
@@ -909,6 +912,7 @@ void DOCParser::setLogStream(std::ostream& log_stream)
 bool DOCParser::isDOC()
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	FILE* f = NULL;
 	if (!impl->m_buffer)
 		f = fopen(impl->m_file_name.c_str(), "r");
@@ -920,13 +924,19 @@ bool DOCParser::isDOC()
 	}
 	if (f)
 		fclose(f);
-	impl->modifyCerr();
 	ThreadSafeOLEStorage* storage = NULL;
 	//storage will be deleted inside parser from wv2 library
 	if (impl->m_buffer)
 		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
 	else
 		storage = new ThreadSafeOLEStorage(impl->m_file_name);
+	if (storage->isValid() && is_encrypted_doc_ole(*storage))
+	{
+		impl->m_encrypted = true;
+		delete storage;
+		return true;
+	}
+	impl->modifyCerr();
 	SharedPtr<Parser> parser = ParserFactory::createParser(storage);
 	impl->restoreCerr();
 	if (!parser || !parser->isOk())
@@ -945,6 +955,7 @@ void DOCParser::getLinks(std::vector<Link>& links)
 std::string DOCParser::plainText(const FormattingStyle& formatting)
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	CurrentState curr_state;
 	if (impl->m_verbose_logging)
 		*impl->m_log_stream << "Opening " << impl->m_file_name << " as OLE file to parse all embedded objects in supported formats.\n";
@@ -957,6 +968,14 @@ std::string DOCParser::plainText(const FormattingStyle& formatting)
 	if (!storage->isValid())
 	{
 		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
+		impl->m_error = true;
+		delete storage;
+		return "";
+	}
+	if (is_encrypted_doc_ole(*storage))
+	{
+		*impl->m_log_stream << "DOC file is encrypted and requires a password.\n";
+		impl->m_encrypted = true;
 		impl->m_error = true;
 		delete storage;
 		return "";
@@ -1050,12 +1069,20 @@ std::string DOCParser::plainText(const FormattingStyle& formatting)
 Metadata DOCParser::metaData()
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	Metadata meta;
 	ThreadSafeOLEStorage* storage = NULL;
 	if (impl->m_buffer)
 		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
 	else
 		storage = new ThreadSafeOLEStorage(impl->m_file_name);
+	if (storage->isValid() && is_encrypted_doc_ole(*storage))
+	{
+		impl->m_encrypted = true;
+		impl->m_error = true;
+		delete storage;
+		return meta;
+	}
 	impl->m_error = !parse_oshared_summary_info(*storage, *impl->m_log_stream, meta);
 	delete storage;
 	return meta;
@@ -1064,4 +1091,9 @@ Metadata DOCParser::metaData()
 bool DOCParser::error()
 {
 	return impl->m_error;
+}
+
+bool DOCParser::encrypted()
+{
+	return impl->m_encrypted;
 }

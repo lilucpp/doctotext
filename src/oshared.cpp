@@ -35,6 +35,8 @@
 #include "oshared.h"
 
 #include <iostream>
+#include <stdio.h>
+#include <string.h>
 #include "metadata.h"
 #include "wv2/utilities.h"
 #include <time.h>
@@ -436,4 +438,85 @@ bool parse_oshared_document_summary_info(ThreadSafeOLEStorage& storage, std::ost
 	}
 	delete reader;
 	return true;
+}
+
+static bool ole_stream_exists(ThreadSafeOLEStorage& storage, const std::string& name)
+{
+	AbstractOLEStreamReader* reader = storage.createStreamReader(name);
+	if (!reader)
+		return false;
+	delete reader;
+	return true;
+}
+
+static bool has_ole2_header(const std::string& file_name, const char* buffer, size_t buffer_size)
+{
+	static const unsigned char ole_magic[8] = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
+	if (buffer)
+	{
+		if (buffer_size < 8)
+			return false;
+		return memcmp(buffer, ole_magic, 8) == 0;
+	}
+	FILE* f = fopen(file_name.c_str(), "rb");
+	if (!f)
+		return false;
+	unsigned char hdr[8];
+	size_t n = fread(hdr, 1, 8, f);
+	fclose(f);
+	return n == 8 && memcmp(hdr, ole_magic, 8) == 0;
+}
+
+bool is_encrypted_offcrypto_ole(ThreadSafeOLEStorage& storage)
+{
+	if (!storage.isValid())
+		return false;
+	return ole_stream_exists(storage, "EncryptionInfo") && ole_stream_exists(storage, "EncryptedPackage");
+}
+
+bool is_encrypted_offcrypto_source(const std::string& file_name, const char* buffer, size_t buffer_size)
+{
+	if (!has_ole2_header(file_name, buffer, buffer_size))
+		return false;
+	ThreadSafeOLEStorage* storage = buffer
+		? new ThreadSafeOLEStorage(buffer, buffer_size)
+		: new ThreadSafeOLEStorage(file_name);
+	bool encrypted = is_encrypted_offcrypto_ole(*storage);
+	delete storage;
+	return encrypted;
+}
+
+bool is_encrypted_doc_ole(ThreadSafeOLEStorage& storage)
+{
+	if (!storage.isValid())
+		return false;
+	AbstractOLEStreamReader* reader = storage.createStreamReader("WordDocument");
+	if (!reader)
+		return false;
+	unsigned char fib_hdr[12] = {0};
+	bool encrypted = false;
+	if (reader->read(fib_hdr, 12))
+		encrypted = ((fib_hdr[11] & 0x01) != 0); // FibBase.fEncrypted (offset 0x0A, bit 8)
+	delete reader;
+	return encrypted;
+}
+
+bool is_encrypted_ppt_ole(ThreadSafeOLEStorage& storage)
+{
+	if (!storage.isValid())
+		return false;
+	if (ole_stream_exists(storage, "EncryptedSummary"))
+		return true;
+	AbstractOLEStreamReader* reader = storage.createStreamReader("Current User");
+	if (!reader)
+		return false;
+	unsigned char cu_hdr[16] = {0};
+	bool encrypted = false;
+	if (reader->read(cu_hdr, 16))
+	{
+		// CurrentUserAtom.headerToken == 0xF3D1C4DF indicates encrypted PPT
+		encrypted = (cu_hdr[12] == 0xDF && cu_hdr[13] == 0xC4 && cu_hdr[14] == 0xD1 && cu_hdr[15] == 0xF3);
+	}
+	delete reader;
+	return encrypted;
 }

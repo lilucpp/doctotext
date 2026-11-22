@@ -37,6 +37,7 @@ class XLSParser
 		std::string plainText(ThreadSafeOLEStorage& storage, const FormattingStyle& formatting);
 		Metadata metaData();
 		bool error();
+		bool encrypted();
 };
 
 #endif

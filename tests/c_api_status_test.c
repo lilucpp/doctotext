@@ -101,7 +101,10 @@ static int assert_failure_status(const char* label,
 
 int main(void)
 {
+	const char* log_path = "c_api_status_test.log.out";
 	DocToTextExtractorParams* params = doctotext_create_extractor_params();
+	doctotext_extractor_params_set_log_file(params, log_path);
+
 	DocToTextException* exc = NULL;
 	doctotext_status status = DOCTOTEXT_STATUS_ERROR;
 	DocToTextExtractedData* data = NULL;
@@ -110,7 +113,7 @@ int main(void)
 
 	/* 1. Empty user password PDF (file & buffer) -> OK */
 	data = doctotext_process_file_ex("testPDF_no_extract_no_accessibility_owner_empty.pdf", params, &status, &exc);
-	if (!assert_ok_text("empty_pw_file", data, status, exc, "Hello World"))
+	if (!assert_ok_text("empty_pw_pdf_file", data, status, exc, "Hello World"))
 		return 1;
 
 	if (!read_entire_file("testPDF_no_extract_no_accessibility_owner_empty.pdf", &buf, &buf_size))
@@ -123,49 +126,81 @@ int main(void)
 	data = doctotext_process_file_from_buffer_ex(buf, buf_size, params, &status, &exc);
 	free(buf);
 	buf = NULL;
-	if (!assert_ok_text("empty_pw_buffer", data, status, exc, "Hello World"))
+	if (!assert_ok_text("empty_pw_pdf_buffer", data, status, exc, "Hello World"))
 		return 1;
 
 	/* 2. Empty user password 41-page RC4 PDF -> OK */
 	exc = NULL;
 	status = DOCTOTEXT_STATUS_ERROR;
 	data = doctotext_process_file_ex("testPDF_protected.pdf", params, &status, &exc);
-	if (!assert_ok_text("protected_empty_pw_file", data, status, exc, "RETHINKING THE FINANCIAL NETWORK"))
+	if (!assert_ok_text("protected_empty_pw_pdf_file", data, status, exc, "RETHINKING THE FINANCIAL NETWORK"))
 		return 1;
 
-	/* 3. Non-empty user password PDF (file, buffer, legacy API) -> DOCTOTEXT_STATUS_ENCRYPTED */
+	/* 3. Readable sheet-protected XLSX (not file-encrypted) -> OK */
 	exc = NULL;
-	status = DOCTOTEXT_STATUS_OK;
-	data = doctotext_process_file_ex("encrypted/testPDF_no_extract_no_accessibility_owner_user.pdf", params, &status, &exc);
-	if (!assert_failure_status("user_pw_file", data, status, DOCTOTEXT_STATUS_ENCRYPTED, exc, 1))
+	status = DOCTOTEXT_STATUS_ERROR;
+	data = doctotext_process_file_ex("encrypted/protectedSheets.xlsx", params, &status, &exc);
+	if (!assert_ok_text("sheet_protected_xlsx_file", data, status, exc, "SUM(A1:B1)"))
 		return 1;
 
-	if (!read_entire_file("encrypted/testPDF_no_extract_no_accessibility_owner_user.pdf", &buf, &buf_size))
+	/* 4. Password-encrypted files across PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, ODT (file & buffer) -> DOCTOTEXT_STATUS_ENCRYPTED */
 	{
-		fprintf(stderr, "FAIL: could not read user_pw buffer fixture\n");
-		return 1;
-	}
-	exc = NULL;
-	status = DOCTOTEXT_STATUS_OK;
-	data = doctotext_process_file_from_buffer_ex(buf, buf_size, params, &status, &exc);
-	if (!assert_failure_status("user_pw_buffer", data, status, DOCTOTEXT_STATUS_ENCRYPTED, exc, 1))
-	{
+		const char* encrypted_fixtures[] = {
+			"encrypted/testPDF_no_extract_no_accessibility_owner_user.pdf",
+			"encrypted/testWORD_protected_passtika.doc",
+			"encrypted/testWORD_protected_passtika.docx",
+			"encrypted/testEXCEL_protected_passtika.xls",
+			"encrypted/testEXCEL_protected_passtika.xlsx",
+			"encrypted/testPPT_protected_passtika.ppt",
+			"encrypted/testPPT_protected_passtika.pptx",
+			"encrypted/testODTEncrypted.odt"
+		};
+		size_t n_fixtures = sizeof(encrypted_fixtures) / sizeof(encrypted_fixtures[0]);
+		size_t i;
+		for (i = 0; i < n_fixtures; ++i)
+		{
+			const char* path = encrypted_fixtures[i];
+
+			exc = NULL;
+			status = DOCTOTEXT_STATUS_OK;
+			data = doctotext_process_file_ex(path, params, &status, &exc);
+			if (!assert_failure_status(path, data, status, DOCTOTEXT_STATUS_ENCRYPTED, exc, 1))
+				return 1;
+
+			if (!read_entire_file(path, &buf, &buf_size))
+			{
+				fprintf(stderr, "FAIL: could not read fixture %s\n", path);
+				return 1;
+			}
+			exc = NULL;
+			status = DOCTOTEXT_STATUS_OK;
+			data = doctotext_process_file_from_buffer_ex(buf, buf_size, params, &status, &exc);
+			if (!assert_failure_status(path, data, status, DOCTOTEXT_STATUS_ENCRYPTED, exc, 1))
+			{
+				free(buf);
+				return 1;
+			}
+			free(buf);
+			buf = NULL;
+			printf("PASS: %s -> DOCTOTEXT_STATUS_ENCRYPTED (file & buffer)\n", path);
+		}
+
+		/* Legacy API compatibility check */
+		if (!read_entire_file(encrypted_fixtures[0], &buf, &buf_size))
+			return 1;
+		exc = NULL;
+		data = doctotext_process_file_from_buffer(buf, buf_size, params, &exc);
 		free(buf);
-		return 1;
+		buf = NULL;
+		if (data != NULL || exc == NULL)
+		{
+			fprintf(stderr, "FAIL [user_pw_legacy_buffer]: expected NULL + exception\n");
+			return 1;
+		}
+		doctotext_free_exception(exc);
 	}
 
-	exc = NULL;
-	data = doctotext_process_file_from_buffer(buf, buf_size, params, &exc);
-	free(buf);
-	buf = NULL;
-	if (data != NULL || exc == NULL)
-	{
-		fprintf(stderr, "FAIL [user_pw_legacy_buffer]: expected NULL + exception\n");
-		return 1;
-	}
-	doctotext_free_exception(exc);
-
-	/* 4. Invalid / nonexistent inputs -> DOCTOTEXT_STATUS_ERROR */
+	/* 5. Invalid / nonexistent inputs -> DOCTOTEXT_STATUS_ERROR */
 	exc = NULL;
 	status = DOCTOTEXT_STATUS_OK;
 	data = doctotext_process_file_ex("nonexistent_missing_file_for_status_test.pdf", params, &status, &exc);
@@ -182,6 +217,7 @@ int main(void)
 	}
 
 	doctotext_free_extractor_params(params);
+	remove(log_path);
 	printf("c_api_status_test PASSED.\n");
 	return 0;
 }

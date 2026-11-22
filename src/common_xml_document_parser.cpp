@@ -48,6 +48,7 @@ struct CommonXMLDocumentParser::Implementation
 	bool m_manage_xml_parser;
 	bool m_verbose_logging;
 	bool m_error;
+	bool m_encrypted;
 	std::ostream* m_log_stream;
 	size_t m_list_depth;
 	std::map<std::string, ListStyleVector> m_list_styles;
@@ -721,6 +722,11 @@ void CommonXMLDocumentParser::setError(bool error)
 	impl->m_error = error;
 }
 
+void CommonXMLDocumentParser::setEncrypted(bool encrypted)
+{
+	impl->m_encrypted = encrypted;
+}
+
 void CommonXMLDocumentParser::disableText(bool disable)
 {
 	impl->m_disabled_text = disable;
@@ -744,6 +750,7 @@ CommonXMLDocumentParser::CommonXMLDocumentParser()
 	{
 		impl = new Implementation;
 		impl->m_error = false;
+		impl->m_encrypted = false;
 		impl->m_list_depth = 0;
 		impl->m_log_stream = &std::cerr;
 		impl->m_manage_xml_parser = true;
@@ -816,6 +823,11 @@ void CommonXMLDocumentParser::getLinks(std::vector<Link>& links)
 bool CommonXMLDocumentParser::error()
 {
 	return impl->m_error;
+}
+
+bool CommonXMLDocumentParser::encrypted()
+{
+	return impl->m_encrypted;
 }
 
 void CommonXMLDocumentParser::setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data)

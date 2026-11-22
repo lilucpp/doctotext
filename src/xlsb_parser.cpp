@@ -40,6 +40,7 @@
 #include <map>
 #include "metadata.h"
 #include "misc.h"
+#include "oshared.h"
 #include <sstream>
 #include <stdint.h>
 #include <vector>
@@ -81,6 +82,7 @@ struct XLSBParser::Implementation
 	};
 
 	bool m_error;
+	bool m_encrypted;
 	const char* m_buffer;
 	size_t m_buffer_size;
 	std::string m_file_name;
@@ -640,6 +642,7 @@ XLSBParser::XLSBParser(const std::string& file_name)
 {
 	impl = new Implementation();
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	impl->m_file_name = file_name;
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -651,6 +654,7 @@ XLSBParser::XLSBParser(const char *buffer, size_t size)
 {
 	impl = new Implementation();
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	impl->m_file_name = "Memory buffer";
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -725,6 +729,13 @@ Metadata XLSBParser::metaData()
 {
 	Metadata metadata;
 	impl->m_error = false;
+	impl->m_encrypted = false;
+	if (is_encrypted_offcrypto_source(impl->m_file_name, impl->m_buffer, impl->m_buffer_size))
+	{
+		impl->m_encrypted = true;
+		impl->m_error = true;
+		return metadata;
+	}
 	if (!isXLSB())
 	{
 		impl->m_error = true;
@@ -766,6 +777,14 @@ std::string XLSBParser::plainText(const FormattingStyle& formatting)
 {
 	std::string text;
 	impl->m_error = false;
+	impl->m_encrypted = false;
+	if (is_encrypted_offcrypto_source(impl->m_file_name, impl->m_buffer, impl->m_buffer_size))
+	{
+		*impl->m_log_stream << "Office file is encrypted and requires a password.\n";
+		impl->m_encrypted = true;
+		impl->m_error = true;
+		return text;
+	}
 	if (!isXLSB())
 	{
 		impl->m_error = true;
@@ -792,4 +811,9 @@ std::string XLSBParser::plainText(const FormattingStyle& formatting)
 bool XLSBParser::error()
 {
 	return impl->m_error;
+}
+
+bool XLSBParser::encrypted()
+{
+	return impl->m_encrypted;
 }

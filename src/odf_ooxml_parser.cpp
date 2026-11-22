@@ -42,6 +42,7 @@
 #include <map>
 #include "metadata.h"
 #include "misc.h"
+#include "oshared.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sstream>
@@ -50,6 +51,16 @@
 using namespace std;
 
 const int CASESENSITIVITY = 1;
+
+static bool has_odf_encryption_manifest(const DocToTextUnzip& zipfile)
+{
+	if (!zipfile.exists("META-INF/manifest.xml"))
+		return false;
+	std::string manifest;
+	if (!zipfile.read("META-INF/manifest.xml", &manifest))
+		return false;
+	return manifest.find("encryption-data") != std::string::npos;
+}
 
 static string locate_main_file(const DocToTextUnzip& zipfile, std::ostream& log_stream)
 {
@@ -298,6 +309,7 @@ ODFOOXMLParser::~ODFOOXMLParser()
 bool ODFOOXMLParser::isODFOOXML()
 {
 	setError(false);
+	setEncrypted(false);
 	if (!extended_impl->m_buffer)	//check file
 	{
 		FILE* f = fopen(extended_impl->m_file_name.c_str(), "rb");
@@ -311,6 +323,11 @@ bool ODFOOXMLParser::isODFOOXML()
 		if (fread(magic, 1, 2, f) != 2 || magic[0] != 'P' || magic[1] != 'K')
 		{
 			fclose(f);
+			if (is_encrypted_offcrypto_source(extended_impl->m_file_name, NULL, 0))
+			{
+				setEncrypted(true);
+				return true;
+			}
 			return false;
 		}
 		fclose(f);
@@ -325,6 +342,11 @@ bool ODFOOXMLParser::isODFOOXML()
 	         extended_impl->m_buffer[0] != 'P' ||
 	         extended_impl->m_buffer[1] != 'K')
 	{
+		if (is_encrypted_offcrypto_source(extended_impl->m_file_name, extended_impl->m_buffer, extended_impl->m_buffer_size))
+		{
+			setEncrypted(true);
+			return true;
+		}
 		return false;
 	}
 	DocToTextUnzip zipfile;
@@ -336,6 +358,12 @@ bool ODFOOXMLParser::isODFOOXML()
 		zipfile.setLogStream(getLogStream());
 	if (!zipfile.open())
 		return false;
+	if (has_odf_encryption_manifest(zipfile))
+	{
+		setEncrypted(true);
+		zipfile.close();
+		return true;
+	}
 	string main_file_name = locate_main_file(zipfile, getLogStream());
 	if (main_file_name == "")
 	{
@@ -355,6 +383,7 @@ bool ODFOOXMLParser::isODFOOXML()
 string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 {
 	setError(false);
+	setEncrypted(false);
 	DocToTextUnzip zipfile;
 	if (extended_impl->m_buffer)
 		zipfile.setBuffer(extended_impl->m_buffer, extended_impl->m_buffer_size);
@@ -364,8 +393,23 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		zipfile.setLogStream(getLogStream());
 	if (!zipfile.open())
 	{
+		if (is_encrypted_offcrypto_source(extended_impl->m_file_name, extended_impl->m_buffer, extended_impl->m_buffer_size))
+		{
+			getLogStream() << "Office file is encrypted and requires a password.\n";
+			setEncrypted(true);
+			setError(true);
+			return "";
+		}
 		getLogStream() << "Error opening file " << extended_impl->m_file_name.c_str() << endl;
 		setError(true);
+		return "";
+	}
+	if (has_odf_encryption_manifest(zipfile))
+	{
+		getLogStream() << "ODF file is encrypted and requires a password.\n";
+		setEncrypted(true);
+		setError(true);
+		zipfile.close();
 		return "";
 	}
 	string main_file_name = locate_main_file(zipfile, getLogStream());
@@ -569,6 +613,7 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 Metadata ODFOOXMLParser::metaData()
 {
 	setError(false);
+	setEncrypted(false);
 	Metadata meta;
 	DocToTextUnzip zipfile;
 	if (extended_impl->m_buffer)
@@ -579,8 +624,21 @@ Metadata ODFOOXMLParser::metaData()
 		zipfile.setLogStream(getLogStream());
 	if (!zipfile.open())
 	{
+		if (is_encrypted_offcrypto_source(extended_impl->m_file_name, extended_impl->m_buffer, extended_impl->m_buffer_size))
+		{
+			setEncrypted(true);
+			setError(true);
+			return meta;
+		}
 		getLogStream() << "Error opening file " << extended_impl->m_file_name.c_str() << endl;
 		setError(true);
+		return meta;
+	}
+	if (has_odf_encryption_manifest(zipfile))
+	{
+		setEncrypted(true);
+		setError(true);
+		zipfile.close();
 		return meta;
 	}
 	if (zipfile.exists("meta.xml"))

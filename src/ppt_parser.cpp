@@ -77,6 +77,7 @@ enum RecordType
 struct PPTParser::Implementation
 {
 	bool m_error;
+	bool m_encrypted;
 	std::string m_file_name;
 	bool m_verbose_logging;
 	std::ostream* m_log_stream;
@@ -299,6 +300,7 @@ PPTParser::PPTParser(const std::string& file_name)
 {
 	impl = new Implementation();
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	impl->m_file_name = file_name;
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -312,6 +314,7 @@ PPTParser::PPTParser(const char *buffer, size_t size)
 {
 	impl = new Implementation();
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	impl->m_file_name = "Memory buffer";
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -345,6 +348,7 @@ void PPTParser::setLogStream(std::ostream& log_stream)
 bool PPTParser::isPPT()
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	ThreadSafeOLEStorage* storage = NULL;
 	if (impl->m_buffer)
 		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
@@ -453,6 +457,7 @@ static void parse_ppt_pictures(ThreadSafeOLEStorage& storage, doctotext::ImagePa
 std::string PPTParser::plainText(const FormattingStyle& formatting)
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	ThreadSafeOLEStorage* storage = NULL;
 	if (impl->m_buffer)
 		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
@@ -461,6 +466,14 @@ std::string PPTParser::plainText(const FormattingStyle& formatting)
 	if (!storage->isValid())
 	{
 		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
+		impl->m_error = true;
+		delete storage;
+		return "";
+	}
+	if (is_encrypted_ppt_ole(*storage))
+	{
+		*impl->m_log_stream << "PPT file is encrypted and requires a password.\n";
+		impl->m_encrypted = true;
 		impl->m_error = true;
 		delete storage;
 		return "";
@@ -513,12 +526,20 @@ std::string PPTParser::plainText(const FormattingStyle& formatting)
 Metadata PPTParser::metaData()
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	Metadata meta;
 	ThreadSafeOLEStorage* storage = NULL;
 	if (impl->m_buffer)
 		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
 	else
 		storage = new ThreadSafeOLEStorage(impl->m_file_name);
+	if (storage->isValid() && is_encrypted_ppt_ole(*storage))
+	{
+		impl->m_encrypted = true;
+		impl->m_error = true;
+		delete storage;
+		return meta;
+	}
 	if (!parse_oshared_summary_info(*storage, *impl->m_log_stream, meta))
 	{
 		impl->m_error = true;
@@ -540,4 +561,9 @@ Metadata PPTParser::metaData()
 bool PPTParser::error()
 {
 	return impl->m_error;
+}
+
+bool PPTParser::encrypted()
+{
+	return impl->m_encrypted;
 }

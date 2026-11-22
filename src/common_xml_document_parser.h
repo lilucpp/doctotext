@@ -118,6 +118,7 @@ class CommonXMLDocumentParser
 		std::ostream& getLogStream() const;
 		bool manageXmlParser() const;
 		void setError(bool error);
+		void setEncrypted(bool encrypted);
 
 		///disables modifying text data inside method onUnregisteredCommand
 		void disableText(bool disable);
@@ -148,6 +149,7 @@ class CommonXMLDocumentParser
 		virtual std::string plainText(XmlParseMode mode, FormattingStyle& options) = 0;
 		virtual Metadata metaData() = 0;
 		bool error();
+		bool encrypted();
 };
 
 #endif
