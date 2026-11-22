@@ -7204,6 +7204,95 @@ struct PDFParser::Implementation
 		return false;
 	}
 
+	void loadFontsFromDictionary(PDFReader::PDFDictionary* fonts_dictionary, PDFContent::FontsByNames* fonts_for_page)
+	{
+		if (!fonts_dictionary)
+			return;
+		std::map<std::string, PDFReader::PDFObject*>::iterator it = fonts_dictionary->m_objects.begin();
+		std::map<std::string, PDFReader::PDFObject*>::iterator end = fonts_dictionary->m_objects.end();
+		while (it != end)
+		{
+			std::string font_code = it->first;
+			PDFReader::PDFDictionary* font_dictionary = fonts_dictionary->getObjAsDictionary(font_code);
+			if (font_dictionary)
+			{
+				PDFContent::Font* font = NULL;
+				bool is_new_font = false;
+				try
+				{
+					PDFReader::PDFReferenceCall* font_dictionary_ref = fonts_dictionary->getObjAsReferenceCall(font_code);
+					if (font_dictionary_ref)
+					{
+						if (m_pdf_content.m_fonts_by_indexes.find(font_dictionary_ref->m_index) == m_pdf_content.m_fonts_by_indexes.end())
+						{
+							is_new_font = true;
+							font = new PDFContent::Font;
+							font->m_font_dictionary = font_dictionary;
+							(*fonts_for_page)[font_code] = font;
+							m_pdf_content.m_fonts_by_indexes[font_dictionary_ref->m_index] = font;
+							m_pdf_content.m_fonts.push_back(font);
+						}
+						else
+							(*fonts_for_page)[font_code] = m_pdf_content.m_fonts_by_indexes[font_dictionary_ref->m_index];
+					}
+					else
+					{
+						is_new_font = true;
+						font = new PDFContent::Font;
+						font->m_font_dictionary = font_dictionary;
+						(*fonts_for_page)[font_code] = font;
+						m_pdf_content.m_fonts.push_back(font);
+					}
+				}
+				catch (std::bad_alloc& ba)
+				{
+					if (font)
+						delete font;
+					font = NULL;
+					throw doctotextex::CustomException("Bad alloc");
+				}
+
+				if (is_new_font)
+				{
+					getFontEncoding(*font);
+					getFontInfo(*font);
+				}
+			}
+			++it;
+		}
+	}
+
+	void scanXObjectsForFonts(PDFReader::PDFDictionary* res_dictionary, PDFContent::FontsByNames* fonts_for_page, std::set<PDFReader::PDFDictionary*>& visited)
+	{
+		if (!res_dictionary || visited.find(res_dictionary) != visited.end())
+			return;
+		visited.insert(res_dictionary);
+		PDFReader::PDFDictionary* xobjects = res_dictionary->getObjAsDictionary("XObject");
+		if (!xobjects)
+			return;
+		std::map<std::string, PDFReader::PDFObject*>::iterator it = xobjects->m_objects.begin();
+		while (it != xobjects->m_objects.end())
+		{
+			PDFReader::PDFStream* stream = xobjects->getObjAsStream(it->first);
+			if (stream && stream->m_dictionary)
+			{
+				std::string subtype = stream->m_dictionary->getValAsString("Subtype", "");
+				if (subtype == "Form")
+				{
+					PDFReader::PDFDictionary* form_res = stream->m_dictionary->getObjAsDictionary("Resources");
+					if (form_res)
+					{
+						PDFReader::PDFDictionary* form_fonts = form_res->getObjAsDictionary("Font");
+						if (form_fonts)
+							loadFontsFromDictionary(form_fonts, fonts_for_page);
+						scanXObjectsForFonts(form_res, fonts_for_page, visited);
+					}
+				}
+			}
+			++it;
+		}
+	}
+
 	void parseFonts()
 	{
 		for (size_t i = 0; i < m_pdf_content.m_pages_resources.size(); ++i)
@@ -7212,64 +7301,12 @@ struct PDFParser::Implementation
 			PDFReader::PDFDictionary* res_dictionary = m_pdf_content.m_pages_resources[i];
 			if (!res_dictionary)
 				continue;
-			PDFReader::PDFDictionary* fonts_dictionary = res_dictionary->getObjAsDictionary("Font");
 			PDFContent::FontsByNames* fonts_for_page = &m_pdf_content.m_fonts_for_pages[i];
+			PDFReader::PDFDictionary* fonts_dictionary = res_dictionary->getObjAsDictionary("Font");
 			if (fonts_dictionary)
-			{
-				std::map<std::string, PDFReader::PDFObject*>::iterator it = fonts_dictionary->m_objects.begin();
-				std::map<std::string, PDFReader::PDFObject*>::iterator end = fonts_dictionary->m_objects.end();
-				while (it != end)
-				{
-					std::string font_code = it->first;
-					PDFReader::PDFDictionary* font_dictionary = fonts_dictionary->getObjAsDictionary(font_code);
-					if (font_dictionary)
-					{
-						PDFContent::Font* font = NULL;
-						bool is_new_font = false;
-						//make sure we wont create the same instance of Font twice.
-						try
-						{
-							PDFReader::PDFReferenceCall* font_dictionary_ref = fonts_dictionary->getObjAsReferenceCall(font_code);
-							if (font_dictionary_ref)
-							{
-								if (m_pdf_content.m_fonts_by_indexes.find(font_dictionary_ref->m_index) == m_pdf_content.m_fonts_by_indexes.end())
-								{
-									is_new_font = true;
-									font = new PDFContent::Font;
-									font->m_font_dictionary = font_dictionary;
-									(*fonts_for_page)[font_code] = font;
-									m_pdf_content.m_fonts_by_indexes[font_dictionary_ref->m_index] = font;
-									m_pdf_content.m_fonts.push_back(font);
-								}
-								else
-									(*fonts_for_page)[font_code] = m_pdf_content.m_fonts_by_indexes[font_dictionary_ref->m_index];
-							}
-							else
-							{
-								is_new_font = true;
-								font = new PDFContent::Font;
-								font->m_font_dictionary = font_dictionary;
-								(*fonts_for_page)[font_code] = font;
-								m_pdf_content.m_fonts.push_back(font);
-							}
-						}
-						catch (std::bad_alloc& ba)
-						{
-							if (font)
-								delete font;
-							font = NULL;
-							throw doctotextex::CustomException("Bad alloc");
-						}
-
-						if (is_new_font)
-						{
-							getFontEncoding(*font);
-							getFontInfo(*font);
-						}
-					}
-					++it;
-				}
-			}
+				loadFontsFromDictionary(fonts_dictionary, fonts_for_page);
+			std::set<PDFReader::PDFDictionary*> visited;
+			scanXObjectsForFonts(res_dictionary, fonts_for_page, visited);
 		}
 	}
 
@@ -7922,6 +7959,298 @@ struct PDFParser::Implementation
 		}
 	}
 
+	void parseSingleContentStream(PDFReader::PDFStream* page_content,
+	                              PDFContent::FontsByNames* fonts_for_page,
+	                              PDFContent::PageText& page_text,
+	                              PDFReader::PDFDictionary* current_resources,
+	                              size_t page_index,
+	                              std::set<std::string>& processed_images,
+	                              int depth = 0)
+	{
+		if (!page_content || depth >= 10)
+			return;
+
+		PDFReader::PDFStream::PDFStreamIterator iterator = page_content->getIterator();
+		std::string last_name;
+		std::string last_string;
+		bool in_text = false;
+		std::vector<double> last_numbers;
+		std::vector<PDFContent::TJArrayElement> tj_array;
+		tj_array.reserve(100);
+
+		iterator.backToRoot();
+		iterator.levelDown();
+		while (iterator.hasNext())
+		{
+			iterator.getNextElement();
+			switch (iterator.getType())
+			{
+				case PDFReader::operator_obj:
+				{
+					std::string pdf_operator = iterator.toPlainText();
+					switch (PDFReader::getOperatorCode(pdf_operator))
+					{
+						case PDFReader::ET:
+						{
+							in_text = false;
+							break;
+						}
+						case PDFReader::Tm:
+						{
+							if (!in_text || last_numbers.size() < 6)
+								break;
+							page_text.executeTm(last_numbers);
+							break;
+						}
+						case PDFReader::Td:
+						{
+							if (!in_text || last_numbers.size() < 2)
+								break;
+							page_text.executeTd(last_numbers);
+							break;
+						}
+						case PDFReader::T_star:
+						{
+							if (!in_text)
+								break;
+							page_text.executeTstar();
+							break;
+						}
+						case PDFReader::TD:
+						{
+							if (!in_text || last_numbers.size() < 2)
+								break;
+							page_text.executeTD(last_numbers);
+							break;
+						}
+						case PDFReader::TJ:
+						{
+							if (!in_text)
+								break;
+							page_text.executeTJ(tj_array);
+							tj_array.clear();
+							break;
+						}
+						case PDFReader::Tj:
+						{
+							if (!in_text)
+								break;
+							page_text.executeTj(last_string);
+							break;
+						}
+						case PDFReader::Tw:
+						{
+							if (!in_text || last_numbers.size() < 1)
+								break;
+							page_text.executeTw(last_numbers);
+							break;
+						}
+						case PDFReader::Tc:
+						{
+							if (!in_text || last_numbers.size() < 1)
+								break;
+							page_text.executeTc(last_numbers);
+							break;
+						}
+						case PDFReader::Ts:
+						{
+							if (!in_text || last_numbers.size() < 1)
+								break;
+							page_text.executeTs(last_numbers);
+							break;
+						}
+						case PDFReader::quote:
+						{
+							if (!in_text)
+								break;
+							page_text.executeQuote(last_string);
+							break;
+						}
+						case PDFReader::double_quote:
+						{
+							if (!in_text || last_numbers.size() < 2)
+								break;
+							page_text.executeDoubleQuote(last_string, last_numbers);
+							break;
+						}
+						case PDFReader::Tf:
+						{
+							if (!in_text && last_numbers.size() < 1)
+								break;
+							if (fonts_for_page->find(last_name) != fonts_for_page->end())
+								page_text.executeTf(last_numbers, *(*fonts_for_page)[last_name]);
+							break;
+						}
+						case PDFReader::BT:
+						{
+							in_text = true;
+							page_text.executeBT();
+							break;
+						}
+						case PDFReader::TL:
+						{
+							if (last_numbers.size() < 1)
+								break;
+							page_text.executeTL(last_numbers);
+							break;
+						}
+						case PDFReader::TZ:
+						{
+							if (last_numbers.size() < 1)
+								break;
+							page_text.executeTZ(last_numbers);
+							break;
+						}
+						case PDFReader::cm:
+						{
+							if (last_numbers.size() < 6)
+								break;
+							page_text.executeCm(last_numbers);
+							break;
+						}
+						case PDFReader::Q:
+						{
+							page_text.popState();
+							break;
+						}
+						case PDFReader::q:
+						{
+							page_text.pushState();
+							break;
+						}
+						case PDFReader::Do:
+						{
+							if (!last_name.empty())
+							{
+								PDFReader::PDFDictionary* resources = current_resources;
+								if (!resources)
+									resources = m_pdf_content.m_pages_resources[page_index];
+								if (!resources)
+									resources = m_pdf_content.m_pages[page_index]->getObjAsDictionary("Resources");
+								if (resources)
+								{
+									PDFReader::PDFDictionary* xobjects = resources->getObjAsDictionary("XObject");
+									if (xobjects)
+									{
+										PDFReader::PDFStream* xobj_stream = xobjects->getObjAsStream(last_name);
+										if (xobj_stream && xobj_stream->m_dictionary)
+										{
+											std::string subtype = xobj_stream->m_dictionary->getValAsString("Subtype", "");
+											if (subtype == "Form" && depth < 10)
+											{
+												page_text.pushState();
+												PDFReader::PDFArray* matrix = xobj_stream->m_dictionary->getObjAsArray("Matrix");
+												if (matrix && matrix->Size() >= 6)
+												{
+													std::vector<double> mat_vals;
+													for (size_t m = 0; m < 6; ++m)
+														mat_vals.push_back(matrix->getValAsDouble(m, 0.0));
+													page_text.executeCm(mat_vals);
+												}
+												PDFReader::PDFDictionary* form_resources = xobj_stream->m_dictionary->getObjAsDictionary("Resources");
+												if (!form_resources)
+													form_resources = resources;
+												parseSingleContentStream(xobj_stream, fonts_for_page, page_text, form_resources, page_index, processed_images, depth + 1);
+												page_text.popState();
+											}
+											else if (m_image_callback)
+											{
+												std::vector<char> img_bytes;
+												std::string img_filename;
+												if (extractXObjectImage(xobj_stream, last_name, img_bytes, img_filename))
+												{
+													processed_images.insert(last_name);
+
+													double ctm_x = page_text.m_current_state.m_ctm[4];
+													double ctm_y = page_text.m_current_state.m_ctm[5];
+													double ctm_w = std::sqrt(page_text.m_current_state.m_ctm[0] * page_text.m_current_state.m_ctm[0] +
+													                         page_text.m_current_state.m_ctm[1] * page_text.m_current_state.m_ctm[1]);
+													double ctm_h = std::sqrt(page_text.m_current_state.m_ctm[2] * page_text.m_current_state.m_ctm[2] +
+													                         page_text.m_current_state.m_ctm[3] * page_text.m_current_state.m_ctm[3]);
+
+													bool is_dual_layer_background = false;
+													if (page_text.m_text_elements.size() > 10)
+													{
+														double page_w = 612.0, page_h = 792.0;
+														PDFReader::PDFArray* media_box = m_pdf_content.m_pages[page_index]->getObjAsArray("MediaBox");
+														if (media_box && media_box->Size() >= 4)
+														{
+															page_w = std::abs(media_box->getValAsDouble(2, 612.0) - media_box->getValAsDouble(0, 0.0));
+															page_h = std::abs(media_box->getValAsDouble(3, 792.0) - media_box->getValAsDouble(1, 0.0));
+														}
+														if (ctm_w >= page_w * 0.85 && ctm_h >= page_h * 0.85)
+															is_dual_layer_background = true;
+													}
+
+													if (!is_dual_layer_background)
+													{
+														std::string ocr_text = m_image_callback(img_filename, img_bytes.data(), img_bytes.size(), m_image_user_data);
+														if (!ocr_text.empty())
+														{
+															page_text.addImageText(ctm_x, ctm_y, ctm_w, ctm_h, ocr_text);
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+							last_name.clear();
+							break;
+						}
+					}
+					last_numbers.clear();
+					break;
+				}
+				case PDFReader::string:
+				{
+					if (in_text)
+						iterator.toHexString(last_string);
+					break;
+				}
+				case PDFReader::array:
+				{
+					if (in_text)
+					{
+						tj_array.clear();
+						iterator.levelDown();
+						while (iterator.hasNext())
+						{
+							iterator.getNextElement();
+							if (iterator.getType() == PDFReader::string)
+							{
+								tj_array.push_back(PDFContent::TJArrayElement());
+								tj_array[tj_array.size() - 1].m_is_number = false;
+								iterator.toHexString(tj_array[tj_array.size() - 1].m_text);
+							}
+							else if (iterator.getType() == PDFReader::int_numeric || iterator.getType() == PDFReader::float_numeric)
+							{
+								tj_array.push_back(PDFContent::TJArrayElement());
+								tj_array[tj_array.size() - 1].m_is_number = true;
+								tj_array[tj_array.size() - 1].m_value = iterator.toDouble();
+							}
+						}
+						iterator.levelUp();
+					}
+					break;
+				}
+				case PDFReader::name:
+				{
+					last_name = std::string(iterator.getData() + 1, iterator.getDataLength() - 1);
+					break;
+				}
+				case PDFReader::int_numeric:
+				case PDFReader::float_numeric:
+				{
+					last_numbers.push_back(iterator.toDouble());
+					break;
+				}
+			}
+		}
+		iterator.levelUp();
+	}
+
 	void parseText(std::string& text)
 	{
 		for (size_t i = 0; i < m_pdf_content.m_pages.size(); ++i)
@@ -7948,262 +8277,8 @@ struct PDFParser::Implementation
 					PDFReader::PDFStream* page_content = contents[j];
 					if (page_content)
 					{
-						PDFReader::PDFStream::PDFStreamIterator iterator = page_content->getIterator();
-						std::string last_name;
-						std::string last_string;
-						bool in_text = false;
-						std::vector<double> last_numbers;
-						std::vector<PDFContent::TJArrayElement> tj_array;
-						tj_array.reserve(100);
-
-						iterator.backToRoot();
-						iterator.levelDown();
-						while (iterator.hasNext())
-						{
-							iterator.getNextElement();
-							switch (iterator.getType())
-							{
-								case PDFReader::operator_obj:
-								{
-									std::string pdf_operator = iterator.toPlainText();
-									switch (PDFReader::getOperatorCode(pdf_operator))
-									{
-										case PDFReader::ET:
-										{
-											in_text = false;
-											break;
-										}
-										case PDFReader::Tm:
-										{
-											if (!in_text || last_numbers.size() < 6)
-												break;
-											page_text.executeTm(last_numbers);
-											break;
-										}
-										case PDFReader::Td:
-										{
-											if (!in_text || last_numbers.size() < 2)
-												break;
-											page_text.executeTd(last_numbers);
-											break;
-										}
-										case PDFReader::T_star:
-										{
-											if (!in_text)
-												break;
-											page_text.executeTstar();
-											break;
-										}
-										case PDFReader::TD:
-										{
-											if (!in_text || last_numbers.size() < 2)
-												break;
-											page_text.executeTD(last_numbers);
-											break;
-										}
-										case PDFReader::TJ:
-										{
-											if (!in_text)
-												break;
-											page_text.executeTJ(tj_array);
-											tj_array.clear();
-											break;
-										}
-										case PDFReader::Tj:
-										{
-											if (!in_text)
-												break;
-											page_text.executeTj(last_string);
-											break;
-										}
-										case PDFReader::Tw:
-										{
-											if (!in_text || last_numbers.size() < 1)
-												break;
-											page_text.executeTw(last_numbers);
-											break;
-										}
-										case PDFReader::Tc:
-										{
-											if (!in_text || last_numbers.size() < 1)
-												break;
-											page_text.executeTc(last_numbers);
-											break;
-										}
-										case PDFReader::Ts:
-										{
-											if (!in_text || last_numbers.size() < 1)
-												break;
-											page_text.executeTs(last_numbers);
-											break;
-										}
-										case PDFReader::quote:
-										{
-											if (!in_text)
-												break;
-											page_text.executeQuote(last_string);
-											break;
-										}
-										case PDFReader::double_quote:
-										{
-											if (!in_text || last_numbers.size() < 2)
-												break;
-											page_text.executeDoubleQuote(last_string, last_numbers);
-											break;
-										}
-										case PDFReader::Tf:
-										{
-											if (!in_text && last_numbers.size() < 1)
-												break;
-											if (fonts_for_page->find(last_name) != fonts_for_page->end())
-												page_text.executeTf(last_numbers, *(*fonts_for_page)[last_name]);
-											break;
-										}
-										case PDFReader::BT:
-										{
-											in_text = true;
-											page_text.executeBT();
-											break;
-										}
-										case PDFReader::TL:
-										{
-											if (last_numbers.size() < 1)
-												break;
-											page_text.executeTL(last_numbers);
-											break;
-										}
-										case PDFReader::TZ:
-										{
-											if (last_numbers.size() < 1)
-												break;
-											page_text.executeTZ(last_numbers);
-											break;
-										}
-										case PDFReader::cm:
-										{
-											if (last_numbers.size() < 6)
-												break;
-											page_text.executeCm(last_numbers);
-											break;
-										}
-										case PDFReader::Q:
-										{
-											page_text.popState();
-											break;
-										}
-										case PDFReader::q:
-										{
-											page_text.pushState();
-											break;
-										}
-										case PDFReader::Do:
-										{
-											if (!last_name.empty() && m_image_callback)
-											{
-												PDFReader::PDFDictionary* resources = m_pdf_content.m_pages_resources[i];
-												if (!resources)
-													resources = m_pdf_content.m_pages[i]->getObjAsDictionary("Resources");
-												if (resources)
-												{
-													PDFReader::PDFDictionary* xobjects = resources->getObjAsDictionary("XObject");
-													if (xobjects)
-													{
-														PDFReader::PDFStream* img_stream = xobjects->getObjAsStream(last_name);
-														if (img_stream)
-														{
-															std::vector<char> img_bytes;
-															std::string img_filename;
-															if (extractXObjectImage(img_stream, last_name, img_bytes, img_filename))
-															{
-																processed_images.insert(last_name);
-
-																double ctm_x = page_text.m_current_state.m_ctm[4];
-																double ctm_y = page_text.m_current_state.m_ctm[5];
-																double ctm_w = std::sqrt(page_text.m_current_state.m_ctm[0] * page_text.m_current_state.m_ctm[0] +
-																                         page_text.m_current_state.m_ctm[1] * page_text.m_current_state.m_ctm[1]);
-																double ctm_h = std::sqrt(page_text.m_current_state.m_ctm[2] * page_text.m_current_state.m_ctm[2] +
-																                         page_text.m_current_state.m_ctm[3] * page_text.m_current_state.m_ctm[3]);
-
-																bool is_dual_layer_background = false;
-																if (page_text.m_text_elements.size() > 10)
-																{
-																	double page_w = 612.0, page_h = 792.0;
-																	PDFReader::PDFArray* media_box = m_pdf_content.m_pages[i]->getObjAsArray("MediaBox");
-																	if (media_box && media_box->Size() >= 4)
-																	{
-																		page_w = std::abs(media_box->getValAsDouble(2, 612.0) - media_box->getValAsDouble(0, 0.0));
-																		page_h = std::abs(media_box->getValAsDouble(3, 792.0) - media_box->getValAsDouble(1, 0.0));
-																	}
-																	if (ctm_w >= page_w * 0.85 && ctm_h >= page_h * 0.85)
-																		is_dual_layer_background = true;
-																}
-
-																if (!is_dual_layer_background)
-																{
-																	std::string ocr_text = m_image_callback(img_filename, img_bytes.data(), img_bytes.size(), m_image_user_data);
-																	if (!ocr_text.empty())
-																	{
-																		page_text.addImageText(ctm_x, ctm_y, ctm_w, ctm_h, ocr_text);
-																	}
-																}
-															}
-														}
-													}
-												}
-											}
-											last_name.clear();
-											break;
-										}
-									}
-									last_numbers.clear();
-									break;
-								}
-								case PDFReader::string:
-								{
-									if (in_text)
-										iterator.toHexString(last_string);
-									break;
-								}
-								case PDFReader::array:
-								{
-									if (in_text)
-									{
-										tj_array.clear();
-										iterator.levelDown();
-										while (iterator.hasNext())
-										{
-											iterator.getNextElement();
-											if (iterator.getType() == PDFReader::string)
-											{
-												tj_array.push_back(PDFContent::TJArrayElement());
-												tj_array[tj_array.size() - 1].m_is_number = false;
-												iterator.toHexString(tj_array[tj_array.size() - 1].m_text);
-											}
-											else if (iterator.getType() == PDFReader::int_numeric || iterator.getType() == PDFReader::float_numeric)
-											{
-												tj_array.push_back(PDFContent::TJArrayElement());
-												tj_array[tj_array.size() - 1].m_is_number = true;
-												tj_array[tj_array.size() - 1].m_value = iterator.toDouble();
-											}
-										}
-										iterator.levelUp();
-									}
-									break;
-								}
-								case PDFReader::name:
-								{
-									last_name = std::string(iterator.getData() + 1, iterator.getDataLength() - 1);
-									break;
-								}
-								case PDFReader::int_numeric:
-								case PDFReader::float_numeric:
-								{
-									last_numbers.push_back(iterator.toDouble());
-									break;
-								}
-							}
-						}
-						iterator.levelUp();
+						parseSingleContentStream(page_content, fonts_for_page, page_text,
+						                         m_pdf_content.m_pages_resources[i], i, processed_images, 0);
 					}
 				}
 				if (page_text.m_text_elements.empty() && m_image_callback)
