@@ -25,19 +25,22 @@ DocToText is a compact, high-performance C/C++ library and command-line utility 
 
 ## Why This Fork? (Comparison with Upstream)
 
-Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlower (2020–2022), DocToText was a capable document converter. This maintained fork (**v5.1.2+ by [lilucpp](https://github.com/lilucpp)**) elevates it into a modern, production-grade text extraction engine tailored for high-throughput data processing, RAG (Retrieval-Augmented Generation), and search indexing:
+Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlower (2020–2022), DocToText was a capable document converter. This maintained fork (**v5.1.5+ by [lilucpp](https://github.com/lilucpp)**) elevates it into a modern, production-grade text extraction engine tailored for high-throughput data processing, RAG (Retrieval-Augmented Generation), and search indexing:
 
-| Capability / Feature | Original (SILVERCODERS 0.2.x) | lithiumFlower Fork | **This Fork (lilucpp v5.1.2+)** |
+| Capability / Feature | Original (SILVERCODERS 0.2.x) | lithiumFlower Fork | **This Fork (lilucpp v5.1.5+)** |
 | :--- | :---: | :---: | :---: |
-| **PDF In-Place Embedded Image Extraction** | ❌ Unsupported (`TODO: Do`) | ❌ Unsupported | **✅ Supported (JPEG, Flate, PNG, BMP)** |
-| **PDF 2D Reading-Order Placement** | ❌ None | ❌ None | **✅ CTM matrix 2D geometric sorting** |
+| **PDF In-Place Embedded Image Extraction** | ❌ Unsupported (`TODO: Do`) | ❌ Unsupported | **✅ Supported (JPEG, Flate, PNG, BMP, JBIG2, CCITT G3/G4)** |
+| **PDF 2D Reading-Order & Multi-Column Layout** | ❌ None | ❌ None | **✅ CTM 2D geometric sorting, formula baseline clustering & column splitting** |
+| **PDF Embedded Files, Annotations & Forms** | ❌ None | ❌ None | **✅ Extracts `/EmbeddedFiles`, `/Annots`, Form XObjects & AcroForm/XFA** |
 | **Dual-Layer (Searchable) PDF Deduplication** | ❌ None | ❌ None | **✅ Auto-detects & skips redundant background OCR** |
 | **Pure Scanned PDF Fallback** | ❌ Returns empty text | ❌ Returns empty text | **✅ Auto-dispatches all Image XObjects** |
+| **Encrypted File Handling & Status C API** | ⚠️ Generic failure | ⚠️ Generic failure | **✅ Empty-password PDF decrypt + `DOCTOTEXT_STATUS_ENCRYPTED` (PDF/Office/ODF)** |
 | **Standalone Images Parsing** | ❌ Unsupported | ❌ Unsupported | **✅ PNG, JPG, WebP, BMP, TIFF, GIF via OCR** |
 | **Binary Format Sniffing (Magic Bytes)** | ❌ File extension only | ❌ Extension biased | **✅ Deep sniffing (~1.2 µs) + Archive types (ZIP/7Z/TAR/RAR)** |
 | **Character Set Auto-Detection C API** | ❌ Internal only | ❌ Internal only | **✅ Public C API (`libcharsetdetect`)** |
-| **Cross-Compiler C ABI Stability** | ⚠️ STL / ABI breakage (MSVC) | ⚠️ Unstable FFI | **✅ Production-grade C ABI (`__cdecl`), safe for FFI** |
+| **Cross-Compiler C ABI Stability** | ⚠️ STL / ABI breakage (MSVC) | ⚠️ Unstable FFI | **✅ Production-grade C ABI (`__cdecl`), self-contained shared lib** |
 | **Zero-Config Portable Deployment** | ❌ System install required | ❌ System paths | **✅ Relocatable (`$ORIGIN` & adjacent DLL search)** |
+| **Side-by-Side QA Preview & Tika Diff Workbench** | ❌ None | ❌ None | **✅ Zero-dependency web inspector (`examples/viewer`)** |
 | **Multi-Platform CI/CD Workflows** | ❌ None | ⚠️ Basic | **✅ Automated GitHub Actions build, test & release** |
 
 ---
@@ -268,18 +271,44 @@ text = extract_document_text("example.docx")  # Also supports .pdf, .xlsx, .pptx
 print(text)
 ```
 
-### 8. Command-Line Interface (CLI)
+### 8. Status & Encryption Detection (C API)
+
+```c
+#include <stdio.h>
+#include <doctotext/doctotext_c_api.h>
+
+void parse_with_status(const char* path)
+{
+    DocToTextExtractorParams* params = doctotext_create_extractor_params();
+    doctotext_status status = DOCTOTEXT_STATUS_OK;
+    DocToTextException* error = NULL;
+
+    DocToTextExtractedData* data = doctotext_process_file_ex(path, params, &status, &error);
+    if (status == DOCTOTEXT_STATUS_ENCRYPTED) {
+        fprintf(stderr, "Document is password-protected: %s\n", path);
+    } else if (status == DOCTOTEXT_STATUS_OK && data) {
+        printf("%s\n", doctotext_extracted_data_get_text(data));
+    }
+    if (data) doctotext_free_extracted_data(data);
+    if (error) doctotext_free_exception(error);
+    doctotext_free_extractor_params(params);
+}
+```
+
+### 9. Command-Line Interface (CLI)
 
 ```bash
 # Extract text to standard output
 ./doctotext sample.docx
 
+# Normalize excess PDF / layout whitespace
+./doctotext --compact-whitespace paper.pdf
+
 # Parse code, CSS, or plain text with automatic encoding detection
 ./doctotext --txt app.css
 
-# Extract metadata or embedded annotations
-./doctotext --metadata paper.pdf
-./doctotext --annotations review.odt
+# Extract document metadata
+./doctotext --meta paper.pdf
 
 # Unix stream processing pipeline
 ./doctotext report.doc | grep -i "confidential" | head -n 10
@@ -344,6 +373,13 @@ make -j$(sysctl -n hw.ncpu)
   LD_LIBRARY_PATH=./build ./tests/test_img_runner tests_img/embedded_image2.pdf
   ```
   Parses documents with embedded images, standalone picture files (PNG, JPEG, WebP, BMP, TIFF, GIF), and scanned PDFs under `tests_img/`, printing in-place OCR extraction results.
+
+- **Side-by-Side Document Inspector (`examples/viewer`)**:
+  ```bash
+  ./examples/run_viewer.sh
+  # Optional: ./examples/run_viewer.sh --port 9000 --dir ./tests --tika-jar /path/to/tika-app.jar
+  ```
+  Launches a zero-dependency web workbench with left-pane source preview (PDF plugin / `pdftoppm` page raster / LibreOffice Office-to-PDF) and right-pane DocToText / PP-OCRv6 / Apache Tika comparison. See [examples/README.md](examples/README.md) for deployment dependencies.
 
 ---
 

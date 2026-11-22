@@ -1,3 +1,10 @@
+Version 5.1.5:
+	* PDF parser: extract /EmbeddedFiles (including B-Tree /Kids) and FileAttachment embedded documents.
+	* PDF parser: support Form XObject font scoping, /Differences glyph mapping, /Annots annotations, AcroForm/XFA forms, JBIG2Decode and CCITTFaxDecode G3/G4 images.
+	* PDF layout: baseline-clustered formula reading order, multi-column splitting, footer deduplication, and --compact-whitespace / doctotext_formatting_style_set_compact_whitespace.
+	* Security & C API: support empty-user-password PDF decryption, encrypted Office/ODF detection, and doctotext_process_file_ex / doctotext_process_file_from_buffer_ex with DOCTOTEXT_STATUS_OK / DOCTOTEXT_STATUS_ERROR / DOCTOTEXT_STATUS_ENCRYPTED.
+	* Examples & QA tools: add portable side-by-side Document Inspector web workbench under examples/viewer/ and examples/run_viewer.sh.
+
 Version 4.0:
 	* fixed bug in utf8 encoding for RT_TextBytesAtom record in PPT parser
 	* Initial Open Document Flat XML Parser (fodt, fods, fodg, fodp)
