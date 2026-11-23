@@ -38,6 +38,8 @@
 #include "doctotext_unzip.h"
 #include "embedded_object_extractor.h"
 #include <algorithm>
+#include <cctype>
+#include <climits>
 #include <fstream>
 #include <iostream>
 #include <libxml/xmlreader.h>
@@ -77,6 +79,176 @@ static string locate_main_file(const DocToTextUnzip& zipfile, std::ostream& log_
 		return "ppt/presentation.xml";
 	log_stream << "Error - no content.xml, no word/document.xml and no ppt/presentation.xml" << endl;
 	return "";
+}
+
+namespace
+{
+	xmlNodePtr findChildElementByLocalName(xmlNodePtr parent, const char* name)
+	{
+		for (xmlNodePtr cur = parent ? parent->children : NULL; cur != NULL; cur = cur->next)
+		{
+			if (cur->type == XML_ELEMENT_NODE && cur->name && xmlStrcmp(cur->name, BAD_CAST name) == 0)
+				return cur;
+		}
+		return NULL;
+	}
+
+	bool isPptxPlaceholderShape(xmlNodePtr node)
+	{
+		if (!node || node->type != XML_ELEMENT_NODE || !node->name)
+			return false;
+		const char* nv_name = NULL;
+		if (xmlStrcmp(node->name, BAD_CAST "sp") == 0)
+			nv_name = "nvSpPr";
+		else if (xmlStrcmp(node->name, BAD_CAST "pic") == 0)
+			nv_name = "nvPicPr";
+		else if (xmlStrcmp(node->name, BAD_CAST "graphicFrame") == 0)
+			nv_name = "nvGraphicFramePr";
+		else if (xmlStrcmp(node->name, BAD_CAST "grpSp") == 0)
+			nv_name = "nvGrpSpPr";
+		else
+			return false;
+
+		xmlNodePtr nv_sp_pr = findChildElementByLocalName(node, nv_name);
+		xmlNodePtr nv_pr = findChildElementByLocalName(nv_sp_pr, "nvPr");
+		return findChildElementByLocalName(nv_pr, "ph") != NULL;
+	}
+
+	void unlinkPptxPlaceholderShapes(xmlNodePtr parent)
+	{
+		xmlNodePtr cur = parent ? parent->children : NULL;
+		while (cur != NULL)
+		{
+			xmlNodePtr next = cur->next;
+			if (cur->type == XML_ELEMENT_NODE)
+			{
+				if (isPptxPlaceholderShape(cur))
+				{
+					xmlUnlinkNode(cur);
+					xmlFreeNode(cur);
+				}
+				else
+				{
+					unlinkPptxPlaceholderShapes(cur);
+				}
+			}
+			cur = next;
+		}
+	}
+
+	bool hasExtractablePptxContent(xmlNodePtr node, bool check_images)
+	{
+		for (xmlNodePtr cur = node; cur != NULL; cur = cur->next)
+		{
+			if (cur->type == XML_ELEMENT_NODE && cur->name)
+			{
+				if (xmlStrcmp(cur->name, BAD_CAST "t") == 0)
+				{
+					for (xmlNodePtr ch = cur->children; ch != NULL; ch = ch->next)
+					{
+						if ((ch->type == XML_TEXT_NODE || ch->type == XML_CDATA_SECTION_NODE) && ch->content)
+						{
+							for (const unsigned char* p = ch->content; *p; ++p)
+							{
+								if (!std::isspace(*p))
+									return true;
+							}
+						}
+					}
+				}
+				else if (check_images && xmlStrcmp(cur->name, BAD_CAST "blip") == 0)
+				{
+					return true;
+				}
+			}
+			if (cur->children && hasExtractablePptxContent(cur->children, check_images))
+				return true;
+		}
+		return false;
+	}
+
+	bool filterPptxPlaceholderShapes(const std::string& xml_in,
+	                                 XmlParseMode mode,
+	                                 int xml_options,
+	                                 bool check_images,
+	                                 std::string& xml_out)
+	{
+		std::string fixed;
+		const std::string* src = &xml_in;
+		if (mode == FIX_XML)
+		{
+			DocToTextXmlFixer xml_fixer;
+			fixed = xml_fixer.fix(xml_in);
+			src = &fixed;
+		}
+		if (src->size() > static_cast<size_t>(INT_MAX))
+			return false;
+		struct XmlDocGuard
+		{
+			xmlDocPtr doc;
+			explicit XmlDocGuard(xmlDocPtr d) : doc(d) {}
+			~XmlDocGuard() { if (doc) xmlFreeDoc(doc); }
+		} doc_guard(xmlReadMemory(src->data(), static_cast<int>(src->size()), "slidePart.xml", NULL,
+		                           xml_options | XML_PARSE_NONET | XML_PARSE_NOERROR | XML_PARSE_NOWARNING));
+		if (!doc_guard.doc)
+			return false;
+		xmlNodePtr root = xmlDocGetRootElement(doc_guard.doc);
+		if (!root)
+			return false;
+		unlinkPptxPlaceholderShapes(root);
+		if (!hasExtractablePptxContent(root, check_images))
+			return false;
+		xmlChar* mem = NULL;
+		int len = 0;
+		xmlDocDumpMemoryEnc(doc_guard.doc, &mem, &len, "UTF-8");
+		if (!mem || len <= 0)
+		{
+			if (mem)
+				xmlFree(mem);
+			return false;
+		}
+		xml_out.assign(reinterpret_cast<const char*>(mem), static_cast<size_t>(len));
+		xmlFree(mem);
+		return true;
+	}
+
+	void collectRelTargetsBySuffix(const std::string& rels_xml,
+	                               const std::string& base_dir,
+	                               const std::string& type_suffix,
+	                               bool manage_xml_parser,
+	                               int xml_options,
+	                               std::vector<std::string>& out_targets)
+	{
+		if (rels_xml.find(type_suffix) == std::string::npos)
+			return;
+		XmlStream rel_stream(rels_xml, manage_xml_parser, xml_options);
+		if (!rel_stream)
+			return;
+		rel_stream.levelDown();
+		while (rel_stream)
+		{
+			if (rel_stream.name() == "Relationship")
+			{
+				std::string rtype = rel_stream.attribute("Type");
+				std::string rtarget = rel_stream.attribute("Target");
+				if (!rtarget.empty() && rtype.size() >= type_suffix.size() &&
+				    rtype.compare(rtype.size() - type_suffix.size(), type_suffix.size(), type_suffix) == 0)
+				{
+					std::string full_target = (rtarget[0] == '/') ? rtarget.substr(1) : (base_dir + rtarget);
+					out_targets.push_back(normalizeZipPath(full_target));
+				}
+			}
+			rel_stream.next();
+		}
+	}
+
+	std::string makeRelsPathForPart(const std::string& part_path, std::string& out_base_dir)
+	{
+		size_t last_slash = part_path.find_last_of('/');
+		out_base_dir = (last_slash == std::string::npos) ? "" : part_path.substr(0, last_slash + 1);
+		std::string name = (last_slash == std::string::npos) ? part_path : part_path.substr(last_slash + 1);
+		return out_base_dir + "_rels/" + name + ".rels";
+	}
 }
 
 class ODFOOXMLParser::CommandHandlersSet
@@ -553,6 +725,9 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			setError(true);
 			return "";
 		}
+		std::set<std::string> visited_slide_parts;
+		std::vector<std::string> slide_layouts;
+		std::vector<std::string> slide_masters;
 		for (int i = 1; zipfile.read("ppt/slides/slide" + int_to_str(i) + ".xml", &content) && i < 2500; i++)
 		{
 			string slide_rels;
@@ -560,6 +735,8 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			if (zipfile.read("ppt/slides/_rels/slide" + int_to_str(i) + ".xml.rels", &slide_rels))
 			{
 				loadRelationshipsFromXml(slide_rels, "ppt/slides/");
+				collectRelTargetsBySuffix(slide_rels, "ppt/slides/", "/slideLayout",
+				                          manageXmlParser(), getXmlOptions(), slide_layouts);
 			}
 			string slide_text;
 			if (!extractText(content, mode, options, &zipfile, slide_text, getInnerLinks()))
@@ -571,6 +748,44 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			}
 			text += slide_text;
 		}
+		string pres_rels;
+		if (zipfile.read("ppt/_rels/presentation.xml.rels", &pres_rels))
+		{
+			collectRelTargetsBySuffix(pres_rels, "ppt/", "/slideMaster",
+			                          manageXmlParser(), getXmlOptions(), slide_masters);
+		}
+		auto processMasterOrLayoutPart = [&](const std::string& part_path, bool collect_masters)
+		{
+			if (part_path.empty() || !visited_slide_parts.insert(part_path).second)
+				return;
+			std::string part_base_dir;
+			std::string rels_path = makeRelsPathForPart(part_path, part_base_dir);
+			clearImageRelationships();
+			std::string part_rels;
+			if (zipfile.read(rels_path, &part_rels))
+			{
+				loadRelationshipsFromXml(part_rels, part_base_dir);
+				if (collect_masters)
+				{
+					collectRelTargetsBySuffix(part_rels, part_base_dir, "/slideMaster",
+					                          manageXmlParser(), getXmlOptions(), slide_masters);
+				}
+			}
+			std::string part_xml;
+			if (!zipfile.read(part_path, &part_xml) || part_xml.empty())
+				return;
+			std::string filtered_xml;
+			if (!filterPptxPlaceholderShapes(part_xml, mode, getXmlOptions(), getImageParserCallback() != NULL, filtered_xml))
+				return;
+			std::string part_text;
+			XmlParseMode part_mode = (mode == STRIP_XML) ? STRIP_XML : PARSE_XML;
+			if (extractText(filtered_xml, part_mode, options, &zipfile, part_text, getInnerLinks()))
+				appendBlockText(text, part_text);
+		};
+		for (size_t i = 0; i < slide_layouts.size(); ++i)
+			processMasterOrLayoutPart(slide_layouts[i], true);
+		for (size_t i = 0; i < slide_masters.size(); ++i)
+			processMasterOrLayoutPart(slide_masters[i], false);
 	}
 	else if (main_file_name == "xl/workbook.xml")
 	{

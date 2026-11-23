@@ -71,11 +71,13 @@ enum RecordType
 	RT_EX_OLE_OBJ_STG = 0x1011,
 	RT_LIST = 0x07D0,
 	RT_MAIN_MASTER = 0x03F8,
+	RT_OE_PLACEHOLDER_ATOM = 0x0BC3,
 	RT_SLIDE_BASE = 0x03EC, // Not in MS specification
 	RT_SLIDE_LIST_WITH_TEXT = 0x0FF0,
 	RT_SLIDE = 0x03EE,
 	RT_TEXT_BYTES_ATOM = 0x0FA8,
 	RT_TEXT_CHARS_ATOM = 0x0FA0,
+	OFFICE_ART_CLIENT_DATA = 0xF011,
 	OFFICE_ART_CLIENT_TEXTBOX = 0xF00D,
 	OFFICE_ART_DG_CONTAINER = 0xF002,
 	OFFICE_ART_SPGR_CONTAINER = 0xF003,
@@ -95,6 +97,19 @@ struct PPTParser::Implementation
 	void* m_image_user_data;
 	doctotext::FormattingStyle m_formatting_style;
 
+	U16 getU16LE(const unsigned char* p)
+	{
+		return static_cast<U16>(p[0]) | (static_cast<U16>(p[1]) << 8);
+	}
+
+	U32 getU32LE(const unsigned char* p)
+	{
+		return static_cast<U32>(p[0]) |
+		       (static_cast<U32>(p[1]) << 8) |
+		       (static_cast<U32>(p[2]) << 16) |
+		       (static_cast<U32>(p[3]) << 24);
+	}
+
 	U16 getU16LittleEndian(std::vector<unsigned char>::const_iterator buffer)
 	{
 		return (unsigned short int)(*buffer) | ((unsigned short int)(*(buffer + 1)) << 8);
@@ -103,6 +118,174 @@ struct PPTParser::Implementation
 	U32 getU32LittleEndian(std::vector<unsigned char>::const_iterator buffer)
 	{
 		return (unsigned long)(*buffer) | ((unsigned long)(*(buffer +1 )) << 8L) | ((unsigned long)(*(buffer + 2)) << 16L) | ((unsigned long)(*(buffer + 3)) << 24L);
+	}
+
+	unsigned long clampRemaining(unsigned long rec_len, long end_pos, ThreadSafeOLEStreamReader& reader, bool warn_on_eof)
+	{
+		long cur = reader.tell();
+		if (cur < 0 || cur >= end_pos)
+			return 0;
+		unsigned long avail = static_cast<unsigned long>(end_pos - cur);
+		if (rec_len > avail)
+		{
+			if (warn_on_eof)
+				*m_log_stream << "Warning: Read past EOF\n";
+			return avail;
+		}
+		return rec_len;
+	}
+
+	void readTextCharsAtom(unsigned long rec_len, ThreadSafeOLEStreamReader& reader, std::string& text)
+	{
+		unsigned char buf[2];
+		unsigned long clamped = clampRemaining(rec_len, static_cast<long>(reader.size()), reader, true);
+		unsigned long text_len = clamped / 2;
+		for (unsigned long i = 0; i < text_len; i++)
+		{
+			if (!reader.read(buf, 2))
+				break;
+			U32 u = getU16LE(buf);
+			if (u == 0x0D || u == 0x0B)
+				text += '\n';
+			else
+			{
+				if (utf16_unichar_has_4_bytes(u) && ++i < text_len)
+				{
+					if (!reader.read(buf, 2))
+						break;
+					u = (u << 16) | getU16LE(buf);
+				}
+				text += unichar_to_utf8(u);
+			}
+		}
+		if (clamped % 2 != 0)
+			reader.seek(1, SEEK_CUR);
+		text += '\n';
+	}
+
+	void readTextBytesAtom(unsigned long rec_len, ThreadSafeOLEStreamReader& reader, std::string& text)
+	{
+		unsigned char buf = 0;
+		unsigned long text_len = clampRemaining(rec_len, static_cast<long>(reader.size()), reader, true);
+		for (unsigned long i = 0; i < text_len; i++)
+		{
+			if (!reader.read(&buf, 1))
+				break;
+			U32 u = static_cast<U32>(buf);
+			if (u == 0x0B || u == 0x0D)
+				text += '\n';
+			else
+				text += unichar_to_utf8(u);
+		}
+		text += '\n';
+	}
+
+	bool clientDataHasPlaceholder(long cd_end, ThreadSafeOLEStreamReader& reader)
+	{
+		unsigned char hdr[8];
+		while (reader.isValid() && reader.tell() + 8 <= cd_end)
+		{
+			if (!reader.read(hdr, 8))
+				return false;
+			int rec_type = getU16LE(hdr + 2);
+			unsigned long rec_len = clampRemaining(getU32LE(hdr + 4), cd_end, reader, false);
+			if (rec_type == RT_OE_PLACEHOLDER_ATOM)
+				return true;
+			reader.seek(rec_len, SEEK_CUR);
+		}
+		return false;
+	}
+
+	void parseMainMasterTextbox(long tb_end, ThreadSafeOLEStreamReader& reader, std::string& text)
+	{
+		unsigned char hdr[8];
+		while (reader.isValid() && reader.tell() + 8 <= tb_end)
+		{
+			if (!reader.read(hdr, 8))
+				break;
+			int rec_type = getU16LE(hdr + 2);
+			unsigned long rec_len = clampRemaining(getU32LE(hdr + 4), tb_end, reader, false);
+			long rec_end = reader.tell() + static_cast<long>(rec_len);
+			if (rec_type == RT_TEXT_CHARS_ATOM || rec_type == RT_CSTRING)
+				readTextCharsAtom(rec_len, reader, text);
+			else if (rec_type == RT_TEXT_BYTES_ATOM)
+				readTextBytesAtom(rec_len, reader, text);
+			if (reader.isValid())
+				reader.seek(rec_end, SEEK_SET);
+		}
+		if (reader.isValid())
+			reader.seek(tb_end, SEEK_SET);
+	}
+
+	void parseMainMasterContainer(long end_pos, int depth, ThreadSafeOLEStreamReader& reader, std::string& text)
+	{
+		if (depth > 32)
+		{
+			if (reader.isValid())
+				reader.seek(end_pos, SEEK_SET);
+			return;
+		}
+		unsigned char hdr[8];
+		while (reader.isValid() && reader.tell() + 8 <= end_pos)
+		{
+			if (!reader.read(hdr, 8))
+				break;
+			U16 ver_inst = getU16LE(hdr);
+			int rec_type = getU16LE(hdr + 2);
+			unsigned long rec_len = clampRemaining(getU32LE(hdr + 4), end_pos, reader, false);
+			long child_end = reader.tell() + static_cast<long>(rec_len);
+
+			if (rec_type == OFFICE_ART_SP_CONTAINER)
+			{
+				bool is_placeholder = false;
+				std::vector<std::pair<long, long> > textboxes;
+				while (reader.isValid() && reader.tell() + 8 <= child_end)
+				{
+					if (!reader.read(hdr, 8))
+						break;
+					int sub_type = getU16LE(hdr + 2);
+					unsigned long sub_len = clampRemaining(getU32LE(hdr + 4), child_end, reader, false);
+					long sub_start = reader.tell();
+					long sub_end = sub_start + static_cast<long>(sub_len);
+					if (sub_type == OFFICE_ART_CLIENT_DATA)
+					{
+						if (clientDataHasPlaceholder(sub_end, reader))
+						{
+							is_placeholder = true;
+							break;
+						}
+					}
+					else if (sub_type == OFFICE_ART_CLIENT_TEXTBOX)
+					{
+						textboxes.push_back(std::make_pair(sub_start, sub_end));
+					}
+					if (reader.isValid())
+						reader.seek(sub_end, SEEK_SET);
+				}
+				if (!is_placeholder && reader.isValid())
+				{
+					for (size_t t = 0; t < textboxes.size() && reader.isValid(); ++t)
+					{
+						reader.seek(textboxes[t].first, SEEK_SET);
+						if (reader.isValid())
+							parseMainMasterTextbox(textboxes[t].second, reader, text);
+					}
+				}
+				if (reader.isValid())
+					reader.seek(child_end, SEEK_SET);
+			}
+			else if ((ver_inst & 0x0F) == 0x0F &&
+			         (rec_type == RT_DRAWING || rec_type == OFFICE_ART_DG_CONTAINER || rec_type == OFFICE_ART_SPGR_CONTAINER))
+			{
+				parseMainMasterContainer(child_end, depth + 1, reader, text);
+			}
+			else
+			{
+				reader.seek(child_end, SEEK_SET);
+			}
+		}
+		if (reader.isValid())
+			reader.seek(end_pos, SEEK_SET);
 	}
 
 	void parseRecord(int rec_type, unsigned long rec_len, U16 rec_inst, ThreadSafeOLEStreamReader& reader, std::string& text)
@@ -114,30 +297,7 @@ struct PPTParser::Implementation
 			{
 				if (m_verbose_logging)
 					*m_log_stream << "RT_TextCharsAtom or RT_CString\n";
-				std::vector<unsigned char> buf(2);
-				unsigned long text_len = rec_len / 2;
-				if (text_len * 2 > reader.size() - reader.tell())
-				{
-					text_len = (reader.size() - reader.tell()) / 2;
-					*m_log_stream << "Warning: Read past EOF\n";
-				}
-				for (int i = 0; i < text_len; i++)
-				{
-					reader.read((uint8_t*)&*buf.begin(), 2);
-					U32 u = getU16LittleEndian(buf.begin());
-					if (u == 0x0D || u == 0x0B)
-						text += '\n';
-					else
-					{
-						if (utf16_unichar_has_4_bytes(u) && ++i < text_len)
-						{
-							reader.read((uint8_t*)&*buf.begin(), 2);
-							u = (u << 16) | getU16LittleEndian(buf.begin());
-						}
-						text += unichar_to_utf8(u);
-					}
-				}
-				text += '\n';
+				readTextCharsAtom(rec_len, reader, text);
 				break;
 			}
 			case RT_DOCUMENT:
@@ -152,12 +312,7 @@ struct PPTParser::Implementation
 			{
 				if (m_verbose_logging)
 					*m_log_stream << "RT_DocumentEnd\n";
-				unsigned long len = rec_len;
-				if (reader.tell() + len > reader.size())
-				{
-					*m_log_stream << "Warning: Read past EOF\n";
-					len = reader.size() - reader.tell();
-				}
+				unsigned long len = clampRemaining(rec_len, static_cast<long>(reader.size()), reader, true);
 				reader.seek(len, SEEK_CUR);
 				break;
 			}
@@ -169,14 +324,8 @@ struct PPTParser::Implementation
 			{
 				if (m_verbose_logging)
 					*m_log_stream << "RT_MainMaster\n";
-				#warning TODO: Make extracting text from main master slide configurable
-				unsigned long len = rec_len;
-				if (reader.tell() + len > reader.size())
-				{
-					*m_log_stream << "Warning: Read past EOF\n";
-					len = reader.size() - reader.tell();
-				}
-				reader.seek(len, SEEK_CUR);
+				unsigned long len = clampRemaining(rec_len, static_cast<long>(reader.size()), reader, true);
+				parseMainMasterContainer(reader.tell() + static_cast<long>(len), 0, reader, text);
 				break;
 			}
 			case RT_SLIDE:
@@ -193,24 +342,7 @@ struct PPTParser::Implementation
 			{
 				if (m_verbose_logging)
 					*m_log_stream << "RT_TextBytesAtom\n";
-				std::vector<unsigned char> buf(2);
-				unsigned long text_len = rec_len;
-				buf[0] = buf[1] = 0;
-				if (text_len > reader.size() - reader.tell())
-				{
-					text_len = reader.size() - reader.tell();
-					*m_log_stream << "Warning: Read past EOF\n";
-				}
-				for (int i = 0; i < text_len; i++)
-				{
-					reader.read((uint8_t*)&*buf.begin(), 1);
-					U32 u = getU16LittleEndian(buf.begin());
-					if (u == 0x0B || u == 0x0D)
-						text += '\n';
-					else
-						text += unichar_to_utf8(u);
-				}
-				text += '\n';
+				readTextBytesAtom(rec_len, reader, text);
 				break;
 			}
 			case RT_EX_OLE_OBJ_STG:

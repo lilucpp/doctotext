@@ -104,7 +104,8 @@ else
 			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
 			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf testPDF_JBIG2.pdf testPDF_CCITT_G4.pdf testPDF_CCITT_G3.pdf \
 			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf \
-			testPDF_diffTitles.pdf testPPT_EmbeddedPDF.ppt \
+			testPDF_diffTitles.pdf testPPT_EmbeddedPDF.ppt testPPT_diagramData.pptx \
+			testPPT_masterText.ppt testPPT_masterText2.ppt testPPT_masterText.pptx testPPT_masterText2.pptx \
 			testEXCEL_4.xls testEXCEL_diagramData.xlsx testEXCEL_embeddedPDF_mac.xlsx testEXCEL_embeddedPDF_mac.xls testEXCEL_WORKBOOK_in_capitals.xls \
 			testPDF_no_extract_no_accessibility_owner_empty.pdf testPDF_protected.pdf; do \
 		echo TESTING $$f; \
@@ -261,7 +262,8 @@ update_tests:
 			testAnnotations.pdf testAppleSingleFile.pdf testComment.pdf testExtraSpaces.pdf testJournalParser.pdf testChinese.pdf testOverlappingText.pdf testPDF.pdf \
 			testPDFFileEmbInAnnotation.pdf testPDFFileEmbInAnnotation_noContents.pdf testPDFEmbeddedDocx.pdf testPDFEmbeddedDoc.pdf testPDFVarious.pdf testPDF_JBIG2.pdf testPDF_CCITT_G4.pdf testPDF_CCITT_G3.pdf \
 			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf \
-			testPDF_diffTitles.pdf testPPT_EmbeddedPDF.ppt \
+			testPDF_diffTitles.pdf testPPT_EmbeddedPDF.ppt testPPT_diagramData.pptx \
+			testPPT_masterText.ppt testPPT_masterText2.ppt testPPT_masterText.pptx testPPT_masterText2.pptx \
 			testEXCEL_4.xls testEXCEL_diagramData.xlsx testEXCEL_embeddedPDF_mac.xlsx testEXCEL_embeddedPDF_mac.xls testEXCEL_WORKBOOK_in_capitals.xls \
 			testPDF_no_extract_no_accessibility_owner_empty.pdf testPDF_protected.pdf; do \
 		echo PROCESSING $$f; \
