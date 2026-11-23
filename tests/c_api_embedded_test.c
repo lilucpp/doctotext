@@ -470,11 +470,24 @@ int main(void)
 		printf("PASS: C API boundary guards (depth=4 mixed, count=20+skip, 65MiB zip bomb, fault isolation)\n");
 	}
 
-	/* 11. Encrypted documents keep DOCTOTEXT_STATUS_ENCRYPTED */
+	/* 11. Encrypted documents keep DOCTOTEXT_STATUS_ENCRYPTED, while default-key VelvetSweatshop docs decrypt */
 	{
+		const char* velvet_std_on[] = { "VELVET_STD_XLSX_OK_标准AES128中文" };
+		if (!run_file_and_buffer_case(
+				"embedded_fixtures/velvet_standard.xlsx",
+				velvet_std_on, 1, NULL, 0, NULL, 0, NULL, 0, 0))
+			return 1;
+		const char* velvet_agile_on[] = { "VELVET_AGILE_DOCX_OK_多加密器中文" };
+		if (!run_file_and_buffer_case(
+				"embedded_fixtures/velvet_agile_multi.docx",
+				velvet_agile_on, 1, NULL, 0, NULL, 0, NULL, 0, 0))
+			return 1;
+		printf("PASS: C API MS-OFFCRYPTO VelvetSweatshop (Standard AES-128 & multi-encryptor Agile AES-256) file & buffer\n");
+
 		const char* enc_files[] = {
 			"encrypted/testWORD_protected_passtika.doc",
-			"encrypted/testODTEncrypted.odt"
+			"encrypted/testODTEncrypted.odt",
+			"embedded_fixtures/locked_agile_userpw.xlsx"
 		};
 		for (size_t i = 0; i < sizeof(enc_files) / sizeof(enc_files[0]); ++i)
 		{

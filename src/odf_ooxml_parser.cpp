@@ -176,7 +176,120 @@ struct ODFOOXMLParser::ExtendedImplementation
 	const char* m_buffer;
 	size_t m_buffer_size;
 	std::string m_file_name;
+	std::string m_decrypted_zip;
 	ODFOOXMLParser* m_interf;
+	bool m_needs_password;
+
+	ExtendedImplementation()
+		: m_buffer(NULL), m_buffer_size(0), m_interf(NULL), m_needs_password(false)
+	{
+	}
+
+	void clearDecryptedZip()
+	{
+		std::string().swap(m_decrypted_zip);
+	}
+
+	struct DecryptedZipGuard
+	{
+		ExtendedImplementation* impl;
+		explicit DecryptedZipGuard(ExtendedImplementation* p) : impl(p) {}
+		~DecryptedZipGuard()
+		{
+			if (impl)
+				impl->clearDecryptedZip();
+		}
+		DecryptedZipGuard(const DecryptedZipGuard&) = delete;
+		DecryptedZipGuard& operator=(const DecryptedZipGuard&) = delete;
+	};
+
+	void bindZipSource(DocToTextUnzip& zipfile) const
+	{
+		if (!m_decrypted_zip.empty())
+			zipfile.setBuffer(m_decrypted_zip.data(), m_decrypted_zip.size());
+		else if (m_buffer)
+			zipfile.setBuffer(m_buffer, m_buffer_size);
+		else
+			zipfile.setArchiveFile(m_file_name);
+	}
+
+	bool hasZipMagicHeader(bool& out_io_error) const
+	{
+		out_io_error = false;
+		if (!m_buffer)
+		{
+			FILE* f = fopen(m_file_name.c_str(), "rb");
+			if (!f)
+			{
+				out_io_error = true;
+				return false;
+			}
+			char magic[2];
+			bool is_pk = (fread(magic, 1, 2, f) == 2 && magic[0] == 'P' && magic[1] == 'K');
+			fclose(f);
+			return is_pk;
+		}
+		if (m_buffer_size == 0)
+		{
+			out_io_error = true;
+			return false;
+		}
+		return m_buffer_size >= 2 && m_buffer[0] == 'P' && m_buffer[1] == 'K';
+	}
+
+	bool openZipOrDecrypt(DocToTextUnzip& zipfile, bool check_header_first, bool& out_encrypted)
+	{
+		out_encrypted = false;
+		std::ostream* decrypt_log = m_interf->verbose() ? &m_interf->getLogStream() : NULL;
+		if (&m_interf->getLogStream() != &std::cerr)
+			zipfile.setLogStream(m_interf->getLogStream());
+
+		if (check_header_first && m_decrypted_zip.empty())
+		{
+			bool io_err = false;
+			if (!hasZipMagicHeader(io_err))
+			{
+				if (io_err)
+				{
+					m_interf->getLogStream() << (m_buffer ? "Memory buffer is empty.\n" : ("Error opening file " + m_file_name + ".\n"));
+					m_interf->setError(true);
+					return false;
+				}
+				OffCryptoResult dec_res = try_decrypt_offcrypto_source(
+					m_file_name, m_buffer, m_buffer_size, m_decrypted_zip, decrypt_log);
+				if (dec_res == OFFCRYPTO_NEEDS_PASSWORD)
+				{
+					out_encrypted = true;
+					return false;
+				}
+				if (dec_res != OFFCRYPTO_DECRYPTED)
+					return false;
+			}
+		}
+
+		bindZipSource(zipfile);
+		if (zipfile.open())
+			return true;
+
+		if (!check_header_first && m_decrypted_zip.empty())
+		{
+			OffCryptoResult dec_res = try_decrypt_offcrypto_source(
+				m_file_name, m_buffer, m_buffer_size, m_decrypted_zip, decrypt_log);
+			if (dec_res == OFFCRYPTO_DECRYPTED)
+			{
+				bindZipSource(zipfile);
+				if (zipfile.open())
+					return true;
+				clearDecryptedZip();
+			}
+			else if (dec_res == OFFCRYPTO_NEEDS_PASSWORD)
+			{
+				out_encrypted = true;
+				return false;
+			}
+		}
+		return false;
+	}
 
 	bool readOOXMLComments(const DocToTextUnzip& zipfile, XmlParseMode mode, FormattingStyle& options)
 	{
@@ -311,70 +424,42 @@ bool ODFOOXMLParser::isODFOOXML()
 {
 	setError(false);
 	setEncrypted(false);
-	if (!extended_impl->m_buffer)	//check file
+	extended_impl->m_needs_password = false;
+	extended_impl->clearDecryptedZip();
+
+	DocToTextUnzip zipfile;
+	bool is_enc = false;
+	if (!extended_impl->openZipOrDecrypt(zipfile, true, is_enc))
 	{
-		FILE* f = fopen(extended_impl->m_file_name.c_str(), "rb");
-		if (f == NULL)
+		if (is_enc)
 		{
-			getLogStream() << "Error opening file " << extended_impl->m_file_name << ".\n";
-			setError(true);
-			return false;
-		}
-		char magic[2];
-		if (fread(magic, 1, 2, f) != 2 || magic[0] != 'P' || magic[1] != 'K')
-		{
-			fclose(f);
-			if (is_encrypted_offcrypto_source(extended_impl->m_file_name, NULL, 0))
-			{
-				setEncrypted(true);
-				return true;
-			}
-			return false;
-		}
-		fclose(f);
-	}
-	else if (extended_impl->m_buffer_size == 0)
-	{
-		getLogStream() << "Memory buffer is empty.\n";
-		setError(true);
-		return false;
-	}
-	else if (extended_impl->m_buffer_size < 2 ||
-	         extended_impl->m_buffer[0] != 'P' ||
-	         extended_impl->m_buffer[1] != 'K')
-	{
-		if (is_encrypted_offcrypto_source(extended_impl->m_file_name, extended_impl->m_buffer, extended_impl->m_buffer_size))
-		{
+			extended_impl->m_needs_password = true;
 			setEncrypted(true);
 			return true;
 		}
+		extended_impl->clearDecryptedZip();
 		return false;
 	}
-	DocToTextUnzip zipfile;
-	if (extended_impl->m_buffer)
-		zipfile.setBuffer(extended_impl->m_buffer, extended_impl->m_buffer_size);
-	else
-		zipfile.setArchiveFile(extended_impl->m_file_name);
-	if (&getLogStream() != &std::cerr)
-		zipfile.setLogStream(getLogStream());
-	if (!zipfile.open())
-		return false;
 	if (has_odf_encryption_manifest(zipfile))
 	{
+		extended_impl->m_needs_password = true;
 		setEncrypted(true);
 		zipfile.close();
+		extended_impl->clearDecryptedZip();
 		return true;
 	}
 	string main_file_name = locate_main_file(zipfile, getLogStream());
 	if (main_file_name == "")
 	{
 		zipfile.close();
+		extended_impl->clearDecryptedZip();
 		return false;
 	}
 	string contents;
 	if (!zipfile.read(main_file_name, &contents, 1))
 	{
 		zipfile.close();
+		extended_impl->clearDecryptedZip();
 		return false;
 	}
 	zipfile.close();
@@ -385,23 +470,23 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 {
 	setError(false);
 	setEncrypted(false);
-	DocToTextUnzip zipfile;
-	if (extended_impl->m_buffer)
-		zipfile.setBuffer(extended_impl->m_buffer, extended_impl->m_buffer_size);
-	else
-		zipfile.setArchiveFile(extended_impl->m_file_name);
-	if (&getLogStream() != &std::cerr)
-		zipfile.setLogStream(getLogStream());
-	if (!zipfile.open())
+	ExtendedImplementation::DecryptedZipGuard decrypted_guard(extended_impl);
+	if (extended_impl->m_needs_password)
 	{
-		if (is_encrypted_offcrypto_source(extended_impl->m_file_name, extended_impl->m_buffer, extended_impl->m_buffer_size))
-		{
+		getLogStream() << "Office file is encrypted and requires a password.\n";
+		setEncrypted(true);
+		setError(true);
+		return "";
+	}
+	DocToTextUnzip zipfile;
+	bool is_enc = false;
+	if (!extended_impl->openZipOrDecrypt(zipfile, false, is_enc))
+	{
+		if (is_enc)
 			getLogStream() << "Office file is encrypted and requires a password.\n";
-			setEncrypted(true);
-			setError(true);
-			return "";
-		}
-		getLogStream() << "Error opening file " << extended_impl->m_file_name.c_str() << endl;
+		else
+			getLogStream() << "Error opening file " << extended_impl->m_file_name.c_str() << endl;
+		setEncrypted(is_enc);
 		setError(true);
 		return "";
 	}
@@ -441,6 +526,7 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		if (!zipfile.loadDirectory())
 		{
 			getLogStream() << "Error loading zip directory of file " << extended_impl->m_file_name.c_str() << endl;
+			zipfile.close();
 			setError(true);
 			return "";
 		}
@@ -630,22 +716,20 @@ Metadata ODFOOXMLParser::metaData()
 	setError(false);
 	setEncrypted(false);
 	Metadata meta;
-	DocToTextUnzip zipfile;
-	if (extended_impl->m_buffer)
-		zipfile.setBuffer(extended_impl->m_buffer, extended_impl->m_buffer_size);
-	else
-		zipfile.setArchiveFile(extended_impl->m_file_name);
-	if (&getLogStream() != &std::cerr)
-		zipfile.setLogStream(getLogStream());
-	if (!zipfile.open())
+	ExtendedImplementation::DecryptedZipGuard decrypted_guard(extended_impl);
+	if (extended_impl->m_needs_password)
 	{
-		if (is_encrypted_offcrypto_source(extended_impl->m_file_name, extended_impl->m_buffer, extended_impl->m_buffer_size))
-		{
-			setEncrypted(true);
-			setError(true);
-			return meta;
-		}
-		getLogStream() << "Error opening file " << extended_impl->m_file_name.c_str() << endl;
+		setEncrypted(true);
+		setError(true);
+		return meta;
+	}
+	DocToTextUnzip zipfile;
+	bool is_enc = false;
+	if (!extended_impl->openZipOrDecrypt(zipfile, false, is_enc))
+	{
+		if (!is_enc)
+			getLogStream() << "Error opening file " << extended_impl->m_file_name.c_str() << endl;
+		setEncrypted(is_enc);
 		setError(true);
 		return meta;
 	}
@@ -687,6 +771,7 @@ Metadata ODFOOXMLParser::metaData()
 		XmlStream xml_stream(core_xml, manageXmlParser(), getXmlOptions());
 		if (!xml_stream)
 		{
+			zipfile.close();
 			setError(true);
 			return meta;
 		}
@@ -723,6 +808,7 @@ Metadata ODFOOXMLParser::metaData()
 		XmlStream app_stream(app_xml, manageXmlParser(), getXmlOptions());
 		if (!app_stream)
 		{
+			zipfile.close();
 			setError(true);
 			return meta;
 		}

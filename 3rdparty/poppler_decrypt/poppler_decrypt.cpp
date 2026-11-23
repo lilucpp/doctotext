@@ -36,6 +36,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <climits>
 #include <vector>
 
 namespace {
@@ -101,9 +102,9 @@ static void aes256KeyExpansion(DecryptAES256State *s, const unsigned char *objKe
 static void aes256EncryptBlock(DecryptAES256State *s, const unsigned char *in);
 static void aes256DecryptBlock(DecryptAES256State *s, const unsigned char *in, bool last);
 
-static void sha256(unsigned char *msg, int msgLen, unsigned char *hash);
-static void sha384(unsigned char *msg, int msgLen, unsigned char *hash);
-static void sha512(unsigned char *msg, int msgLen, unsigned char *hash);
+static void sha256(const unsigned char *msg, int msgLen, unsigned char *hash);
+static void sha384(const unsigned char *msg, int msgLen, unsigned char *hash);
+static void sha512(const unsigned char *msg, int msgLen, unsigned char *hash);
 
 static void revision6Hash(const std::string &inputPassword, unsigned char *K, const char *userKey);
 
@@ -1234,7 +1235,7 @@ static void sha256HashBlock(const unsigned char *blk, unsigned int *H)
     H[7] += h;
 }
 
-static void sha256(unsigned char *msg, int msgLen, unsigned char *hash)
+static void sha256(const unsigned char *msg, int msgLen, unsigned char *hash)
 {
     unsigned char blk[64];
     unsigned int H[8];
@@ -1383,7 +1384,7 @@ static void sha512HashBlock(const unsigned char *blk, uint64_t *H)
     H[7] += h;
 }
 
-static void sha512(unsigned char *msg, int msgLen, unsigned char *hash)
+static void sha512(const unsigned char *msg, int msgLen, unsigned char *hash)
 {
     unsigned char blk[128];
     uint64_t H[8];
@@ -1456,7 +1457,7 @@ static void sha512(unsigned char *msg, int msgLen, unsigned char *hash)
 // The algorithm is defined in the exact same manner as SHA 512 with 2 exceptions
 // 1.Initial hash value is different.
 // 2.A 384 bit message digest is obtained by truncating the final hash value.
-static void sha384(unsigned char *msg, int msgLen, unsigned char *hash)
+static void sha384(const unsigned char *msg, int msgLen, unsigned char *hash)
 {
     unsigned char blk[128];
     uint64_t H[8];
@@ -1773,5 +1774,195 @@ int poppler_decrypt_buffer(const unsigned char* file_key,
 		return 1;
 	}
 
+	return 0;
+}
+
+static inline uint32_t sha1Rol(uint32_t v, int bits)
+{
+	return (v << bits) | (v >> (32 - bits));
+}
+
+static void sha1HashBlock(const unsigned char blk[64], uint32_t H[5])
+{
+	uint32_t W[80];
+	for (int t = 0; t < 16; ++t)
+	{
+		W[t] = (static_cast<uint32_t>(blk[t * 4]) << 24) |
+		       (static_cast<uint32_t>(blk[t * 4 + 1]) << 16) |
+		       (static_cast<uint32_t>(blk[t * 4 + 2]) << 8) |
+		       static_cast<uint32_t>(blk[t * 4 + 3]);
+	}
+	for (int t = 16; t < 80; ++t)
+	{
+		W[t] = sha1Rol(W[t - 3] ^ W[t - 8] ^ W[t - 14] ^ W[t - 16], 1);
+	}
+	uint32_t a = H[0], b = H[1], c = H[2], d = H[3], e = H[4];
+	for (int t = 0; t < 80; ++t)
+	{
+		uint32_t f = 0, k = 0;
+		if (t < 20)
+		{
+			f = (b & c) | ((~b) & d);
+			k = 0x5A827999U;
+		}
+		else if (t < 40)
+		{
+			f = b ^ c ^ d;
+			k = 0x6ED9EBA1U;
+		}
+		else if (t < 60)
+		{
+			f = (b & c) | (b & d) | (c & d);
+			k = 0x8F1BBCDCU;
+		}
+		else
+		{
+			f = b ^ c ^ d;
+			k = 0xCA62C1D6U;
+		}
+		uint32_t temp = sha1Rol(a, 5) + f + e + k + W[t];
+		e = d;
+		d = c;
+		c = sha1Rol(b, 30);
+		b = a;
+		a = temp;
+	}
+	H[0] += a;
+	H[1] += b;
+	H[2] += c;
+	H[3] += d;
+	H[4] += e;
+}
+
+extern "C" void poppler_sha1(const unsigned char* data, size_t len, unsigned char out20[20])
+{
+	if (!out20 || (!data && len > 0))
+		return;
+	uint32_t H[5] = {0x67452301U, 0xEFCDAB89U, 0x98BADCFEU, 0x10325476U, 0xC3D2E1F0U};
+	size_t i = 0;
+	for (; i + 64 <= len; i += 64)
+		sha1HashBlock(data + i, H);
+
+	unsigned char blk[64];
+	size_t rem = len - i;
+	if (rem > 0)
+		std::memcpy(blk, data + i, rem);
+	blk[rem++] = 0x80;
+	if (rem > 56)
+	{
+		while (rem < 64)
+			blk[rem++] = 0;
+		sha1HashBlock(blk, H);
+		rem = 0;
+	}
+	while (rem < 56)
+		blk[rem++] = 0;
+	uint64_t bit_len = static_cast<uint64_t>(len) * 8ULL;
+	for (int b = 0; b < 8; ++b)
+		blk[56 + b] = static_cast<unsigned char>((bit_len >> (56 - b * 8)) & 0xFF);
+	sha1HashBlock(blk, H);
+
+	for (int w = 0; w < 5; ++w)
+	{
+		out20[w * 4] = static_cast<unsigned char>((H[w] >> 24) & 0xFF);
+		out20[w * 4 + 1] = static_cast<unsigned char>((H[w] >> 16) & 0xFF);
+		out20[w * 4 + 2] = static_cast<unsigned char>((H[w] >> 8) & 0xFF);
+		out20[w * 4 + 3] = static_cast<unsigned char>(H[w] & 0xFF);
+	}
+}
+
+extern "C" void poppler_sha256(const unsigned char* data, size_t len, unsigned char out32[32])
+{
+	if (!out32 || (!data && len > 0) || len > static_cast<size_t>(INT_MAX / 8))
+		return;
+	sha256(data, static_cast<int>(len), out32);
+}
+
+extern "C" void poppler_sha384(const unsigned char* data, size_t len, unsigned char out48[48])
+{
+	if (!out48 || (!data && len > 0) || len > static_cast<size_t>(INT_MAX / 8))
+		return;
+	sha384(data, static_cast<int>(len), out48);
+}
+
+extern "C" void poppler_sha512(const unsigned char* data, size_t len, unsigned char out64[64])
+{
+	if (!out64 || (!data && len > 0) || len > static_cast<size_t>(INT_MAX / 8))
+		return;
+	sha512(data, static_cast<int>(len), out64);
+}
+
+extern "C" int poppler_aes_ecb_decrypt(const unsigned char* key,
+                                       int key_bits,
+                                       const unsigned char* in_data,
+                                       size_t len,
+                                       unsigned char* out_data)
+{
+	if (!key || !in_data || !out_data || (len % 16) != 0)
+		return 0;
+	if (key_bits == 128)
+	{
+		DecryptAESState st;
+		std::memset(&st, 0, sizeof(st));
+		aesKeyExpansion(&st, key, 16, true);
+		for (size_t off = 0; off < len; off += 16)
+		{
+			std::memset(st.cbc, 0, 16);
+			aesDecryptBlock(&st, in_data + off, false);
+			std::memcpy(out_data + off, st.buf, 16);
+		}
+		return 1;
+	}
+	if (key_bits == 256)
+	{
+		DecryptAES256State st;
+		std::memset(&st, 0, sizeof(st));
+		aes256KeyExpansion(&st, key, true);
+		for (size_t off = 0; off < len; off += 16)
+		{
+			std::memset(st.cbc, 0, 16);
+			aes256DecryptBlock(&st, in_data + off, false);
+			std::memcpy(out_data + off, st.buf, 16);
+		}
+		return 1;
+	}
+	return 0;
+}
+
+extern "C" int poppler_aes_cbc_decrypt(const unsigned char* key,
+                                       int key_bits,
+                                       const unsigned char iv[16],
+                                       const unsigned char* in_data,
+                                       size_t len,
+                                       unsigned char* out_data)
+{
+	if (!key || !iv || !in_data || !out_data || (len % 16) != 0)
+		return 0;
+	if (key_bits == 128)
+	{
+		DecryptAESState st;
+		std::memset(&st, 0, sizeof(st));
+		aesKeyExpansion(&st, key, 16, true);
+		std::memcpy(st.cbc, iv, 16);
+		for (size_t off = 0; off < len; off += 16)
+		{
+			aesDecryptBlock(&st, in_data + off, false);
+			std::memcpy(out_data + off, st.buf, 16);
+		}
+		return 1;
+	}
+	if (key_bits == 256)
+	{
+		DecryptAES256State st;
+		std::memset(&st, 0, sizeof(st));
+		aes256KeyExpansion(&st, key, true);
+		std::memcpy(st.cbc, iv, 16);
+		for (size_t off = 0; off < len; off += 16)
+		{
+			aes256DecryptBlock(&st, in_data + off, false);
+			std::memcpy(out_data + off, st.buf, 16);
+		}
+		return 1;
+	}
 	return 0;
 }

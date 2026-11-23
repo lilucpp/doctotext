@@ -53,6 +53,27 @@ int poppler_decrypt_buffer(const unsigned char* file_key,
                            unsigned char* out_data,
                            size_t* out_len);
 
+// Standalone cryptographic primitives for MS-OFFCRYPTO decryption.
+void poppler_sha1(const unsigned char* data, size_t len, unsigned char out20[20]);
+void poppler_sha256(const unsigned char* data, size_t len, unsigned char out32[32]);
+void poppler_sha384(const unsigned char* data, size_t len, unsigned char out48[48]);
+void poppler_sha512(const unsigned char* data, size_t len, unsigned char out64[64]);
+
+// Raw zero-padding AES-128/256 ECB/CBC decryption (key_bits must be 128 or 256, len % 16 == 0).
+// Returns 1 on success, 0 on invalid arguments.
+int poppler_aes_ecb_decrypt(const unsigned char* key,
+                            int key_bits,
+                            const unsigned char* in_data,
+                            size_t len,
+                            unsigned char* out_data);
+
+int poppler_aes_cbc_decrypt(const unsigned char* key,
+                            int key_bits,
+                            const unsigned char iv[16],
+                            const unsigned char* in_data,
+                            size_t len,
+                            unsigned char* out_data);
+
 #ifdef __cplusplus
 }
 #endif

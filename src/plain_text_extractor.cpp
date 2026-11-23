@@ -46,6 +46,7 @@
 #include "odf_ooxml_parser.h"
 #include "odfxml_parser.h"
 #include <iostream>
+#include <memory>
 #include <stdio.h>
 #include <sstream>
 #include <fstream>
@@ -79,6 +80,30 @@ struct PlainTextExtractor::Implementation
 	void* m_image_user_data;
 	bool m_is_encrypted;
 	PlainTextExtractor* m_interf;
+	ODFOOXMLParser* m_probed_odfooxml;
+
+	ODFOOXMLParser* consumeProbedOdf()
+	{
+		ODFOOXMLParser* p = m_probed_odfooxml;
+		m_probed_odfooxml = NULL;
+		return p;
+	}
+
+	struct ScopedProbedOdf
+	{
+		Implementation* impl;
+		ODFOOXMLParser* prev;
+		ScopedProbedOdf(Implementation* i, ODFOOXMLParser* p) : impl(i), prev(i->m_probed_odfooxml)
+		{
+			impl->m_probed_odfooxml = p;
+		}
+		~ScopedProbedOdf()
+		{
+			impl->m_probed_odfooxml = prev;
+		}
+		ScopedProbedOdf(const ScopedProbedOdf&) = delete;
+		ScopedProbedOdf& operator=(const ScopedProbedOdf&) = delete;
+	};
 
 	bool isRTF(RTFParser& rtf, bool& error, ParserType& parser_type)
 	{
@@ -644,6 +669,12 @@ struct PlainTextExtractor::Implementation
 		metadata = odfxml.metaData();
 		return odfxml.error();
 	}
+
+	bool detectByContent(const std::string* file_name,
+	                     const char* buffer,
+	                     size_t size,
+	                     ParserType& parser_type,
+	                     std::unique_ptr<ODFOOXMLParser>* out_ooxml);
 };
 
 PlainTextExtractor::PlainTextExtractor(ParserType parser_type)
@@ -663,6 +694,7 @@ PlainTextExtractor::PlainTextExtractor(ParserType parser_type)
 	impl->m_image_callback = NULL;
 	impl->m_image_user_data = NULL;
 	impl->m_is_encrypted = false;
+	impl->m_probed_odfooxml = NULL;
 }
 
 PlainTextExtractor::~PlainTextExtractor()
@@ -822,196 +854,144 @@ static bool isArchiveBytes(const char* buffer, size_t size)
 	return false;
 }
 
-bool PlainTextExtractor::parserTypeByFileContent(const std::string& file_name, ParserType& parser_type)
+template <typename ParserT>
+static std::unique_ptr<ParserT> makeProbeParser(const std::string* file_name, const char* buffer, size_t size)
+{
+	return std::unique_ptr<ParserT>(file_name ? new ParserT(*file_name) : new ParserT(buffer, size));
+}
+
+bool PlainTextExtractor::Implementation::detectByContent(const std::string* file_name,
+                                                         const char* buffer,
+                                                         size_t size,
+                                                         ParserType& parser_type,
+                                                         std::unique_ptr<ODFOOXMLParser>* out_ooxml)
 {
 	bool error = false;
-	*impl->m_log_stream << "Trying to detect document format by its content.\n";
+	*m_log_stream << "Trying to detect document format by its content.\n";
 
-	std::ifstream probe_fs(file_name.c_str(), std::ios::binary);
-	if (probe_fs)
+	char file_hdr[512];
+	size_t file_hdr_len = 0;
+	if (file_name)
 	{
-		char probe_buf[32];
-		probe_fs.read(probe_buf, sizeof(probe_buf));
-		size_t nread = probe_fs.gcount();
-		if (isImageBytes(probe_buf, nread))
+		std::ifstream probe_fs(file_name->c_str(), std::ios::binary);
+		if (probe_fs)
 		{
-			parser_type = PARSER_IMAGE;
-			return true;
-		}
-	}
-
-	RTFParser rtf(file_name);
-	if (impl->isRTF(rtf, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	ODFOOXMLParser odfooxml(file_name);
-	if (impl->isODFOOXML(odfooxml, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	XLSParser xls(file_name);
-	if (impl->isXLS(xls, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	DOCParser doc(file_name);
-	if (impl->isDOC(doc, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	PPTParser ppt(file_name);
-	if (impl->isPPT(ppt, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	//We have to check if file is EML before HTML, because HTML can be included inside EML.
-	EMLParser eml(file_name);
-	if (impl->isEML(eml, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	HTMLParser html(file_name);
-	if (impl->isHTML(html, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	IWorkParser iwork(file_name);
-	if (impl->isIWork(iwork, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	XLSBParser xlsb(file_name);
-	if (impl->isXLSB(xlsb, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	PDFParser pdf(file_name);
-	if (impl->isPDF(pdf, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	ODFXMLParser odfxml(file_name);
-	if (impl->isODFXML(odfxml, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	{
-		std::ifstream archive_fs(file_name.c_str(), std::ios::binary);
-		if (archive_fs)
-		{
-			char archive_buf[512];
-			archive_fs.read(archive_buf, sizeof(archive_buf));
-			size_t nread = archive_fs.gcount();
-			if (isArchiveBytes(archive_buf, nread))
+			probe_fs.read(file_hdr, sizeof(file_hdr));
+			file_hdr_len = static_cast<size_t>(probe_fs.gcount());
+			if (isImageBytes(file_hdr, std::min<size_t>(file_hdr_len, 32)))
 			{
-				parser_type = PARSER_ARCHIVE;
+				parser_type = PlainTextExtractor::PARSER_IMAGE;
 				return true;
 			}
 		}
 	}
+	else if (isImageBytes(buffer, size))
+	{
+		parser_type = PlainTextExtractor::PARSER_IMAGE;
+		return true;
+	}
 
-	*impl->m_log_stream << "No maching parser found.\n";
+	{
+		std::unique_ptr<RTFParser> p = makeProbeParser<RTFParser>(file_name, buffer, size);
+		if (isRTF(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<ODFOOXMLParser> p = makeProbeParser<ODFOOXMLParser>(file_name, buffer, size);
+		if (isODFOOXML(*p, error, parser_type))
+		{
+			if (out_ooxml)
+				*out_ooxml = std::move(p);
+			return true;
+		}
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<XLSParser> p = makeProbeParser<XLSParser>(file_name, buffer, size);
+		if (isXLS(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<DOCParser> p = makeProbeParser<DOCParser>(file_name, buffer, size);
+		if (isDOC(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<PPTParser> p = makeProbeParser<PPTParser>(file_name, buffer, size);
+		if (isPPT(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	//We have to check if file is EML before HTML, because HTML can be included inside EML.
+	{
+		std::unique_ptr<EMLParser> p = makeProbeParser<EMLParser>(file_name, buffer, size);
+		if (isEML(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<HTMLParser> p = makeProbeParser<HTMLParser>(file_name, buffer, size);
+		if (isHTML(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<IWorkParser> p = makeProbeParser<IWorkParser>(file_name, buffer, size);
+		if (isIWork(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<XLSBParser> p = makeProbeParser<XLSBParser>(file_name, buffer, size);
+		if (isXLSB(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<PDFParser> p = makeProbeParser<PDFParser>(file_name, buffer, size);
+		if (isPDF(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+	{
+		std::unique_ptr<ODFXMLParser> p = makeProbeParser<ODFXMLParser>(file_name, buffer, size);
+		if (isODFXML(*p, error, parser_type))
+			return true;
+		if (error)
+			return false;
+	}
+
+	if (file_name ? isArchiveBytes(file_hdr, file_hdr_len) : isArchiveBytes(buffer, size))
+	{
+		parser_type = PlainTextExtractor::PARSER_ARCHIVE;
+		return true;
+	}
+
+	*m_log_stream << "No maching parser found.\n";
 	return false;
+}
+
+bool PlainTextExtractor::parserTypeByFileContent(const std::string& file_name, ParserType& parser_type)
+{
+	return impl->detectByContent(&file_name, NULL, 0, parser_type, NULL);
 }
 
 bool PlainTextExtractor::parserTypeByFileContent(const char* buffer, size_t size, ParserType& parser_type)
 {
-	bool error = false;
-	*impl->m_log_stream << "Trying to detect document format by its content.\n";
-
-	if (isImageBytes(buffer, size))
-	{
-		parser_type = PARSER_IMAGE;
-		return true;
-	}
-
-	RTFParser rtf(buffer, size);
-	if (impl->isRTF(rtf, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	ODFOOXMLParser odfooxml(buffer, size);
-	if (impl->isODFOOXML(odfooxml, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	XLSParser xls(buffer, size);
-	if (impl->isXLS(xls, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	DOCParser doc(buffer, size);
-	if (impl->isDOC(doc, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	PPTParser ppt(buffer, size);
-	if (impl->isPPT(ppt, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	//We have to check if file is EML before HTML, because HTML can be included inside EML.
-	EMLParser eml(buffer, size);
-	if (impl->isEML(eml, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	HTMLParser html(buffer, size);
-	if (impl->isHTML(html, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	IWorkParser iwork(buffer, size);
-	if (impl->isIWork(iwork, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	XLSBParser xlsb(buffer, size);
-	if (impl->isXLSB(xlsb, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	PDFParser pdf(buffer, size);
-	if (impl->isPDF(pdf, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	ODFXMLParser odfxml(buffer, size);
-	if (impl->isODFXML(odfxml, error, parser_type))
-		return true;
-	else if (error)
-		return false;
-
-	if (isArchiveBytes(buffer, size))
-	{
-		parser_type = PARSER_ARCHIVE;
-		return true;
-	}
-
-	*impl->m_log_stream << "No maching parser found.\n";
-	return false;
+	return impl->detectByContent(NULL, buffer, size, parser_type, NULL);
 }
 
 bool PlainTextExtractor::parserTypeByFileContent(const char* file_name, ParserType& parser_type)
@@ -1024,15 +1004,17 @@ bool PlainTextExtractor::processFile(const std::string& file_name, std::string& 
 	impl->m_is_encrypted = false;
 	ParserType parser_type = impl->m_parser_type;
 	bool fallback = false;
+	std::unique_ptr<ODFOOXMLParser> probed_ooxml;
 	if (parser_type == PARSER_AUTO)
 		parser_type = parserTypeByFileExtension(file_name);
 	if (parser_type == PARSER_AUTO)
 	{
-		if (!parserTypeByFileContent(file_name, parser_type))
+		if (!impl->detectByContent(&file_name, NULL, 0, parser_type, &probed_ooxml))
 			return false;
 	}
 	else
 		fallback = true;
+	PlainTextExtractor::Implementation::ScopedProbedOdf scope(impl, probed_ooxml.get());
 	return processFile(parser_type, fallback, file_name, text);
 }
 
@@ -1061,13 +1043,15 @@ bool PlainTextExtractor::processFile(const char* buffer, size_t size, std::strin
 	impl->m_is_encrypted = false;
 	ParserType parser_type = impl->m_parser_type;
 	bool fallback = false;
+	std::unique_ptr<ODFOOXMLParser> probed_ooxml;
 	if (parser_type == PARSER_AUTO)
 	{
-		if (!parserTypeByFileContent(buffer, size, parser_type))
+		if (!impl->detectByContent(NULL, buffer, size, parser_type, &probed_ooxml))
 			return false;
 	}
 	else
 		fallback = true;
+	PlainTextExtractor::Implementation::ScopedProbedOdf scope(impl, probed_ooxml.get());
 	return processFile(parser_type, fallback, buffer, size, text);
 }
 
@@ -1089,8 +1073,13 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 		}
 		case PARSER_ODF_OOXML:
 		{
-			ODFOOXMLParser odfooxml(file_name);
-			error = impl->parseODFOOXML(odfooxml, text);
+			if (ODFOOXMLParser* probed = impl->consumeProbedOdf())
+				error = impl->parseODFOOXML(*probed, text);
+			else
+			{
+				ODFOOXMLParser odfooxml(file_name);
+				error = impl->parseODFOOXML(odfooxml, text);
+			}
 			break;
 		}
 		case PARSER_XLS:
@@ -1186,8 +1175,10 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
-		if (!parserTypeByFileContent(file_name, parser_type))
+		std::unique_ptr<ODFOOXMLParser> probed_ooxml;
+		if (!impl->detectByContent(&file_name, NULL, 0, parser_type, &probed_ooxml))
 			return false;
+		PlainTextExtractor::Implementation::ScopedProbedOdf scope(impl, probed_ooxml.get());
 		return processFile(parser_type, false, file_name, text);
 	}
 		
@@ -1222,8 +1213,13 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 		}
 		case PARSER_ODF_OOXML:
 		{
-			ODFOOXMLParser odfooxml(buffer, size);
-			error = impl->parseODFOOXML(odfooxml, text);
+			if (ODFOOXMLParser* probed = impl->consumeProbedOdf())
+				error = impl->parseODFOOXML(*probed, text);
+			else
+			{
+				ODFOOXMLParser odfooxml(buffer, size);
+				error = impl->parseODFOOXML(odfooxml, text);
+			}
 			break;
 		}
 		case PARSER_XLS:
@@ -1312,8 +1308,10 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
-		if (!parserTypeByFileContent(buffer, size, parser_type))
+		std::unique_ptr<ODFOOXMLParser> probed_ooxml;
+		if (!impl->detectByContent(NULL, buffer, size, parser_type, &probed_ooxml))
 			return false;
+		PlainTextExtractor::Implementation::ScopedProbedOdf scope(impl, probed_ooxml.get());
 		return processFile(parser_type, false, buffer, size, text);
 	}
 
@@ -1421,15 +1419,17 @@ bool PlainTextExtractor::extractMetadata(const std::string& file_name, Metadata&
 {
 	ParserType parser_type = impl->m_parser_type;
 	bool fallback = false;
+	std::unique_ptr<ODFOOXMLParser> probed_ooxml;
 	if (parser_type == PARSER_AUTO)
 		parser_type = parserTypeByFileExtension(file_name);
 	if (parser_type == PARSER_AUTO)
 	{
-		if (!parserTypeByFileContent(file_name, parser_type))
+		if (!impl->detectByContent(&file_name, NULL, 0, parser_type, &probed_ooxml))
 			return false;
 	}
 	else
 		fallback = true;
+	PlainTextExtractor::Implementation::ScopedProbedOdf scope(impl, probed_ooxml.get());
 	return extractMetadata(parser_type, fallback, file_name, metadata);
 }
 
@@ -1442,13 +1442,15 @@ bool PlainTextExtractor::extractMetadata(const char* buffer, size_t size, Metada
 {
 	ParserType parser_type = impl->m_parser_type;
 	bool fallback = false;
+	std::unique_ptr<ODFOOXMLParser> probed_ooxml;
 	if (parser_type == PARSER_AUTO)
 	{
-		if (!parserTypeByFileContent(buffer, size, parser_type))
+		if (!impl->detectByContent(NULL, buffer, size, parser_type, &probed_ooxml))
 			return false;
 	}
 	else
 		fallback = true;
+	PlainTextExtractor::Implementation::ScopedProbedOdf scope(impl, probed_ooxml.get());
 	return extractMetadata(parser_type, fallback, buffer, size, metadata);
 }
 
@@ -1469,8 +1471,13 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 		}
 		case PARSER_ODF_OOXML:
 		{
-			ODFOOXMLParser odfooxml(file_name);
-			error = impl->parseODFOOXMLMetadata(odfooxml, metadata);
+			if (ODFOOXMLParser* probed = impl->consumeProbedOdf())
+				error = impl->parseODFOOXMLMetadata(*probed, metadata);
+			else
+			{
+				ODFOOXMLParser odfooxml(file_name);
+				error = impl->parseODFOOXMLMetadata(odfooxml, metadata);
+			}
 			break;
 		}
 		case PARSER_XLS:
@@ -1541,8 +1548,10 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
-		if (!parserTypeByFileContent(file_name, parser_type))
+		std::unique_ptr<ODFOOXMLParser> probed_ooxml;
+		if (!impl->detectByContent(&file_name, NULL, 0, parser_type, &probed_ooxml))
 			return false;
+		PlainTextExtractor::Implementation::ScopedProbedOdf scope(impl, probed_ooxml.get());
 		return extractMetadata(parser_type, false, file_name, metadata);
 	}
 
@@ -1651,8 +1660,13 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 		}
 		case PARSER_ODF_OOXML:
 		{
-			ODFOOXMLParser odfooxml(buffer, size);
-			error = impl->parseODFOOXMLMetadata(odfooxml, metadata);
+			if (ODFOOXMLParser* probed = impl->consumeProbedOdf())
+				error = impl->parseODFOOXMLMetadata(*probed, metadata);
+			else
+			{
+				ODFOOXMLParser odfooxml(buffer, size);
+				error = impl->parseODFOOXMLMetadata(odfooxml, metadata);
+			}
 			break;
 		}
 		case PARSER_XLS:
@@ -1723,8 +1737,10 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
-		if (!parserTypeByFileContent(buffer, size, parser_type))
+		std::unique_ptr<ODFOOXMLParser> probed_ooxml;
+		if (!impl->detectByContent(NULL, buffer, size, parser_type, &probed_ooxml))
 			return false;
+		PlainTextExtractor::Implementation::ScopedProbedOdf scope(impl, probed_ooxml.get());
 		return extractMetadata(parser_type, false, buffer, size, metadata);
 	}
 

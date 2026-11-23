@@ -2,6 +2,7 @@
 #include "../build/formatting_style.h"
 #include "../build/plain_text_extractor.h"
 #include "../src/pdf_parser.h"
+#include "../src/xlsb_parser.h"
 
 #include <cstdio>
 #include <cstring>
@@ -1011,6 +1012,35 @@ static int test_step6_ppt_exoleobjstg()
 	return 0;
 }
 
+static int test_step7_xlsb_velvet_rejection()
+{
+	XLSBParser xlsb("embedded_fixtures/velvet_standard.xlsx");
+	if (xlsb.isXLSB() || xlsb.encrypted())
+	{
+		std::cerr << "FAIL: Step7 XLSBParser must reject VelvetSweatshop XLSX (isXLSB="
+		          << xlsb.isXLSB() << ", encrypted=" << xlsb.encrypted() << ")\n";
+		return 1;
+	}
+	XLSBParser xlsb_locked("embedded_fixtures/locked_agile_userpw.xlsx");
+	if (xlsb_locked.isXLSB() || !xlsb_locked.encrypted() || xlsb_locked.error())
+	{
+		std::cerr << "FAIL: Step7 XLSBParser probe on encrypted file must not set error (isXLSB="
+		          << xlsb_locked.isXLSB() << ", encrypted=" << xlsb_locked.encrypted()
+		          << ", error=" << xlsb_locked.error() << ")\n";
+		return 1;
+	}
+	doctotext::PlainTextExtractor ex;
+	std::string text;
+	if (!ex.processFile("embedded_fixtures/velvet_standard.xlsx", text) ||
+	    text.find("VELVET_STD_XLSX_OK") == std::string::npos)
+	{
+		std::cerr << "FAIL: Step7 PlainTextExtractor failed on velvet_standard.xlsx: " << text << "\n";
+		return 1;
+	}
+	std::cout << "PASS: Step 7 XLSBParser rejects VelvetSweatshop XLSX & keeps probe error=false on locked files\n";
+	return 0;
+}
+
 int main()
 {
 	if (test_step1_unified_switch_pdf() != 0)
@@ -1024,6 +1054,8 @@ int main()
 	if (test_step5_xls_mbd_and_objectpool() != 0)
 		return 1;
 	if (test_step6_ppt_exoleobjstg() != 0)
+		return 1;
+	if (test_step7_xlsb_velvet_rejection() != 0)
 		return 1;
 	std::cout << "office_embedded_test PASSED.\n";
 	return 0;

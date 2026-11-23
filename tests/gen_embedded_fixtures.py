@@ -7,6 +7,10 @@ Run directly when fixtures need to be regenerated:
     python3 tests/gen_embedded_fixtures.py
 """
 
+import base64
+import ctypes
+import ctypes.util
+import hashlib
 import io
 import os
 import shutil
@@ -568,6 +572,160 @@ def generate_base_doc_trees():
         return host_tree, emb_tree
 
 
+def _load_libcrypto():
+    for name in ("libcrypto.so.3", ctypes.util.find_library("crypto")):
+        if name:
+            try:
+                lib = ctypes.CDLL(name)
+                lib.EVP_CIPHER_CTX_new.restype = ctypes.c_void_p
+                lib.EVP_CIPHER_CTX_free.argtypes = [ctypes.c_void_p]
+                lib.EVP_aes_128_ecb.restype = ctypes.c_void_p
+                lib.EVP_aes_256_cbc.restype = ctypes.c_void_p
+                lib.EVP_EncryptInit_ex.argtypes = [
+                    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                    ctypes.c_char_p, ctypes.c_char_p
+                ]
+                lib.EVP_CIPHER_CTX_set_padding.argtypes = [ctypes.c_void_p, ctypes.c_int]
+                lib.EVP_EncryptUpdate.argtypes = [
+                    ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int),
+                    ctypes.c_char_p, ctypes.c_int
+                ]
+                lib.EVP_EncryptFinal_ex.argtypes = [
+                    ctypes.c_void_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)
+                ]
+                return lib
+            except OSError:
+                continue
+    raise RuntimeError("Could not load libcrypto for AES fixture encryption")
+
+
+_LIBCRYPTO = None
+
+
+def _aes_encrypt_raw(mode: str, key: bytes, iv: bytes, plaintext: bytes) -> bytes:
+    global _LIBCRYPTO
+    if _LIBCRYPTO is None:
+        _LIBCRYPTO = _load_libcrypto()
+    lib = _LIBCRYPTO
+    if len(plaintext) % 16 != 0:
+        plaintext = plaintext + b"\x00" * (16 - (len(plaintext) % 16))
+    ctx = lib.EVP_CIPHER_CTX_new()
+    if not ctx:
+        raise RuntimeError("EVP_CIPHER_CTX_new failed")
+    try:
+        cipher = lib.EVP_aes_128_ecb() if mode == "ecb128" else lib.EVP_aes_256_cbc()
+        if lib.EVP_EncryptInit_ex(ctx, cipher, None, key, iv) != 1:
+            raise RuntimeError("EVP_EncryptInit_ex failed")
+        lib.EVP_CIPHER_CTX_set_padding(ctx, 0)
+        out_buf = ctypes.create_string_buffer(len(plaintext) + 32)
+        out_len = ctypes.c_int(0)
+        if lib.EVP_EncryptUpdate(ctx, out_buf, ctypes.byref(out_len), plaintext, len(plaintext)) != 1:
+            raise RuntimeError("EVP_EncryptUpdate failed")
+        fin_len = ctypes.c_int(0)
+        fin_buf = ctypes.create_string_buffer(32)
+        if lib.EVP_EncryptFinal_ex(ctx, fin_buf, ctypes.byref(fin_len)) != 1:
+            raise RuntimeError("EVP_EncryptFinal_ex failed")
+        return out_buf.raw[:out_len.value] + fin_buf.raw[:fin_len.value]
+    finally:
+        lib.EVP_CIPHER_CTX_free(ctx)
+
+
+def _derive_standard_aes128_key(password: str, salt: bytes) -> bytes:
+    h = hashlib.sha1(salt + password.encode("utf-16le")).digest()
+    for i in range(50000):
+        h = hashlib.sha1(struct.pack("<I", i) + h).digest()
+    h = hashlib.sha1(h + struct.pack("<I", 0)).digest()
+    buf1 = bytes((b ^ 0x36) for b in h) + (b"\x36" * (64 - len(h)))
+    buf2 = bytes((b ^ 0x5C) for b in h) + (b"\x5c" * (64 - len(h)))
+    x1 = hashlib.sha1(buf1).digest()
+    x2 = hashlib.sha1(buf2).digest()
+    return (x1 + x2)[:16]
+
+
+def make_offcrypto_standard_aes128(zip_bytes: bytes, password: str = "VelvetSweatshop") -> bytes:
+    salt = b"0123456789ABCDEF"
+    key = _derive_standard_aes128_key(password, salt)
+    csp_name = "Microsoft Enhanced RSA and AES Cryptographic Provider\x00".encode("utf-16le")
+    header = struct.pack("<8I", 0x24, 0, 0x660E, 0x8004, 128, 0x18, 0, 0) + csp_name
+    verifier = b"VERIFIER12345678"
+    enc_verifier = _aes_encrypt_raw("ecb128", key, None, verifier)
+    verifier_hash = hashlib.sha1(verifier).digest()
+    enc_verifier_hash = _aes_encrypt_raw("ecb128", key, None, verifier_hash + (b"\x00" * 12))
+    enc_info = (
+        struct.pack("<HHI", 3, 2, 0x24) +
+        struct.pack("<I", len(header)) + header +
+        struct.pack("<I", 16) + salt + enc_verifier +
+        struct.pack("<I", 20) + enc_verifier_hash
+    )
+    enc_package = struct.pack("<Q", len(zip_bytes)) + _aes_encrypt_raw("ecb128", key, None, zip_bytes)
+    return build_ole2_from_tree([
+        {"name": "EncryptionInfo", "is_storage": False, "data": enc_info},
+        {"name": "EncryptedPackage", "is_storage": False, "data": enc_package},
+    ])
+
+
+def _derive_agile_sha512_key(password: str, salt: bytes, spin_count: int, block_key: bytes) -> bytes:
+    h = hashlib.sha512(salt + password.encode("utf-16le")).digest()
+    for i in range(spin_count):
+        h = hashlib.sha512(struct.pack("<I", i) + h).digest()
+    return hashlib.sha512(h + block_key).digest()[:32]
+
+
+def _make_agile_password_key_xml(password: str, key_salt: bytes, spin_count: int, secret_key: bytes) -> str:
+    bk_v_in = bytes.fromhex("fea7d2763b4b9e79")
+    bk_v_val = bytes.fromhex("d7aa0f6d3061344e")
+    bk_key = bytes.fromhex("146e0be7abacd0d6")
+    verifier_input = b"AGILE_VERIFIER16"
+    verifier_hash = hashlib.sha512(verifier_input).digest()
+    k_v_in = _derive_agile_sha512_key(password, key_salt, spin_count, bk_v_in)
+    k_v_val = _derive_agile_sha512_key(password, key_salt, spin_count, bk_v_val)
+    k_key = _derive_agile_sha512_key(password, key_salt, spin_count, bk_key)
+    enc_v_in = base64.b64encode(_aes_encrypt_raw("cbc256", k_v_in, key_salt, verifier_input)).decode("ascii")
+    enc_v_val = base64.b64encode(_aes_encrypt_raw("cbc256", k_v_val, key_salt, verifier_hash)).decode("ascii")
+    enc_key_val = base64.b64encode(_aes_encrypt_raw("cbc256", k_key, key_salt, secret_key)).decode("ascii")
+    salt_b64 = base64.b64encode(key_salt).decode("ascii")
+    return (
+        '<keyEncryptor uri="http://schemas.microsoft.com/office/2006/keyEncryptor/password">'
+        f'<p:encryptedKey spinCount="{spin_count}" saltSize="16" blockSize="16" keyBits="256" '
+        f'hashSize="64" cipherAlgorithm="AES" cipherChaining="ChainingModeCBC" hashAlgorithm="SHA512" '
+        f'saltValue="{salt_b64}" encryptedVerifierHashInput="{enc_v_in}" '
+        f'encryptedVerifierHashValue="{enc_v_val}" encryptedKeyValue="{enc_key_val}"/>'
+        '</keyEncryptor>'
+    )
+
+
+def make_offcrypto_agile_aes256(zip_bytes: bytes, password: str, extra_dummy_password: str = None) -> bytes:
+    key_data_salt = b"KEYDATA_SALT_16B"
+    secret_key = b"AGILE_PACKAGE_MASTER_KEY_32BYTES"
+    encryptors = []
+    if extra_dummy_password is not None:
+        encryptors.append(_make_agile_password_key_xml(extra_dummy_password, b"DUMMY_SALT_16BYT", 100, secret_key))
+    encryptors.append(_make_agile_password_key_xml(password, b"VALID_SALT_16BYT", 1000, secret_key))
+    kd_salt_b64 = base64.b64encode(key_data_salt).decode("ascii")
+    dummy_hmac = base64.b64encode(b"\x00" * 64).decode("ascii")
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<encryption xmlns="http://schemas.microsoft.com/office/2006/encryption" '
+        'xmlns:p="http://schemas.microsoft.com/office/2006/keyEncryptor/password">'
+        f'<keyData saltSize="16" blockSize="16" keyBits="256" hashSize="64" '
+        f'cipherAlgorithm="AES" cipherChaining="ChainingModeCBC" hashAlgorithm="SHA512" '
+        f'saltValue="{kd_salt_b64}"/>'
+        f'<dataIntegrity encryptedHmacKey="{dummy_hmac}" encryptedHmacValue="{dummy_hmac}"/>'
+        f'<keyEncryptors>{"".join(encryptors)}</keyEncryptors>'
+        '</encryption>'
+    ).encode("utf-8")
+    enc_info = struct.pack("<HHI", 4, 4, 0x40) + xml
+    pkg = bytearray(struct.pack("<Q", len(zip_bytes)))
+    for seg_idx, off in enumerate(range(0, len(zip_bytes), 4096)):
+        chunk = zip_bytes[off:off + 4096]
+        iv = hashlib.sha512(key_data_salt + struct.pack("<I", seg_idx)).digest()[:16]
+        pkg += _aes_encrypt_raw("cbc256", secret_key, iv, chunk)
+    return build_ole2_from_tree([
+        {"name": "EncryptionInfo", "is_storage": False, "data": enc_info},
+        {"name": "EncryptedPackage", "is_storage": False, "data": bytes(pkg)},
+    ])
+
+
 def write_fixture(name: str, data: bytes):
     path = os.path.join(OUT_DIR, name)
     with open(path, "wb") as f:
@@ -829,6 +987,28 @@ def main():
             ("word/embeddings/d_valid.rtf", make_rtf("VALID_AFTER_CORRUPT_OK_中文恢复")),
         ],
     ))
+
+    # 16. velvet_standard.xlsx: MS-OFFCRYPTO Standard AES-128 + SHA-1 with "VelvetSweatshop"
+    write_fixture(
+        "velvet_standard.xlsx",
+        make_offcrypto_standard_aes128(make_xlsx_bytes("VELVET_STD_XLSX_OK_标准AES128中文"), "VelvetSweatshop"),
+    )
+
+    # 17. velvet_agile_multi.docx: MS-OFFCRYPTO Agile AES-256 + SHA-512 with 2 <encryptedKey> nodes
+    write_fixture(
+        "velvet_agile_multi.docx",
+        make_offcrypto_agile_aes256(
+            make_docx_bytes("VELVET_AGILE_DOCX_OK_多加密器中文"),
+            "VelvetSweatshop",
+            extra_dummy_password="WrongFirstEncryptor",
+        ),
+    )
+
+    # 18. locked_agile_userpw.xlsx: MS-OFFCRYPTO Agile AES-256 + SHA-512 locked by custom user password
+    write_fixture(
+        "locked_agile_userpw.xlsx",
+        make_offcrypto_agile_aes256(make_xlsx_bytes("LOCKED_SECRET_MUST_NOT_LEAK"), "UserSecret123"),
+    )
 
 
 if __name__ == "__main__":

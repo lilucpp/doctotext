@@ -22,4 +22,19 @@ bool is_encrypted_offcrypto_source(const std::string& file_name, const char* buf
 bool is_encrypted_doc_ole(ThreadSafeOLEStorage& storage);
 bool is_encrypted_ppt_ole(ThreadSafeOLEStorage& storage);
 
+enum OffCryptoResult
+{
+	OFFCRYPTO_NOT_ENCRYPTED = 0,
+	OFFCRYPTO_DECRYPTED = 1,
+	OFFCRYPTO_NEEDS_PASSWORD = 2
+};
+
+// Detects MS-OFFCRYPTO OLE containers (EncryptionInfo + EncryptedPackage) and attempts
+// silent decryption using Office's built-in default password ("VelvetSweatshop").
+OffCryptoResult try_decrypt_offcrypto_source(const std::string& file_name,
+                                             const char* buffer,
+                                             size_t buffer_size,
+                                             std::string& out_decrypted_zip,
+                                             std::ostream* log_stream = NULL);
+
 #endif

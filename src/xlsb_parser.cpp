@@ -87,6 +87,7 @@ struct XLSBParser::Implementation
 	const char* m_buffer;
 	size_t m_buffer_size;
 	std::string m_file_name;
+	std::string m_decrypted_zip;
 	bool m_verbose_logging;
 	std::ostream* m_log_stream;
 	XLSBContent m_xlsb_content;
@@ -637,6 +638,71 @@ struct XLSBParser::Implementation
 			}
 		}
 	}
+	bool hasZipMagicHeader() const
+	{
+		if (!m_buffer)
+		{
+			FILE* f = fopen(m_file_name.c_str(), "rb");
+			if (!f)
+				return false;
+			char magic[2];
+			bool is_pk = (fread(magic, 1, 2, f) == 2 && magic[0] == 'P' && magic[1] == 'K');
+			fclose(f);
+			return is_pk;
+		}
+		return m_buffer_size >= 2 && m_buffer[0] == 'P' && m_buffer[1] == 'K';
+	}
+
+	bool openXlsbArchive(DocToTextUnzip& unzip, bool log_messages, bool is_probe)
+	{
+		if (&(*m_log_stream) != &std::cerr)
+			unzip.setLogStream(*m_log_stream);
+
+		if (m_decrypted_zip.empty() && !hasZipMagicHeader())
+		{
+			OffCryptoResult dec_res = try_decrypt_offcrypto_source(
+				m_file_name, m_buffer, m_buffer_size, m_decrypted_zip, m_verbose_logging ? m_log_stream : NULL);
+			if (dec_res == OFFCRYPTO_NEEDS_PASSWORD)
+			{
+				if (log_messages)
+					*m_log_stream << "Office file is encrypted and requires a password.\n";
+				m_encrypted = true;
+				if (!is_probe)
+					m_error = true;
+				return false;
+			}
+			if (dec_res != OFFCRYPTO_DECRYPTED)
+			{
+				if (log_messages)
+					*m_log_stream << "This file is not proper xlsb file.\n";
+				return false;
+			}
+		}
+
+		if (!m_decrypted_zip.empty())
+			unzip.setBuffer(m_decrypted_zip.data(), m_decrypted_zip.size());
+		else if (m_buffer)
+			unzip.setBuffer(m_buffer, m_buffer_size);
+		else
+			unzip.setArchiveFile(m_file_name);
+
+		if (!unzip.open())
+		{
+			std::string().swap(m_decrypted_zip);
+			if (log_messages)
+				*m_log_stream << "Cannot unzip file.\n";
+			return false;
+		}
+		if (!unzip.exists("xl/workbook.bin"))
+		{
+			unzip.close();
+			std::string().swap(m_decrypted_zip);
+			if (log_messages)
+				*m_log_stream << "Cannot find xl/woorkbook.bin.\n";
+			return false;
+		}
+		return true;
+	}
 };
 
 XLSBParser::XLSBParser(const std::string& file_name)
@@ -680,43 +746,12 @@ void XLSBParser::setLogStream(std::ostream& log_stream)
 
 bool XLSBParser::isXLSB()
 {
-	if (!impl->m_buffer)
-	{
-		FILE* f = fopen(impl->m_file_name.c_str(), "rb");
-		if (f == NULL)
-			return false;
-		char magic[2];
-		if (fread(magic, 1, 2, f) != 2 || magic[0] != 'P' || magic[1] != 'K')
-		{
-			fclose(f);
-			return false;
-		}
-		fclose(f);
-	}
-	else if (impl->m_buffer_size < 2 ||
-	         impl->m_buffer[0] != 'P' ||
-	         impl->m_buffer[1] != 'K')
-	{
-		return false;
-	}
-	DocToTextUnzip unzip;
-	if (impl->m_buffer)
-		unzip.setBuffer(impl->m_buffer, impl->m_buffer_size);
-	else
-		unzip.setArchiveFile(impl->m_file_name);
 	impl->m_error = false;
-	bool res_open = unzip.open();
-	if (res_open == false)
-	{
-		*impl->m_log_stream << "Cannot unzip file.\n";
+	impl->m_encrypted = false;
+	std::string().swap(impl->m_decrypted_zip);
+	DocToTextUnzip unzip;
+	if (!impl->openXlsbArchive(unzip, false, true))
 		return false;
-	}
-	if (!unzip.exists("xl/workbook.bin"))
-	{
-		unzip.close();
-		*impl->m_log_stream << "Cannot find xl/woorkbook.bin.\n";
-		return false;
-	}
 	unzip.close();
 	return true;
 }
@@ -731,33 +766,16 @@ Metadata XLSBParser::metaData()
 	Metadata metadata;
 	impl->m_error = false;
 	impl->m_encrypted = false;
-	if (is_encrypted_offcrypto_source(impl->m_file_name, impl->m_buffer, impl->m_buffer_size))
-	{
-		impl->m_encrypted = true;
-		impl->m_error = true;
-		return metadata;
-	}
-	if (!isXLSB())
-	{
-		impl->m_error = true;
-		*impl->m_log_stream << "This file is not proper xlsb file.\n";
-		return metadata;
-	}
 	DocToTextUnzip unzip;
-	if (impl->m_buffer)
-		unzip.setBuffer(impl->m_buffer, impl->m_buffer_size);
-	else
-		unzip.setArchiveFile(impl->m_file_name);
-	bool res_open = unzip.open();
-	if (res_open == false)
+	if (!impl->openXlsbArchive(unzip, false, false))
 	{
-		*impl->m_log_stream << "Cannot unzip file.\n";
 		impl->m_error = true;
 		return metadata;
 	}
 	if (!unzip.exists("docProps/app.xml"))
 	{
 		unzip.close();
+		std::string().swap(impl->m_decrypted_zip);
 		*impl->m_log_stream << "Cannot find docProps/app.xml.\n";
 		impl->m_error = true;
 		return metadata;
@@ -765,12 +783,14 @@ Metadata XLSBParser::metaData()
 	if (!unzip.exists("docProps/core.xml"))
 	{
 		unzip.close();
+		std::string().swap(impl->m_decrypted_zip);
 		*impl->m_log_stream << "Cannot find docProps/core.xml.\n";
 		impl->m_error = true;
 		return metadata;
 	}
 	impl->readMetadata(unzip, metadata);
 	unzip.close();
+	std::string().swap(impl->m_decrypted_zip);
 	return metadata;
 }
 
@@ -779,28 +799,9 @@ std::string XLSBParser::plainText(const FormattingStyle& formatting)
 	std::string text;
 	impl->m_error = false;
 	impl->m_encrypted = false;
-	if (is_encrypted_offcrypto_source(impl->m_file_name, impl->m_buffer, impl->m_buffer_size))
-	{
-		*impl->m_log_stream << "Office file is encrypted and requires a password.\n";
-		impl->m_encrypted = true;
-		impl->m_error = true;
-		return text;
-	}
-	if (!isXLSB())
-	{
-		impl->m_error = true;
-		*impl->m_log_stream << "This file is not proper xlsb file.\n";
-		return text;
-	}
 	DocToTextUnzip unzip;
-	if (impl->m_buffer)
-		unzip.setBuffer(impl->m_buffer, impl->m_buffer_size);
-	else
-		unzip.setArchiveFile(impl->m_file_name);
-	bool res_open = unzip.open();
-	if (res_open == false)
+	if (!impl->openXlsbArchive(unzip, true, false))
 	{
-		*impl->m_log_stream << "Cannot unzip file.\n";
 		impl->m_error = true;
 		return text;
 	}
@@ -815,6 +816,7 @@ std::string XLSBParser::plainText(const FormattingStyle& formatting)
 		doctotext::extractZipEmbeddings(unzip, true, tls_scope.context(), text);
 	}
 	unzip.close();
+	std::string().swap(impl->m_decrypted_zip);
 	return text;
 }
 

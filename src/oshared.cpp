@@ -34,10 +34,18 @@
 
 #include "oshared.h"
 
+#include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 #include <iostream>
+#include <libxml/parser.h>
+#include <libxml/tree.h>
+#include <memory>
 #include <stdio.h>
 #include <string.h>
+#include <vector>
 #include "metadata.h"
+#include "poppler_decrypt.h"
 #include "wv2/utilities.h"
 #include <time.h>
 #include "thread_safe_ole_stream_reader.h"
@@ -519,4 +527,676 @@ bool is_encrypted_ppt_ole(ThreadSafeOLEStorage& storage)
 	}
 	delete reader;
 	return encrypted;
+}
+
+namespace
+{
+	const size_t kMaxEncryptionInfoBytes = 1024 * 1024;
+	const size_t kMaxEncryptedPackageBytes = 128ULL * 1024ULL * 1024ULL;
+
+	U32 readU32LE(const unsigned char* p)
+	{
+		return static_cast<U32>(p[0]) |
+		       (static_cast<U32>(p[1]) << 8) |
+		       (static_cast<U32>(p[2]) << 16) |
+		       (static_cast<U32>(p[3]) << 24);
+	}
+
+	U16 readU16LE(const unsigned char* p)
+	{
+		return static_cast<U16>(p[0]) | (static_cast<U16>(p[1]) << 8);
+	}
+
+	uint64_t readU64LE(const unsigned char* p)
+	{
+		return static_cast<uint64_t>(readU32LE(p)) |
+		       (static_cast<uint64_t>(readU32LE(p + 4)) << 32);
+	}
+
+	void writeU32LE(uint32_t v, unsigned char out[4])
+	{
+		out[0] = static_cast<unsigned char>(v & 0xFF);
+		out[1] = static_cast<unsigned char>((v >> 8) & 0xFF);
+		out[2] = static_cast<unsigned char>((v >> 16) & 0xFF);
+		out[3] = static_cast<unsigned char>((v >> 24) & 0xFF);
+	}
+
+	bool readOleStreamBounded(ThreadSafeOLEStorage& storage,
+	                          const std::string& name,
+	                          size_t max_bytes,
+	                          std::string& out)
+	{
+		out.clear();
+		AbstractOLEStreamReader* reader = storage.createStreamReader(name);
+		if (!reader)
+			return false;
+		size_t sz = reader->size();
+		if (sz == 0 || sz > max_bytes)
+		{
+			delete reader;
+			return false;
+		}
+		out.resize(sz);
+		bool ok = reader->read(reinterpret_cast<uint8_t*>(&out[0]), sz);
+		delete reader;
+		if (!ok)
+			out.clear();
+		return ok;
+	}
+
+	size_t asciiToUtf16LE(const char* s, unsigned char* out, size_t max_bytes)
+	{
+		if (!s || !out)
+			return 0;
+		size_t pos = 0;
+		for (size_t i = 0; s[i] != '\0' && pos + 2 <= max_bytes; ++i)
+		{
+			out[pos++] = static_cast<unsigned char>(s[i]);
+			out[pos++] = 0;
+		}
+		return pos;
+	}
+
+	enum HashKind
+	{
+		HASH_UNKNOWN = 0,
+		HASH_SHA1 = 20,
+		HASH_SHA256 = 32,
+		HASH_SHA384 = 48,
+		HASH_SHA512 = 64
+	};
+
+	void computeHash(HashKind kind, const unsigned char* data, size_t len, unsigned char* out)
+	{
+		switch (kind)
+		{
+			case HASH_SHA1:
+				poppler_sha1(data, len, out);
+				break;
+			case HASH_SHA256:
+				poppler_sha256(data, len, out);
+				break;
+			case HASH_SHA384:
+				poppler_sha384(data, len, out);
+				break;
+			case HASH_SHA512:
+				poppler_sha512(data, len, out);
+				break;
+			default:
+				break;
+		}
+	}
+
+	struct StandardHeaderInfo
+	{
+		int aes_bits;
+		const unsigned char* salt;
+		const unsigned char* enc_verifier;
+		const unsigned char* enc_verifier_hash;
+	};
+
+	bool parseStandardHeader(const unsigned char* data, size_t size, StandardHeaderInfo& info)
+	{
+		if (size < 44)
+			return false;
+		const U32 header_size = readU32LE(data + 8);
+		if (header_size < 32 || 12ULL + header_size > size)
+			return false;
+
+		const U32 flags = readU32LE(data + 12);
+		U32 alg_id = readU32LE(data + 20);
+		U32 alg_hash = readU32LE(data + 24);
+		const U32 key_bits = readU32LE(data + 28);
+
+		if (alg_id == 0 && (flags & 0x20) && (flags & 0x10))
+			alg_id = (key_bits == 256) ? 0x6610U : 0x660EU;
+		if (alg_hash == 0 && (flags & 0x20))
+			alg_hash = 0x8004U;
+
+		if ((alg_id != 0x660EU && alg_id != 0x6610U) || alg_hash != 0x8004U)
+			return false;
+		info.aes_bits = (alg_id == 0x6610U) ? 256 : 128;
+		if (key_bits != static_cast<U32>(info.aes_bits))
+			return false;
+
+		const size_t ver_off = 12 + static_cast<size_t>(header_size);
+		if (ver_off + 40 + 32 > size)
+			return false;
+		const U32 salt_size = readU32LE(data + ver_off);
+		if (salt_size != 16 || ver_off + 4 + salt_size + 16 + 4 + 32 > size)
+			return false;
+
+		info.salt = data + ver_off + 4;
+		info.enc_verifier = info.salt + 16;
+		const U32 verifier_hash_size = readU32LE(info.enc_verifier + 16);
+		if (verifier_hash_size != 20)
+			return false;
+		info.enc_verifier_hash = info.enc_verifier + 20;
+		return true;
+	}
+
+	bool verifyStandardPassword(const StandardHeaderInfo& info,
+	                            const char* password,
+	                            unsigned char out_key[32])
+	{
+		unsigned char buf[16 + 128];
+		memcpy(buf, info.salt, 16);
+		const size_t pwd_len = asciiToUtf16LE(password, buf + 16, 128);
+
+		unsigned char h[20];
+		poppler_sha1(buf, 16 + pwd_len, h);
+
+		unsigned char iter_buf[24];
+		for (uint32_t i = 0; i < 50000; ++i)
+		{
+			writeU32LE(i, iter_buf);
+			memcpy(iter_buf + 4, h, 20);
+			poppler_sha1(iter_buf, 24, h);
+		}
+
+		unsigned char final_in[24];
+		memcpy(final_in, h, 20);
+		writeU32LE(0, final_in + 20);
+		unsigned char h_final[20];
+		poppler_sha1(final_in, 24, h_final);
+
+		unsigned char x1_in[64];
+		unsigned char x2_in[64];
+		memset(x1_in, 0x36, 64);
+		memset(x2_in, 0x5C, 64);
+		for (int i = 0; i < 20; ++i)
+		{
+			x1_in[i] ^= h_final[i];
+			x2_in[i] ^= h_final[i];
+		}
+		unsigned char x_key[40];
+		poppler_sha1(x1_in, 64, x_key);
+		poppler_sha1(x2_in, 64, x_key + 20);
+
+		unsigned char verifier[16];
+		unsigned char verifier_hash[32];
+		if (!poppler_aes_ecb_decrypt(x_key, info.aes_bits, info.enc_verifier, 16, verifier) ||
+		    !poppler_aes_ecb_decrypt(x_key, info.aes_bits, info.enc_verifier_hash, 32, verifier_hash))
+		{
+			return false;
+		}
+		unsigned char actual_hash[20];
+		poppler_sha1(verifier, 16, actual_hash);
+		if (memcmp(actual_hash, verifier_hash, 20) != 0)
+			return false;
+
+		memcpy(out_key, x_key, static_cast<size_t>(info.aes_bits / 8));
+		return true;
+	}
+
+	bool decryptStandardPackageInPlace(ThreadSafeOLEStorage& storage,
+	                                   int aes_bits,
+	                                   const unsigned char* key,
+	                                   std::string& out_zip)
+	{
+		if (!readOleStreamBounded(storage, "EncryptedPackage", kMaxEncryptedPackageBytes + 8, out_zip) ||
+		    out_zip.size() < 24)
+		{
+			out_zip.clear();
+			return false;
+		}
+		const uint64_t pkg_size = readU64LE(reinterpret_cast<const unsigned char*>(out_zip.data()));
+		const size_t enc_len = out_zip.size() - 8;
+		if (pkg_size < 4 || pkg_size > kMaxEncryptedPackageBytes || pkg_size > enc_len || (enc_len % 16) != 0)
+		{
+			out_zip.clear();
+			return false;
+		}
+		// Forward block-by-block decryption with out == in - 8 consumes each 16-byte ciphertext block
+		// before overwriting earlier bytes, eliminating a second multi-megabyte buffer allocation.
+		unsigned char* base = reinterpret_cast<unsigned char*>(&out_zip[0]);
+		if (!poppler_aes_ecb_decrypt(key, aes_bits, base + 8, enc_len, base))
+		{
+			out_zip.clear();
+			return false;
+		}
+		out_zip.resize(static_cast<size_t>(pkg_size));
+		if (out_zip.size() < 4 || out_zip[0] != 'P' || out_zip[1] != 'K')
+		{
+			out_zip.clear();
+			return false;
+		}
+		return true;
+	}
+
+	bool base64Decode(const std::string& src, std::vector<unsigned char>& out)
+	{
+		static const int kDec[256] = {
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
+			52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
+			-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
+			15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+			-1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+			41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+			-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+		};
+		out.clear();
+		uint32_t val = 0;
+		int valb = -8;
+		bool seen_pad = false;
+		int pad_count = 0;
+		for (size_t i = 0; i < src.size(); ++i)
+		{
+			unsigned char c = static_cast<unsigned char>(src[i]);
+			if (c == ' ' || c == '\n' || c == '\r' || c == '\t')
+				continue;
+			if (c == '=')
+			{
+				seen_pad = true;
+				if (++pad_count > 2)
+					return false;
+				continue;
+			}
+			if (seen_pad)
+				return false;
+			int d = kDec[c];
+			if (d == -1)
+				return false;
+			val = (val << 6) + static_cast<uint32_t>(d);
+			valb += 6;
+			if (valb >= 0)
+			{
+				out.push_back(static_cast<unsigned char>((val >> valb) & 0xFF));
+				valb -= 8;
+			}
+		}
+		if (valb == -2 || out.empty())
+			return false;
+		return true;
+	}
+
+	bool parseStrictU32(const std::string& s, uint32_t& out)
+	{
+		if (s.empty())
+			return false;
+		for (size_t i = 0; i < s.size(); ++i)
+		{
+			if (s[i] < '0' || s[i] > '9')
+				return false;
+		}
+		errno = 0;
+		char* end = NULL;
+		unsigned long v = strtoul(s.c_str(), &end, 10);
+		if (errno != 0 || end != s.c_str() + s.size() || v > 0xFFFFFFFFUL)
+			return false;
+		out = static_cast<uint32_t>(v);
+		return true;
+	}
+
+	HashKind parseHashAlgorithm(const std::string& name)
+	{
+		if (name == "SHA1") return HASH_SHA1;
+		if (name == "SHA256") return HASH_SHA256;
+		if (name == "SHA384") return HASH_SHA384;
+		if (name == "SHA512") return HASH_SHA512;
+		return HASH_UNKNOWN;
+	}
+
+	std::string getXmlAttr(xmlNodePtr node, const char* attr)
+	{
+		xmlChar* v = xmlGetProp(node, reinterpret_cast<const xmlChar*>(attr));
+		if (!v)
+			return "";
+		std::string s(reinterpret_cast<const char*>(v));
+		xmlFree(v);
+		return s;
+	}
+
+	void collectLocalNameNodes(xmlNodePtr root, const char* target, std::vector<xmlNodePtr>& out)
+	{
+		for (xmlNodePtr cur = root; cur != NULL; cur = cur->next)
+		{
+			if (cur->type == XML_ELEMENT_NODE && xmlStrcmp(cur->name, reinterpret_cast<const xmlChar*>(target)) == 0)
+				out.push_back(cur);
+			collectLocalNameNodes(cur->children, target, out);
+		}
+	}
+
+	void deriveAgileBlockKey(HashKind hash_kind,
+	                         const unsigned char* h_n,
+	                         const unsigned char block_key[8],
+	                         size_t key_bytes,
+	                         unsigned char* out_key)
+	{
+		const size_t hash_len = static_cast<size_t>(hash_kind);
+		unsigned char in[64 + 8];
+		memcpy(in, h_n, hash_len);
+		memcpy(in + hash_len, block_key, 8);
+		unsigned char digest[64];
+		computeHash(hash_kind, in, hash_len + 8, digest);
+		memset(out_key, 0x36, key_bytes);
+		memcpy(out_key, digest, std::min(hash_len, key_bytes));
+	}
+
+	void deriveAgileIV(HashKind hash_kind,
+	                   const std::vector<unsigned char>& salt,
+	                   const unsigned char* block_key,
+	                   size_t block_key_len,
+	                   unsigned char out_iv[16])
+	{
+		if (!block_key || block_key_len == 0)
+		{
+			memset(out_iv, 0x36, 16);
+			memcpy(out_iv, salt.data(), std::min(salt.size(), size_t(16)));
+			return;
+		}
+		const size_t hash_len = static_cast<size_t>(hash_kind);
+		unsigned char in[64 + 8];
+		const size_t salt_len = std::min(salt.size(), size_t(64));
+		const size_t bk_len = std::min(block_key_len, size_t(8));
+		memcpy(in, salt.data(), salt_len);
+		memcpy(in + salt_len, block_key, bk_len);
+		unsigned char digest[64];
+		computeHash(hash_kind, in, salt_len + bk_len, digest);
+		memset(out_iv, 0x36, 16);
+		memcpy(out_iv, digest, std::min(hash_len, size_t(16)));
+	}
+
+	struct AgileEncryptedKeyParams
+	{
+		uint32_t spin_count;
+		int key_bits;
+		size_t salt_size;
+		HashKind hash_kind;
+		std::vector<unsigned char> salt;
+		std::vector<unsigned char> enc_ver_input;
+		std::vector<unsigned char> enc_ver_value;
+		std::vector<unsigned char> enc_key_value;
+	};
+
+	struct AgileParams
+	{
+		int kd_key_bits;
+		HashKind kd_hash;
+		std::vector<unsigned char> kd_salt;
+		std::vector<AgileEncryptedKeyParams> keys;
+	};
+
+	bool parseAgileEncryptedKeyNode(xmlNodePtr ek, int kd_key_bits, AgileEncryptedKeyParams& out)
+	{
+		uint32_t block_sz = 0, key_bits = 0, hash_sz = 0, declared_salt_sz = 0, spins = 0;
+		if (getXmlAttr(ek, "cipherAlgorithm") != "AES" ||
+		    getXmlAttr(ek, "cipherChaining") != "ChainingModeCBC" ||
+		    !parseStrictU32(getXmlAttr(ek, "blockSize"), block_sz) || block_sz != 16 ||
+		    !parseStrictU32(getXmlAttr(ek, "keyBits"), key_bits) ||
+		    (key_bits != 128 && key_bits != 256))
+		{
+			return false;
+		}
+		out.key_bits = static_cast<int>(key_bits);
+		out.hash_kind = parseHashAlgorithm(getXmlAttr(ek, "hashAlgorithm"));
+		if (out.hash_kind == HASH_UNKNOWN ||
+		    !parseStrictU32(getXmlAttr(ek, "hashSize"), hash_sz) ||
+		    hash_sz != static_cast<uint32_t>(out.hash_kind) ||
+		    !parseStrictU32(getXmlAttr(ek, "saltSize"), declared_salt_sz) ||
+		    declared_salt_sz < 1 || declared_salt_sz > 64 ||
+		    !parseStrictU32(getXmlAttr(ek, "spinCount"), spins) ||
+		    spins > 1000000UL)
+		{
+			return false;
+		}
+		out.spin_count = spins;
+		out.salt_size = static_cast<size_t>(declared_salt_sz);
+
+		if (!base64Decode(getXmlAttr(ek, "saltValue"), out.salt) ||
+		    !base64Decode(getXmlAttr(ek, "encryptedVerifierHashInput"), out.enc_ver_input) ||
+		    !base64Decode(getXmlAttr(ek, "encryptedVerifierHashValue"), out.enc_ver_value) ||
+		    !base64Decode(getXmlAttr(ek, "encryptedKeyValue"), out.enc_key_value))
+		{
+			return false;
+		}
+		if (out.salt.size() != out.salt_size ||
+		    out.enc_ver_input.size() < 16 || out.enc_ver_input.size() > 64 || (out.enc_ver_input.size() % 16) != 0 ||
+		    out.enc_ver_value.size() < static_cast<size_t>(out.hash_kind) || out.enc_ver_value.size() > 64 ||
+		    (out.enc_ver_value.size() % 16) != 0 ||
+		    out.enc_key_value.size() < static_cast<size_t>(kd_key_bits / 8) || out.enc_key_value.size() > 64 ||
+		    (out.enc_key_value.size() % 16) != 0)
+		{
+			return false;
+		}
+		return true;
+	}
+
+	bool parseAgileParams(const unsigned char* enc_info, size_t enc_info_len, AgileParams& params)
+	{
+		if (enc_info_len <= 8)
+			return false;
+		struct XmlDocGuard
+		{
+			xmlDocPtr doc;
+			explicit XmlDocGuard(xmlDocPtr d) : doc(d) {}
+			~XmlDocGuard() { if (doc) xmlFreeDoc(doc); }
+		} doc_guard(xmlReadMemory(reinterpret_cast<const char*>(enc_info + 8),
+		                           static_cast<int>(enc_info_len - 8),
+		                           "EncryptionInfo.xml", NULL,
+		                           XML_PARSE_NONET | XML_PARSE_NOERROR | XML_PARSE_NOWARNING));
+		if (!doc_guard.doc)
+			return false;
+		xmlNodePtr root = xmlDocGetRootElement(doc_guard.doc);
+		std::vector<xmlNodePtr> kd_nodes;
+		std::vector<xmlNodePtr> ek_nodes;
+		collectLocalNameNodes(root, "keyData", kd_nodes);
+		collectLocalNameNodes(root, "encryptedKey", ek_nodes);
+		if (kd_nodes.empty() || ek_nodes.empty())
+			return false;
+
+		xmlNodePtr kd = kd_nodes[0];
+		uint32_t kd_block_sz = 0, kd_key_bits = 0, kd_hash_sz = 0, kd_salt_sz = 0;
+		if (getXmlAttr(kd, "cipherAlgorithm") != "AES" ||
+		    getXmlAttr(kd, "cipherChaining") != "ChainingModeCBC" ||
+		    !parseStrictU32(getXmlAttr(kd, "blockSize"), kd_block_sz) || kd_block_sz != 16 ||
+		    !parseStrictU32(getXmlAttr(kd, "keyBits"), kd_key_bits) ||
+		    (kd_key_bits != 128 && kd_key_bits != 256))
+		{
+			return false;
+		}
+		params.kd_key_bits = static_cast<int>(kd_key_bits);
+		params.kd_hash = parseHashAlgorithm(getXmlAttr(kd, "hashAlgorithm"));
+		if (params.kd_hash == HASH_UNKNOWN ||
+		    !parseStrictU32(getXmlAttr(kd, "hashSize"), kd_hash_sz) ||
+		    kd_hash_sz != static_cast<uint32_t>(params.kd_hash) ||
+		    !parseStrictU32(getXmlAttr(kd, "saltSize"), kd_salt_sz) ||
+		    kd_salt_sz < 1 || kd_salt_sz > 64 ||
+		    !base64Decode(getXmlAttr(kd, "saltValue"), params.kd_salt) ||
+		    params.kd_salt.size() != static_cast<size_t>(kd_salt_sz))
+		{
+			return false;
+		}
+
+		for (size_t i = 0; i < ek_nodes.size(); ++i)
+		{
+			AgileEncryptedKeyParams ek;
+			if (parseAgileEncryptedKeyNode(ek_nodes[i], params.kd_key_bits, ek))
+				params.keys.push_back(ek);
+		}
+		return !params.keys.empty();
+	}
+
+	bool verifyAgilePassword(const AgileParams& params,
+	                         const char* password,
+	                         unsigned char out_package_key[32])
+	{
+		for (size_t k = 0; k < params.keys.size(); ++k)
+		{
+			const AgileEncryptedKeyParams& ek = params.keys[k];
+			const size_t hash_len = static_cast<size_t>(ek.hash_kind);
+			const size_t ek_key_bytes = static_cast<size_t>(ek.key_bits / 8);
+			const size_t kd_key_bytes = static_cast<size_t>(params.kd_key_bits / 8);
+
+			unsigned char h_in[64 + 128];
+			memcpy(h_in, ek.salt.data(), ek.salt.size());
+			const size_t pwd_len = asciiToUtf16LE(password, h_in + ek.salt.size(), 128);
+
+			unsigned char h_n[64];
+			computeHash(ek.hash_kind, h_in, ek.salt.size() + pwd_len, h_n);
+
+			unsigned char iter_in[68];
+			for (uint32_t i = 0; i < ek.spin_count; ++i)
+			{
+				writeU32LE(i, iter_in);
+				memcpy(iter_in + 4, h_n, hash_len);
+				computeHash(ek.hash_kind, iter_in, 4 + hash_len, h_n);
+			}
+
+			static const unsigned char kBlockVerInput[8] = {0xFE, 0xA7, 0xD2, 0x76, 0x3B, 0x4B, 0x9E, 0x79};
+			static const unsigned char kBlockVerValue[8] = {0xD7, 0xAA, 0x0F, 0x6D, 0x30, 0x61, 0x34, 0x4E};
+			static const unsigned char kBlockKeyValue[8] = {0x14, 0x6E, 0x0B, 0xE7, 0xAB, 0xAC, 0xD0, 0xD6};
+
+			unsigned char iv_salt[16];
+			deriveAgileIV(ek.hash_kind, ek.salt, NULL, 0, iv_salt);
+
+			unsigned char key_in[32];
+			unsigned char key_val[32];
+			deriveAgileBlockKey(ek.hash_kind, h_n, kBlockVerInput, ek_key_bytes, key_in);
+			deriveAgileBlockKey(ek.hash_kind, h_n, kBlockVerValue, ek_key_bytes, key_val);
+
+			unsigned char dec_ver_in[64];
+			unsigned char dec_ver_val[64];
+			if (!poppler_aes_cbc_decrypt(key_in, ek.key_bits, iv_salt,
+			                             ek.enc_ver_input.data(), ek.enc_ver_input.size(), dec_ver_in) ||
+			    !poppler_aes_cbc_decrypt(key_val, ek.key_bits, iv_salt,
+			                             ek.enc_ver_value.data(), ek.enc_ver_value.size(), dec_ver_val))
+			{
+				continue;
+			}
+			unsigned char actual_hash[64];
+			const size_t ver_input_bytes = std::min(ek.enc_ver_input.size(), ek.salt_size);
+			computeHash(ek.hash_kind, dec_ver_in, ver_input_bytes, actual_hash);
+			if (memcmp(actual_hash, dec_ver_val, hash_len) != 0)
+				continue;
+
+			unsigned char key_pkg[32];
+			unsigned char package_key[64];
+			deriveAgileBlockKey(ek.hash_kind, h_n, kBlockKeyValue, ek_key_bytes, key_pkg);
+			if (!poppler_aes_cbc_decrypt(key_pkg, ek.key_bits, iv_salt,
+			                             ek.enc_key_value.data(), ek.enc_key_value.size(), package_key))
+			{
+				continue;
+			}
+			memcpy(out_package_key, package_key, kd_key_bytes);
+			return true;
+		}
+		return false;
+	}
+
+	bool decryptAgilePackageInPlace(ThreadSafeOLEStorage& storage,
+	                                const AgileParams& params,
+	                                const unsigned char* package_key,
+	                                std::string& out_zip)
+	{
+		if (!readOleStreamBounded(storage, "EncryptedPackage", kMaxEncryptedPackageBytes + 8, out_zip) ||
+		    out_zip.size() < 24)
+		{
+			out_zip.clear();
+			return false;
+		}
+		const uint64_t pkg_size = readU64LE(reinterpret_cast<const unsigned char*>(out_zip.data()));
+		const size_t enc_len = out_zip.size() - 8;
+		if (pkg_size < 4 || pkg_size > kMaxEncryptedPackageBytes || pkg_size > enc_len || (enc_len % 16) != 0)
+		{
+			out_zip.clear();
+			return false;
+		}
+
+		unsigned char* base = reinterpret_cast<unsigned char*>(&out_zip[0]);
+		uint32_t seg = 0;
+		for (size_t off = 0; off < enc_len; off += 4096, ++seg)
+		{
+			size_t seg_len = std::min(size_t(4096), enc_len - off);
+			unsigned char seg_bk[4];
+			writeU32LE(seg, seg_bk);
+			unsigned char seg_iv[16];
+			deriveAgileIV(params.kd_hash, params.kd_salt, seg_bk, 4, seg_iv);
+			if (!poppler_aes_cbc_decrypt(package_key, params.kd_key_bits, seg_iv,
+			                             base + 8 + off, seg_len, base + off))
+			{
+				out_zip.clear();
+				return false;
+			}
+		}
+		out_zip.resize(static_cast<size_t>(pkg_size));
+		if (out_zip.size() < 4 || out_zip[0] != 'P' || out_zip[1] != 'K')
+		{
+			out_zip.clear();
+			return false;
+		}
+		return true;
+	}
+}
+
+OffCryptoResult try_decrypt_offcrypto_source(const std::string& file_name,
+                                             const char* buffer,
+                                             size_t buffer_size,
+                                             std::string& out_decrypted_zip,
+                                             std::ostream* log_stream)
+{
+	out_decrypted_zip.clear();
+	if (!has_ole2_header(file_name, buffer, buffer_size))
+		return OFFCRYPTO_NOT_ENCRYPTED;
+
+	std::unique_ptr<ThreadSafeOLEStorage> storage(
+		buffer ? new ThreadSafeOLEStorage(buffer, buffer_size) : new ThreadSafeOLEStorage(file_name));
+	if (!storage->isValid() || !is_encrypted_offcrypto_ole(*storage))
+		return OFFCRYPTO_NOT_ENCRYPTED;
+
+	// Read only EncryptionInfo first so real user-password files fail fast without reading EncryptedPackage.
+	std::string enc_info_str;
+	if (!readOleStreamBounded(*storage, "EncryptionInfo", kMaxEncryptionInfoBytes, enc_info_str) ||
+	    enc_info_str.size() < 8)
+	{
+		return OFFCRYPTO_NEEDS_PASSWORD;
+	}
+
+	const unsigned char* enc_info = reinterpret_cast<const unsigned char*>(enc_info_str.data());
+	const size_t enc_info_len = enc_info_str.size();
+	const U16 v_major = readU16LE(enc_info);
+	const U16 v_minor = readU16LE(enc_info + 2);
+	static const char* const kDefaultPassword = "VelvetSweatshop";
+
+	if ((v_major == 2 || v_major == 3 || v_major == 4) && v_minor == 2)
+	{
+		StandardHeaderInfo std_info;
+		if (parseStandardHeader(enc_info, enc_info_len, std_info))
+		{
+			unsigned char key[32];
+			if (verifyStandardPassword(std_info, kDefaultPassword, key) &&
+			    decryptStandardPackageInPlace(*storage, std_info.aes_bits, key, out_decrypted_zip))
+			{
+				if (log_stream)
+					*log_stream << "Decrypted MS-OFFCRYPTO Standard package with built-in default password.\n";
+				return OFFCRYPTO_DECRYPTED;
+			}
+		}
+	}
+	else if (v_major == 4 && v_minor == 4)
+	{
+		AgileParams params;
+		if (parseAgileParams(enc_info, enc_info_len, params))
+		{
+			unsigned char pkg_key[32];
+			if (verifyAgilePassword(params, kDefaultPassword, pkg_key) &&
+			    decryptAgilePackageInPlace(*storage, params, pkg_key, out_decrypted_zip))
+			{
+				if (log_stream)
+					*log_stream << "Decrypted MS-OFFCRYPTO Agile package with built-in default password.\n";
+				return OFFCRYPTO_DECRYPTED;
+			}
+		}
+	}
+
+	return OFFCRYPTO_NEEDS_PASSWORD;
 }
