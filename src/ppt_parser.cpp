@@ -38,6 +38,7 @@
 #include "formatting_style.h"
 #include <algorithm>
 #include <climits>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <zlib.h>
@@ -67,7 +68,7 @@ enum RecordType
 	RT_DOCUMENT = 0x03E8,
 	RT_DRAWING = 0x040C,
 	RT_END_DOCUMENT_ATOM = 0x03EA,
-	RT_EX_OLE_OBJ_STG = 0x0FC1,
+	RT_EX_OLE_OBJ_STG = 0x1011,
 	RT_LIST = 0x07D0,
 	RT_MAIN_MASTER = 0x03F8,
 	RT_SLIDE_BASE = 0x03EC, // Not in MS specification
@@ -246,17 +247,77 @@ struct PPTParser::Implementation
 				{
 					ole_buf.swap(raw);
 				}
-				else if (rec_inst == 1 && len > 4)
+				else if (rec_inst == 1 && len > 4 && (len - 4) <= (unsigned long)UINT_MAX)
 				{
 					U32 uncomp_len = getU32LittleEndian(raw.begin());
+					const unsigned char* comp_src = raw.data() + 4;
+					const size_t comp_len = (size_t)(len - 4);
 					if (uncomp_len > 0 && uncomp_len <= doctotext::kMaxEmbedBytes)
 					{
-						ole_buf.resize(uncomp_len);
-						uLongf dest_len = (uLongf)uncomp_len;
-						if (uncompress(ole_buf.data(), &dest_len, raw.data() + 4, (uLong)(len - 4)) == Z_OK && dest_len > 0)
-							ole_buf.resize(dest_len);
-						else
-							ole_buf.clear();
+						struct ZStreamGuard
+						{
+							z_stream zs;
+							bool active;
+							ZStreamGuard() : active(false) { std::memset(&zs, 0, sizeof(zs)); }
+							~ZStreamGuard() { if (active) inflateEnd(&zs); }
+						} guard;
+
+						if (inflateInit(&guard.zs) == Z_OK)
+						{
+							guard.active = true;
+							const size_t init_cap = (uncomp_len < doctotext::kMaxEmbedBytes) ? ((size_t)uncomp_len + 1) : (size_t)uncomp_len;
+							ole_buf.resize(init_cap);
+							guard.zs.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(comp_src));
+							guard.zs.avail_in = static_cast<uInt>(comp_len);
+							const bool has_sync_trailer =
+								(comp_len >= 4 && std::memcmp(comp_src + comp_len - 4, "\x00\x00\xFF\xFF", 4) == 0);
+							bool ok = false;
+							while (true)
+							{
+								if (guard.zs.total_out >= ole_buf.size())
+								{
+									if (ole_buf.size() >= doctotext::kMaxEmbedBytes)
+									{
+										unsigned char probe = 0;
+										guard.zs.next_out = reinterpret_cast<Bytef*>(&probe);
+										guard.zs.avail_out = 1;
+										int probe_ret = inflate(&guard.zs, Z_SYNC_FLUSH);
+										ok = (probe_ret == Z_STREAM_END && guard.zs.avail_out == 1) ||
+										     ((probe_ret == Z_OK || probe_ret == Z_BUF_ERROR) &&
+										      guard.zs.avail_in == 0 && guard.zs.avail_out == 1 &&
+										      (has_sync_trailer || guard.zs.total_out == uncomp_len));
+										break;
+									}
+									size_t next_sz = (ole_buf.size() > doctotext::kMaxEmbedBytes / 2)
+									                     ? doctotext::kMaxEmbedBytes
+									                     : (ole_buf.size() * 2);
+									ole_buf.resize(next_sz);
+								}
+								guard.zs.next_out = reinterpret_cast<Bytef*>(ole_buf.data() + guard.zs.total_out);
+								guard.zs.avail_out = static_cast<uInt>(ole_buf.size() - guard.zs.total_out);
+								int ret = inflate(&guard.zs, Z_SYNC_FLUSH);
+								if (ret == Z_STREAM_END)
+								{
+									ok = (guard.zs.total_out > 0);
+									break;
+								}
+								// MS-PPT ExOleObjStgCompressedAtom flushes with Z_SYNC_FLUSH (00 00 FF FF) without Z_FINISH.
+								if ((ret == Z_OK || ret == Z_BUF_ERROR) && guard.zs.avail_in == 0 && guard.zs.avail_out > 0 &&
+								    guard.zs.total_out > 0 && (has_sync_trailer || guard.zs.total_out == uncomp_len))
+								{
+									ok = true;
+									break;
+								}
+								if (ret != Z_OK || guard.zs.avail_out != 0)
+								{
+									break;
+								}
+							}
+							if (ok && guard.zs.total_out <= ole_buf.size())
+								ole_buf.resize((size_t)guard.zs.total_out);
+							else
+								ole_buf.clear();
+						}
 					}
 				}
 				if (!ole_buf.empty())

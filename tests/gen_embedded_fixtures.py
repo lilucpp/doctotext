@@ -744,9 +744,9 @@ def main():
     ppt_bomb_payload = struct.pack("<I", 0x7FFFFFFF) + b"BAD_ZLIB_BOMB"
     ppt_stream = (
         make_ppt_text_record("PPT_HOST_MAIN_SLIDE_幻灯片中文") +
-        make_ppt_record(0x0000, 0x0FC1, ppt_raw_ole) +
-        make_ppt_record(0x0010, 0x0FC1, ppt_zlib_payload) +
-        make_ppt_record(0x0010, 0x0FC1, ppt_bomb_payload) +
+        make_ppt_record(0x0000, 0x1011, ppt_raw_ole) +
+        make_ppt_record(0x0010, 0x1011, ppt_zlib_payload) +
+        make_ppt_record(0x0010, 0x1011, ppt_bomb_payload) +
         make_ppt_text_record("PPT_AFTER_EXOLE_OK_尾页中文")
     )
     write_fixture("host_ppt_multi.ppt", build_ole2_from_tree([
@@ -788,7 +788,7 @@ def main():
         {"name": "PowerPoint Document", "is_storage": False,
          "data": (
              make_ppt_text_record("DEPTH_L2_MARKER_第二层中文") +
-             make_ppt_record(0x0000, 0x0FC1, l2_ppt_ole)
+             make_ppt_record(0x0000, 0x1011, l2_ppt_ole)
          )}
     ])
     l1_docx = make_docx_bytes("DEPTH_L1_MARKER_第一层中文", extra_entries=[

@@ -926,6 +926,37 @@ static int test_step6_ppt_exoleobjstg()
 	}
 	comp_payload.append(reinterpret_cast<const char*>(comp_buf.data()), (size_t)comp_len);
 
+	// Embedded OLE 2b: Z_SYNC_FLUSH-terminated zlib (no Z_FINISH block, ending in 00 00 FF FF as in MS-PPT)
+	OleSpecNode ole2_sync;
+	ole2_sync.name = "Root Entry"; ole2_sync.is_storage = true;
+	ole2_sync.children.push_back({"\x01Ole10Native", false,
+		make_ole10_native_stream("sync.rtf", "sync.rtf", "{\\rtf1 PPT_ZSYNC_EXOLE_OK}"), {}});
+	std::string ole2_sync_bytes = build_ole2_from_tree(ole2_sync);
+	std::string sync_payload;
+	push_u32_le(sync_payload, (uint32_t)ole2_sync_bytes.size());
+	{
+		z_stream dz;
+		std::memset(&dz, 0, sizeof(dz));
+		if (deflateInit(&dz, Z_DEFAULT_COMPRESSION) != Z_OK)
+		{
+			std::cerr << "FAIL: Step6 test deflateInit failed\n";
+			return 1;
+		}
+		std::vector<unsigned char> sbuf(ole2_sync_bytes.size() + 64);
+		dz.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(ole2_sync_bytes.data()));
+		dz.avail_in = (uInt)ole2_sync_bytes.size();
+		dz.next_out = sbuf.data();
+		dz.avail_out = (uInt)sbuf.size();
+		int dret = deflate(&dz, Z_SYNC_FLUSH);
+		deflateEnd(&dz);
+		if (dret != Z_OK || dz.avail_in != 0 || dz.total_out < 4)
+		{
+			std::cerr << "FAIL: Step6 test deflate Z_SYNC_FLUSH failed\n";
+			return 1;
+		}
+		sync_payload.append(reinterpret_cast<const char*>(sbuf.data()), (size_t)dz.total_out);
+	}
+
 	// Embedded OLE 3 (boundary bomb): fake uncompressed_size = 0x7FFFFFFF -> must safely reject
 	std::string bomb_payload;
 	push_u32_le(bomb_payload, 0x7FFFFFFFu);
@@ -934,12 +965,14 @@ static int test_step6_ppt_exoleobjstg()
 	std::string ppt_stream;
 	// Main slide text record: RT_TEXT_BYTES_ATOM (0x0FA8)
 	push_ppt_rec(ppt_stream, 0x0000, 0x0FA8, "MAIN_PPT_SLIDE");
-	// Uncompressed ExOleObjStg (0x0FC1, rec_inst=0)
-	push_ppt_rec(ppt_stream, 0x0000, 0x0FC1, ole1_bytes);
-	// Zlib-compressed ExOleObjStg (0x0FC1, rec_inst=1 -> ver_inst=0x0010)
-	push_ppt_rec(ppt_stream, 0x0010, 0x0FC1, comp_payload);
-	// Zlib bomb ExOleObjStg (0x0FC1, rec_inst=1)
-	push_ppt_rec(ppt_stream, 0x0010, 0x0FC1, bomb_payload);
+	// Uncompressed ExOleObjStg (0x1011, rec_inst=0)
+	push_ppt_rec(ppt_stream, 0x0000, 0x1011, ole1_bytes);
+	// Zlib-compressed ExOleObjStg (0x1011, rec_inst=1 -> ver_inst=0x0010)
+	push_ppt_rec(ppt_stream, 0x0010, 0x1011, comp_payload);
+	// Z_SYNC_FLUSH ExOleObjStg (0x1011, rec_inst=1 -> ver_inst=0x0010)
+	push_ppt_rec(ppt_stream, 0x0010, 0x1011, sync_payload);
+	// Zlib bomb ExOleObjStg (0x1011, rec_inst=1)
+	push_ppt_rec(ppt_stream, 0x0010, 0x1011, bomb_payload);
 	// Trailing slide text after ExOleObjStg (verifies stream cursor stayed aligned!)
 	push_ppt_rec(ppt_stream, 0x0000, 0x0FA8, "AFTER_EXOLE_PPT_TEXT");
 
@@ -954,6 +987,7 @@ static int test_step6_ppt_exoleobjstg()
 	    txt_on.find("MAIN_PPT_SLIDE") == std::string::npos ||
 	    txt_on.find("PPT_RAW_EXOLE_OK") == std::string::npos ||
 	    txt_on.find("PPT_ZLIB_EXOLE_OK") == std::string::npos ||
+	    txt_on.find("PPT_ZSYNC_EXOLE_OK") == std::string::npos ||
 	    txt_on.find("AFTER_EXOLE_PPT_TEXT") == std::string::npos)
 	{
 		std::cerr << "FAIL: Step6 PPT ExOleObjStg extraction mismatch:\n" << txt_on << "\n";
@@ -966,13 +1000,14 @@ static int test_step6_ppt_exoleobjstg()
 	    txt_off.find("MAIN_PPT_SLIDE") == std::string::npos ||
 	    txt_off.find("AFTER_EXOLE_PPT_TEXT") == std::string::npos ||
 	    txt_off.find("PPT_RAW_EXOLE_OK") != std::string::npos ||
-	    txt_off.find("PPT_ZLIB_EXOLE_OK") != std::string::npos)
+	    txt_off.find("PPT_ZLIB_EXOLE_OK") != std::string::npos ||
+	    txt_off.find("PPT_ZSYNC_EXOLE_OK") != std::string::npos)
 	{
 		std::cerr << "FAIL: Step6 PPT parse_embedded=false did not skip ExOleObjStg:\n" << txt_off << "\n";
 		return 1;
 	}
 
-	std::cout << "PASS: Step 6 PPT 0x0FC1 ExOleObjStg (raw/zlib/bomb/switch)\n";
+	std::cout << "PASS: Step 6 PPT 0x1011 ExOleObjStg (raw/zlib/zsync/bomb/switch)\n";
 	return 0;
 }
 
