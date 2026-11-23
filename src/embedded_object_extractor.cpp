@@ -2,6 +2,7 @@
 
 #include "doc_parser.h"
 #include "doctotext_unzip.h"
+#include "misc.h"
 #include "ppt_parser.h"
 #include "thread_safe_ole_storage.h"
 #include "thread_safe_ole_stream_reader.h"
@@ -67,6 +68,25 @@ namespace
 		{
 			if (entries[i] == target)
 				return true;
+		}
+		return false;
+	}
+
+	bool hasActualStreamIgnoreCase(ThreadSafeOLEStorage& storage,
+	                               const std::vector<std::string>& entries,
+	                               const char* target)
+	{
+		for (size_t i = 0; i < entries.size(); ++i)
+		{
+			if (asciiEqualsIgnoreCase(entries[i], target))
+			{
+				AbstractOLEStreamReader* r = storage.createStreamReader(entries[i]);
+				if (r != NULL)
+				{
+					delete r;
+					return true;
+				}
+			}
 		}
 		return false;
 	}
@@ -394,7 +414,8 @@ bool extractFromOLEStorage(ThreadSafeOLEStorage& storage,
 		return false;
 
 	// 1. Direct MS Excel / Word / PowerPoint sub-storage (e.g. inside DOC ObjectPool or XLS MBD)
-	if (hasStream(entries, "Workbook") || hasStream(entries, "Book"))
+	if (hasActualStreamIgnoreCase(storage, entries, "Workbook") ||
+	    hasActualStreamIgnoreCase(storage, entries, "Book"))
 		return extractFromOLEStorageWithParser<XLSParser>(storage, ctx, out_text);
 	if (hasStream(entries, "WordDocument"))
 		return extractFromOLEStorageWithParser<DOCParser>(storage, ctx, out_text);
@@ -505,6 +526,65 @@ namespace
 			return true;
 		return false;
 	}
+	bool extractEmfEmbeddedObjects(const unsigned char* data,
+	                                 size_t size,
+	                                 const std::string& hint_name,
+	                                 EmbeddedExtractionContext& ctx,
+	                                 std::string& out_text)
+	{
+		if (!data || size < 8)
+			return false;
+		static const uint32_t kEmrEof = 0x0E;
+		static const uint32_t kEmrComment = 0x46;
+		static const uint32_t kEmrCommentMultiFormats = 0x40000004U;
+		bool any = false;
+		size_t off = 0;
+		while (off + 8 <= size && ctx.extracted_count < ctx.max_count)
+		{
+			uint32_t rec_type = readU32LE(data + off);
+			uint32_t rec_size = readU32LE(data + off + 4);
+			if (rec_size < 8 || (rec_size & 3U) != 0 || rec_size > size - off)
+				break;
+			if (rec_type == kEmrEof)
+				break;
+			if (rec_type == kEmrComment && rec_size >= 40)
+			{
+				const unsigned char* rec = data + off;
+				uint32_t data_size = readU32LE(rec + 8);
+				if (data_size >= 28 && data_size <= rec_size - 12 &&
+				    std::memcmp(rec + 12, "GDIC", 4) == 0 &&
+				    readU32LE(rec + 16) == kEmrCommentMultiFormats)
+				{
+					uint32_t count_formats = readU32LE(rec + 36);
+					uint32_t max_formats = (rec_size - 40) / 16U;
+					if (count_formats > max_formats)
+						count_formats = max_formats;
+					for (uint32_t k = 0; k < count_formats && ctx.extracted_count < ctx.max_count; ++k)
+					{
+						size_t fmt_off = 40 + (size_t)k * 16;
+						if (std::memcmp(rec + fmt_off, " FDP", 4) == 0 ||
+						    std::memcmp(rec + fmt_off, "PDF ", 4) == 0)
+						{
+							uint32_t cb_data = readU32LE(rec + fmt_off + 8);
+							uint32_t off_data = readU32LE(rec + fmt_off + 12);
+							// [MS-EMF] 2.3.3.4: offData is relative to start of EmrCommentMultiFormats payload (rec + 12, where "GDIC" begins).
+							size_t min_off_data = 28 + (size_t)count_formats * 16;
+							if (off_data >= min_off_data && off_data <= rec_size - 12 &&
+							    cb_data > 0 && cb_data <= ctx.max_bytes &&
+							    cb_data <= (rec_size - 12 - off_data))
+							{
+								const unsigned char* pdf_ptr = rec + 12 + off_data;
+								if (extractFromEmbeddedBuffer(pdf_ptr, cb_data, hint_name + ".pdf", ctx, out_text))
+									any = true;
+							}
+						}
+					}
+				}
+			}
+			off += rec_size;
+		}
+		return any;
+	}
 }
 
 bool extractFromEmbeddedContainerBuffer(const unsigned char* data,
@@ -561,17 +641,25 @@ void extractZipEmbeddings(DocToTextUnzip& zipfile,
 			continue;
 
 		bool match = false;
+		bool is_emf_media = false;
 		if (is_ooxml)
 		{
 			match = startsWith(path, "word/embeddings/") ||
 			        startsWith(path, "xl/embeddings/") ||
 			        startsWith(path, "ppt/embeddings/");
+			if (!match && endsWithCaseInsensitive(path, ".emf") &&
+			    (startsWith(path, "word/media/") ||
+			     startsWith(path, "xl/media/") ||
+			     startsWith(path, "ppt/media/")))
+			{
+				is_emf_media = true;
+			}
 		}
 		else
 		{
 			match = isOdfEmbeddedBinaryCandidate(path);
 		}
-		if (!match)
+		if (!match && !is_emf_media)
 			continue;
 
 		unsigned long entry_size = 0;
@@ -590,6 +678,16 @@ void extractZipEmbeddings(DocToTextUnzip& zipfile,
 		{
 			if (ctx.verbose_logging && ctx.log_stream)
 				*ctx.log_stream << "Skipping oversized zip embedding (" << path << "): exceeds max_bytes.\n";
+			continue;
+		}
+		if (is_emf_media)
+		{
+			extractEmfEmbeddedObjects(
+				reinterpret_cast<const unsigned char*>(payload.data()),
+				payload.size(),
+				path,
+				ctx,
+				out_text);
 			continue;
 		}
 		if (!is_ooxml && !hasStructuredContainerOrDocMagic(payload))

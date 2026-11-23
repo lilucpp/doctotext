@@ -460,3 +460,24 @@ std::string normalizeZipPath(const std::string& path)
 	}
 	return res;
 }
+
+bool asciiEqualsIgnoreCase(const std::string& a, const char* b)
+{
+	if (!b)
+		return false;
+	size_t blen = strlen(b);
+	if (a.size() != blen)
+		return false;
+	for (size_t i = 0; i < blen; ++i)
+	{
+		unsigned char ca = (unsigned char)a[i];
+		unsigned char cb = (unsigned char)b[i];
+		if (ca >= 'A' && ca <= 'Z')
+			ca = (unsigned char)(ca - 'A' + 'a');
+		if (cb >= 'A' && cb <= 'Z')
+			cb = (unsigned char)(cb - 'A' + 'a');
+		if (ca != cb)
+			return false;
+	}
+	return true;
+}

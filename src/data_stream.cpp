@@ -137,17 +137,22 @@ size_t FileStream::size()
 {
 	if (!impl->m_opened)
 		return 0;
-	size_t current = ftell(impl->m_file);
+	long current = ftell(impl->m_file);
+	if (current < 0)
+		return 0;
 	if (fseek(impl->m_file, 0, SEEK_END) != 0)
 		return 0;
-	size_t size = ftell(impl->m_file);
+	long size = ftell(impl->m_file);
 	fseek(impl->m_file, current, SEEK_SET);
-	return size;
+	return size >= 0 ? static_cast<size_t>(size) : 0;
 }
 
 size_t FileStream::tell()
 {
-	return ftell(impl->m_file);
+	if (!impl->m_opened)
+		return 0;
+	long pos = ftell(impl->m_file);
+	return pos >= 0 ? static_cast<size_t>(pos) : 0;
 }
 
 std::string FileStream::name()

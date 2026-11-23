@@ -34,9 +34,13 @@
 
 #include "xls_parser.h"
 
+#include "data_stream.h"
 #include "embedded_object_extractor.h"
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <iostream>
+#include <memory>
 #include <map>
 #include <cmath>
 #include "misc.h"
@@ -65,7 +69,9 @@ enum RecordType
 	XLS_FILEPASS = 0x2F,
 	XLS_FORMAT = 0x41E,
 	XLS_FORMULA = 0x06,
+	XLS_FORMULA_BIFF4 = 0x406,
 	XLS_INTEGER_CELL = 0x202, // Not in MS specification
+	XLS_LABEL_BIFF2 = 0x004,
 	XLS_LABEL = 0x204,
 	XLS_RSTRING = 0xD6,
 	XLS_LABEL_SST = 0xFD,
@@ -76,13 +82,137 @@ enum RecordType
 	XLS_SST = 0xFC,
 	XLS_STRING = 0x207,
 	XLS_XF = 0xE0,
+	XLS_XF_BIFF4 = 0x443,
 	XLS_EOF = 0x0A
 };
+
+namespace
+{
+	struct BiffReader
+	{
+		virtual ~BiffReader() {}
+		virtual bool readU16(U16& out) = 0;
+		virtual bool read(U8* buf, size_t len) = 0;
+		virtual size_t tell() const = 0;
+		virtual size_t size() const = 0;
+		virtual std::string getLastError() = 0;
+	};
+
+	class OleBiffReader : public BiffReader
+	{
+		ThreadSafeOLEStreamReader& m_reader;
+	public:
+		explicit OleBiffReader(ThreadSafeOLEStreamReader& r) : m_reader(r) {}
+		bool readU16(U16& out) { return m_reader.readU16(out); }
+		bool read(U8* buf, size_t len) { return m_reader.read(buf, len); }
+		size_t tell() const
+		{
+			int pos = m_reader.tell();
+			return pos >= 0 ? (size_t)pos : m_reader.size();
+		}
+		size_t size() const { return m_reader.size(); }
+		std::string getLastError() { return m_reader.getLastError(); }
+	};
+
+	class RawBiffReader : public BiffReader
+	{
+		DataStream& m_stream;
+		size_t m_size;
+		std::string m_last_error;
+	public:
+		explicit RawBiffReader(DataStream& s) : m_stream(s), m_size(s.size()) {}
+		bool readU16(U16& out)
+		{
+			U8 b[2];
+			if (!m_stream.read(b, 1, 2))
+			{
+				m_last_error = "Unexpected end of BIFF stream";
+				return false;
+			}
+			out = (U16)b[0] | ((U16)b[1] << 8);
+			return true;
+		}
+		bool read(U8* buf, size_t len)
+		{
+			if (len == 0)
+				return true;
+			if (!m_stream.read(buf, 1, len))
+			{
+				m_last_error = "Unexpected end of BIFF stream";
+				return false;
+			}
+			return true;
+		}
+		size_t tell() const { return m_stream.tell(); }
+		size_t size() const { return m_size; }
+		std::string getLastError() { return m_last_error; }
+	};
+
+	bool isBofRecordType(U16 rec_type)
+	{
+		return rec_type == 0x0009 || rec_type == 0x0209 || rec_type == 0x0409 || rec_type == XLS_BOF;
+	}
+
+	ThreadSafeOLEStreamReader* openWorkbookStream(ThreadSafeOLEStorage& storage)
+	{
+		ThreadSafeOLEStreamReader* reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader("Workbook");
+		if (reader != NULL)
+			return reader;
+		reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader("Book");
+		if (reader != NULL)
+			return reader;
+		std::vector<std::string> entries;
+		if (!storage.getStreamsAndStoragesList(entries))
+			return NULL;
+		const char* candidates[2] = {"workbook", "book"};
+		for (int pass = 0; pass < 2; ++pass)
+		{
+			for (size_t i = 0; i < entries.size(); ++i)
+			{
+				if (asciiEqualsIgnoreCase(entries[i], candidates[pass]))
+				{
+					reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader(entries[i]);
+					if (reader != NULL)
+						return reader;
+				}
+			}
+		}
+		return NULL;
+	}
+
+	bool hasRawBiffBofHeader(DataStream& ds)
+	{
+		size_t total = ds.size();
+		if (total < 8 || !ds.seek(0, SEEK_SET))
+			return false;
+		unsigned char hdr[8];
+		if (!ds.read(hdr, 1, 8))
+			return false;
+		if (!ds.seek(0, SEEK_SET))
+			return false;
+		U16 rec_type = (U16)hdr[0] | ((U16)hdr[1] << 8);
+		U16 rec_len = (U16)hdr[2] | ((U16)hdr[3] << 8);
+		U16 biff_vers = (U16)hdr[4] | ((U16)hdr[5] << 8);
+		U16 data_type = (U16)hdr[6] | ((U16)hdr[7] << 8);
+		if (4 + (size_t)rec_len > total)
+			return false;
+		bool valid_data_type = (data_type == 0x0005 || data_type == 0x0006 || data_type == 0x0010 ||
+		                        data_type == 0x0020 || data_type == 0x0040 || data_type == 0x0100);
+		if (rec_type == 0x0009 && rec_len == 4 && valid_data_type)
+			return true;
+		if ((rec_type == 0x0209 || rec_type == 0x0409) && rec_len == 6 && valid_data_type)
+			return true;
+		if (rec_type == 0x0809 && (rec_len == 8 || rec_len == 16) && (biff_vers == 0x0500 || biff_vers == 0x0600) && valid_data_type)
+			return true;
+		return false;
+	}
+}
 
 struct XLSParser::Implementation
 {
 	bool m_error;
 	bool m_encrypted;
+	bool m_is_buffer;
 	const char* m_buffer;
 	size_t m_buffer_size;
 	std::string m_codepage;
@@ -115,7 +245,11 @@ struct XLSParser::Implementation
 	
 	S32 getS32LittleEndian(std::vector<unsigned char>::const_iterator buffer)
 	{
-		return (long)(*buffer) | ((long)(*(buffer + 1)) << 8L) | ((long)(*(buffer + 2)) << 16L)|((long)(*(buffer + 3)) << 24L);
+		uint32_t v = (uint32_t)(*buffer) |
+		             ((uint32_t)(*(buffer + 1)) << 8) |
+		             ((uint32_t)(*(buffer + 2)) << 16) |
+		             ((uint32_t)(*(buffer + 3)) << 24);
+		return (S32)(int32_t)v;
 	}  
 
 	class StandardDateFormats : public std::map<int, std::string>
@@ -139,15 +273,15 @@ struct XLSParser::Implementation
 			}
 	};
 
-	bool oleEof(ThreadSafeOLEStreamReader& reader)
+	bool oleEof(BiffReader& reader)
 	{
-		return reader.tell() == reader.size();
+		return reader.tell() >= reader.size();
 	}
 
 	std::string getStandardDateFormat(int xf_index)
 	{
 		static StandardDateFormats formats;
-		if (xf_index >= m_xf_records.size())
+		if (xf_index < 0 || (size_t)xf_index >= m_xf_records.size())
 		{
 			*m_log_stream << "Incorrect format code " << xf_index << ".\n";
 			return "";
@@ -164,9 +298,25 @@ struct XLSParser::Implementation
 
 	std::string xlsDateToString(double xls_date, std::string date_fmt)
 	{
-		time_t time = rint((xls_date - m_date_shift) * 86400);
+		if (!std::isfinite(xls_date))
+			return "";
+		double seconds = std::rint((xls_date - m_date_shift) * 86400.0);
+		double min_sec = (sizeof(time_t) >= 8) ? -62135596800.0 : -2147483648.0;
+		double max_sec = (sizeof(time_t) >= 8) ? 253402300799.0 : 2147483647.0;
+		if (!std::isfinite(seconds) || seconds < min_sec || seconds > max_sec)
+			return "";
+		time_t time = (time_t)seconds;
+		struct tm tm_buf;
+#ifdef _WIN32
+		if (gmtime_s(&tm_buf, &time) != 0)
+			return "";
+#else
+		if (!gmtime_r(&time, &tm_buf))
+			return "";
+#endif
 		char buffer[128];
-		strftime(buffer, 127, date_fmt.c_str(), gmtime(&time));  
+		if (strftime(buffer, sizeof(buffer) - 1, date_fmt.c_str(), &tm_buf) == 0)
+			return "";
 		return buffer;
 	}
 
@@ -227,13 +377,18 @@ struct XLSParser::Implementation
 
 	std::string parseXLUnicodeString(std::vector<unsigned char>::const_iterator* src, std::vector<unsigned char>::const_iterator src_end, const std::vector<size_t>& record_sizes, size_t& record_index, size_t& record_pos)
 	{
-		if (record_pos >= record_sizes[record_index])
+		if (record_index < record_sizes.size() && record_pos > record_sizes[record_index])
+			*m_log_stream << "Warning: XLUnicodeString starts " << (record_pos - record_sizes[record_index]) << " bytes past record boundary.\n";
+		while (record_index < record_sizes.size() && record_pos >= record_sizes[record_index])
 		{
-			size_t diff = record_pos - record_sizes[record_index];
-			if (diff > 0)
-				*m_log_stream << "Warning: XLUnicodeString starts " << diff << " bytes past record boundary.\n";
-			record_pos = diff;
+			record_pos -= record_sizes[record_index];
 			record_index++;
+		}
+		if (record_index >= record_sizes.size())
+		{
+			*m_log_stream << "Unexpected end of buffer.\n";
+			*src = src_end;
+			return "";
 		}
 		/*
 			This part is mostly based on OpenOffice/LibreOffice XLS format documentation and filter source code.
@@ -253,21 +408,21 @@ struct XLSParser::Implementation
 		int count = getU16LittleEndian(*src);
 		*src += 2;
 		record_pos += 2;
-		if (src_end - *src < 1)
-		{
-			*m_log_stream << "Unexpected end of buffer.\n";
-			*src = src_end;
-			return "";
-		}
 		int flags = 0;
 		if (m_biff_version >= BIFF8)
 		{
+			if (src_end - *src < 1)
+			{
+				*m_log_stream << "Unexpected end of buffer.\n";
+				*src = src_end;
+				return "";
+			}
 			flags = **src;
 			*src += 1;
 			record_pos += 1;
 		}
 		int char_size = (flags & 0x01) ? 2 : 1;
-		int after_text_block_len = 0;
+		size_t after_text_block_len = 0;
 		if (flags & 0x08) // rich text
 		{
 			if (m_verbose_logging)
@@ -278,7 +433,7 @@ struct XLSParser::Implementation
 				*src = src_end;
 				return "";
 			}
-			after_text_block_len += 4*getU16LittleEndian(*src);
+			after_text_block_len += 4 * (size_t)getU16LittleEndian(*src);
 			*src += 2;
 			record_pos += 2;
 		}
@@ -292,7 +447,14 @@ struct XLSParser::Implementation
 				*src = src_end;
 				return "";
 			}
-			after_text_block_len += getS32LittleEndian(*src);
+			S32 ext_len = getS32LittleEndian(*src);
+			if (ext_len < 0)
+			{
+				*m_log_stream << "Unexpected end of buffer.\n";
+				*src = src_end;
+				return "";
+			}
+			after_text_block_len += (size_t)ext_len;
 			*src += 4;
 			record_pos += 4;
 		}
@@ -301,9 +463,9 @@ struct XLSParser::Implementation
 		std::string dest;
 		std::vector<unsigned char>::const_iterator s = *src;
 		int char_count = 0;
-		for (int i = 0; i < count; i++, s += char_size, record_pos += char_size)
+		for (int i = 0; i < count; )
 		{
-			if (s >= src_end)
+			if (s >= src_end || record_index >= record_sizes.size())
 			{
 				*m_log_stream << "Unexpected end of buffer.\n";
 				*src = src_end;
@@ -311,17 +473,19 @@ struct XLSParser::Implementation
 			}
 			if (record_pos > record_sizes[record_index])
 				*m_log_stream << "Warning: record boundary crossed.\n";
-			if (record_pos == record_sizes[record_index])
+			if (record_pos >= record_sizes[record_index])
 			{
 				if (m_verbose_logging)
 					*m_log_stream << "Record boundary reached.\n";
 				record_index++;
 				record_pos = 0;
+				while (record_index < record_sizes.size() && record_sizes[record_index] == 0)
+					record_index++;
 				// At the beginning of each CONTINUE record the option flags byte is repeated.
 				// Only the character size flag will be set in this flags byte, the Rich-Text flag and the Far-East flag are set to zero.
 				// In each CONTINUE record it is possible that the character size changes
 				// from 8‑bit characters to 16‑bit characters and vice versa.
-				if (s >= src_end)
+				if (record_index >= record_sizes.size() || s >= src_end)
 				{
 					*m_log_stream << "Unexpected end of buffer.\n";
 					*src = src_end;
@@ -330,17 +494,13 @@ struct XLSParser::Implementation
 				if ((*s) != 0 && (*s) != 1)
 					*m_log_stream << "Incorrect XLUnicodeString flag.\n";
 				char_size = ((*s) & 0x01) ? 2 : 1;
-				if (char_size == 2)
-				{
-					s--;
-					record_pos--;
-				}
-				i--;
+				s++;
+				record_pos++;
 				continue;
 			}
 			if (char_size == 2)
 			{
-				if (src_end - *src < 2)
+				if (src_end - s < 2)
 				{
 					*m_log_stream << "Unexpected end of buffer.\n";
 					*src = src_end;
@@ -348,22 +508,23 @@ struct XLSParser::Implementation
 				}
 				unsigned int uc = getU16LittleEndian(s);
 				#warning TODO: Find explanation (documentation) of NULL characters (OO skips them).
-				if (uc == 0)
-					continue;
-				if (utf16_unichar_has_4_bytes(uc))
+				if (uc != 0)
 				{
-					record_pos += 2;
-					s += 2;
-					if (src_end - *src < 2)
+					if (utf16_unichar_has_4_bytes(uc))
 					{
-						*m_log_stream << "Unexpected end of buffer.\n";
-						*src = src_end;
-						return dest;
+						record_pos += 2;
+						s += 2;
+						if (src_end - s < 2)
+						{
+							*m_log_stream << "Unexpected end of buffer.\n";
+							*src = src_end;
+							return dest;
+						}
+						uc = (uc << 16) | getU16LittleEndian(s);
 					}
-					uc = (uc << 16) | getU16LittleEndian(s);
+					dest += unichar_to_utf8(uc);
+					char_count++;
 				}
-				dest += unichar_to_utf8(uc);
-				char_count++;
 			}
 			else
 			{
@@ -383,9 +544,14 @@ struct XLSParser::Implementation
 					dest += c2;
 				char_count++;
 			}
+			i++;
+			s += char_size;
+			record_pos += char_size;
 		}
-		*src = s + after_text_block_len;
-		record_pos += after_text_block_len;
+		size_t remaining = (s <= src_end) ? (size_t)(src_end - s) : 0;
+		size_t skip = (after_text_block_len <= remaining) ? after_text_block_len : remaining;
+		*src = s + skip;
+		record_pos += skip;
 		return dest;
 	}
 
@@ -393,11 +559,16 @@ struct XLSParser::Implementation
 	{
 		if (m_verbose_logging)
 			*m_log_stream << "Parsing shared string table.\n";
-		int sst_size = getS32LittleEndian(sst_buf.begin() + 4);
+		if (sst_buf.size() < 8)
+			return;
+		S32 sst_size_raw = getS32LittleEndian(sst_buf.begin() + 4);
+		if (sst_size_raw <= 0)
+			return;
+		size_t sst_size = (size_t)sst_size_raw;
 		std::vector<unsigned char>::const_iterator src = sst_buf.begin() + 8;
 		size_t record_index = 0;
 		size_t record_pos = 8;
-		while (src < sst_buf.end() && m_shared_string_table.size() <= sst_size)
+		while (src < sst_buf.end() && m_shared_string_table.size() < sst_size)
 			m_shared_string_table.push_back(parseXLUnicodeString(&src, sst_buf.end(), m_shared_string_table_record_sizes, record_index, record_pos));
 	}	
 
@@ -431,11 +602,16 @@ struct XLSParser::Implementation
 		{
 			case XLS_BLANK:
 			{
+				if (rec.size() < 4)
+					break;
 				int row = getU16LittleEndian(rec.begin());
 				int col = getU16LittleEndian(rec.begin() + 2);
 				text += cellText(row, col, "");
 				break;
 			}
+			case 0x0009:
+			case 0x0209:
+			case 0x0409:
 			case XLS_BOF:
 			{
 				m_last_row = 0;
@@ -481,35 +657,46 @@ struct XLSParser::Implementation
 			case XLS_FILEPASS:
 			{
 				*m_log_stream << "XLS file is encrypted.\n";
-				U16 encryption_type = getU16LittleEndian(rec.begin());
-				if (encryption_type == 0x0000)
-					*m_log_stream << "XOR obfuscation encryption type detected.\n";
-				else if (encryption_type == 0x0001)
+				if (rec.size() >= 2)
 				{
-					*m_log_stream << "RC4 encryption type detected.\n";
-					U16 header_type = getU16LittleEndian(rec.begin() + 2);
-					if (header_type == 0x0001)
-						*m_log_stream << "RC4 encryption header found.\n";
-					else if (header_type == 0x0002 || header_type == 0x0003)
-						*m_log_stream << "RC4 CryptoAPI encryption header found.\n";
+					U16 encryption_type = getU16LittleEndian(rec.begin());
+					if (encryption_type == 0x0000)
+						*m_log_stream << "XOR obfuscation encryption type detected.\n";
+					else if (encryption_type == 0x0001)
+					{
+						*m_log_stream << "RC4 encryption type detected.\n";
+						if (rec.size() >= 4)
+						{
+							U16 header_type = getU16LittleEndian(rec.begin() + 2);
+							if (header_type == 0x0001)
+								*m_log_stream << "RC4 encryption header found.\n";
+							else if (header_type == 0x0002 || header_type == 0x0003)
+								*m_log_stream << "RC4 CryptoAPI encryption header found.\n";
+							else
+								*m_log_stream << "Unknown RC4 encryption header.\n";
+						}
+					}
 					else
-						*m_log_stream << "Unknown RC4 encryption header.\n";
+						*m_log_stream << "Unknown encryption type.\n";
 				}
-				else
-					*m_log_stream << "Unknown encryption type.\n";
 				m_encrypted = true;
 				m_error = true;
 				return false;
 			}
 			case XLS_FORMAT:
 			{
+				if (rec.size() < 2)
+					break;
 				int num_format_id = getU16LittleEndian(rec.begin());
 				m_defined_num_format_ids.insert(num_format_id);
 				break;
 			}
 			case XLS_FORMULA:
+			case XLS_FORMULA_BIFF4:
 			{
 				m_last_string_formula_row = -1;
+				if (rec.size() < 14)
+					break;
 				int row = getU16LittleEndian(rec.begin());
 				int col = getU16LittleEndian(rec.begin()+2);
 				if (((unsigned char)rec[12] == 0xFF) && (unsigned char)rec[13] == 0xFF)
@@ -536,15 +723,42 @@ struct XLSParser::Implementation
 			}
 			case XLS_INTEGER_CELL:
 			{
+				if (rec.size() < 9)
+					break;
 				int row = getU16LittleEndian(rec.begin());
 				int col = getU16LittleEndian(rec.begin()+2);
 				text += cellText(row, col, int2string(getU16LittleEndian(rec.begin() + 7)));
+				break;
+			}
+			case XLS_LABEL_BIFF2:
+			{
+				m_last_string_formula_row = -1;
+				if (rec.size() < 8)
+					break;
+				int row = getU16LittleEndian(rec.begin());
+				int col = getU16LittleEndian(rec.begin() + 2);
+				size_t slen = rec[7];
+				if (8 + slen > rec.size())
+					slen = rec.size() - 8;
+				std::string raw_s;
+				if (slen > 0)
+				{
+					raw_s.assign((const char*)(&rec[8]), slen);
+					if (m_codepage != "ASCII")
+					{
+						TextConverter tc(m_codepage);
+						raw_s = ustring_to_string(tc.convert(raw_s));
+					}
+				}
+				text += cellText(row, col, raw_s);
 				break;
 			}
 			case XLS_RSTRING:
 			case XLS_LABEL:
 			{
 				m_last_string_formula_row = -1;
+				if (rec.size() < 8)
+					break;
 				int row = getU16LittleEndian(rec.begin()); 
 				int col = getU16LittleEndian(rec.begin() + 2);
 				std::vector<unsigned char>::const_iterator src=rec.begin() + 6;
@@ -558,10 +772,12 @@ struct XLSParser::Implementation
 			case XLS_LABEL_SST:
 			{
 				m_last_string_formula_row = -1;
+				if (rec.size() < 8)
+					break;
 				int row = getU16LittleEndian(rec.begin()); 
 				int col = getU16LittleEndian(rec.begin() + 2);
-				int sst_index = getU16LittleEndian(rec.begin() + 6);
-				if (sst_index >= m_shared_string_table.size() || sst_index < 0)
+				size_t sst_index = getU16LittleEndian(rec.begin() + 6);
+				if (sst_index >= m_shared_string_table.size())
 				{
 					*m_log_stream << "Incorrect SST index.\n";
 					return false;
@@ -571,9 +787,13 @@ struct XLSParser::Implementation
 			}
 			case XLS_MULBLANK:
 			{
+				if (rec.size() < 6)
+					break;
 				int row = getU16LittleEndian(rec.begin());
 				int start_col = getU16LittleEndian(rec.begin() + 2);
-				int end_col=getU16LittleEndian(rec.begin() + rec.size() - 2);
+				int end_col = getU16LittleEndian(rec.begin() + rec.size() - 2);
+				if (end_col < start_col || (size_t)(end_col - start_col + 1) * 2 > rec.size() - 6)
+					break;
 				for (int c = start_col; c <= end_col; c++)
 					text += cellText(row, c, "");
 				break;
@@ -581,13 +801,17 @@ struct XLSParser::Implementation
 			case XLS_MULRK:
 			{
 				m_last_string_formula_row = -1;
+				if (rec.size() < 6)
+					break;
 				int row = getU16LittleEndian(rec.begin());
 				int start_col = getU16LittleEndian(rec.begin() + 2);
 				int end_col = getU16LittleEndian(rec.begin() + rec.size() - 2);
-				for (int offset = 4, col = start_col; col <= end_col; offset += 6, col++)
+				if (end_col < start_col)
+					break;
+				for (size_t offset = 4, col = (size_t)start_col; (int)col <= end_col && offset + 6 <= rec.size() - 2; offset += 6, col++)
 				{
 					int xf_index = getU16LittleEndian(rec.begin() + offset);
-					text += cellText(row, col, parseRkRec(rec.begin() + offset + 2, xf_index));
+					text += cellText(row, (int)col, parseRkRec(rec.begin() + offset + 2, xf_index));
 				}
 				break;
 			}
@@ -597,6 +821,8 @@ struct XLSParser::Implementation
 			case 0x303:
 			{
 				m_last_string_formula_row = -1;
+				if (rec.size() < 14)
+					break;
 				int row = getU16LittleEndian(rec.begin());
 				int col = getU16LittleEndian(rec.begin() + 2);
 				text += cellText(row, col, parseXNum(rec.begin() + 6, getU16LittleEndian(rec.begin() + 4)));
@@ -605,6 +831,8 @@ struct XLSParser::Implementation
 			case XLS_RK:
 			{
 				m_last_string_formula_row = -1;
+				if (rec.size() < 10)
+					break;
 				int row = getU16LittleEndian(rec.begin());
 				int col = getU16LittleEndian(rec.begin() + 2);
 				int xf_index = getU16LittleEndian(rec.begin() + 4);
@@ -638,10 +866,23 @@ struct XLSParser::Implementation
 			case XLS_XF:
 			case 0x43:
 			{
-				XFRecord xf_record;
-				xf_record.num_format_id = getU16LittleEndian(rec.begin() + 2);
-				m_xf_records.push_back(xf_record);
-					break;
+				if (rec.size() >= 4)
+				{
+					XFRecord xf_record;
+					xf_record.num_format_id = getU16LittleEndian(rec.begin() + 2);
+					m_xf_records.push_back(xf_record);
+				}
+				break;
+			}
+			case XLS_XF_BIFF4:
+			{
+				if (rec.size() >= 2)
+				{
+					XFRecord xf_record;
+					xf_record.num_format_id = rec[1];
+					m_xf_records.push_back(xf_record);
+				}
+				break;
 			} 
 		}
 		m_prev_rec_type = rec_type;
@@ -725,7 +966,7 @@ struct XLSParser::Implementation
 		}
 	}
 
-	void parseXLS(ThreadSafeOLEStreamReader& reader, std::string& text)
+	void parseXLS(BiffReader& reader, std::string& text)
 	{
 		m_xf_records.clear();
 		m_date_shift = 25569.0;
@@ -733,8 +974,8 @@ struct XLSParser::Implementation
 		m_shared_string_table_buf.clear();
 		m_shared_string_table_record_sizes.clear();
 		m_prev_rec_type = 0;
-		int m_last_string_formula_row = -1;
-		int m_last_string_formula_col = -1;
+		m_last_string_formula_row = -1;
+		m_last_string_formula_col = -1;
 		m_defined_num_format_ids.clear();
 		m_last_row = 0;
 		m_last_col = 0;
@@ -754,22 +995,22 @@ struct XLSParser::Implementation
 				*m_log_stream << reader.getLastError() << "\n";
 				return;
 			}
-			enum BofRecordTypes
+			if (isBofRecordType(rec_type))
 			{
-				BOF_BIFF_2 = 0x009,
-				BOF_BIFF_3 = 0x209,
-				BOF_BIFF_4 = 0x0409,
-				BOF_BIFF_5_AND_8 = XLS_BOF
-			};
-			if (rec_type == BOF_BIFF_2 || rec_type == BOF_BIFF_3 || rec_type == BOF_BIFF_4 || rec_type == BOF_BIFF_5_AND_8)
-			{
-				int bof_struct_size;
-				#warning Has all BOF records size 8 or 16?
-				if (rec_len == 8 || rec_len == 16)
+				U16 payload_read = 0;
+				bool valid_bof_len = false;
+				if (rec_type == 0x0009 && rec_len == 4)
+					valid_bof_len = true;
+				else if ((rec_type == 0x0209 || rec_type == 0x0409) && rec_len == 6)
+					valid_bof_len = true;
+				else if (rec_type == XLS_BOF && (rec_len == 8 || rec_len == 16))
+					valid_bof_len = true;
+
+				if (valid_bof_len)
 				{
 					switch (rec_type)
 					{
-						case BOF_BIFF_5_AND_8:
+						case XLS_BOF:
 						{
 							U16 biff_ver, data_type;
 							if (!reader.readU16(biff_ver) || !reader.readU16(data_type))
@@ -777,6 +1018,7 @@ struct XLSParser::Implementation
 								*m_log_stream << reader.getLastError() << "\n";
 								return;
 							}
+							payload_read = 4;
 							//On microsoft site there is documentation only for "BIFF8". Documentation from OpenOffice is better:
 							/*
 								BIFF5:
@@ -806,51 +1048,49 @@ struct XLSParser::Implementation
 								8		4		File history flags
 								12		4		Lowest Excel version that can read all records in this file
 							*/
-							if(biff_ver == 0x600)
+							if (biff_ver == 0x600 && rec_len == 16)
 							{
 								if (m_verbose_logging)
 									*m_log_stream << "Detected BIFF8 version\n";
-								rec.resize(8);
-								read_status = reader.read(&*rec.begin(), 8);
 								m_biff_version = BIFF8;
-								bof_struct_size = 16;
 							}
 							else
 							{
 								if (m_verbose_logging)
 									*m_log_stream << "Detected BIFF5 version\n";
 								m_biff_version = BIFF5;
-								bof_struct_size = 8;
 							}
 							break;
 						}
-						case BOF_BIFF_3:
+						case 0x0209:
 							if (m_verbose_logging)
 								*m_log_stream << "Detected BIFF3 version\n";
 							m_biff_version = BIFF3;
-							bof_struct_size = 6;
 							break;
-						case BOF_BIFF_4:
+						case 0x0409:
 							if (m_verbose_logging)
 								*m_log_stream << "Detected BIFF4 version\n";
 							m_biff_version = BIFF4;
-							bof_struct_size = 6;
 							break;
 						default:
 							if (m_verbose_logging)
 								*m_log_stream << "Detected BIFF2 version\n";
 							m_biff_version = BIFF2;
-							bof_struct_size = 4;
+							break;
 					}
-					rec.resize(rec_len - (bof_struct_size - 4));
-					read_status = reader.read(&*rec.begin(), rec_len - (bof_struct_size - 4));
+					U16 rem = (rec_len >= payload_read) ? (rec_len - payload_read) : 0;
+					if (rem > 0)
+					{
+						rec.resize(rem);
+						read_status = reader.read(&*rec.begin(), rem);
+					}
 					break;
 				}
 				else
 				{
 					*m_log_stream << "Invalid BOF record.\n";
 					return;
-				} 
+				}
 			}
 			else
 			{
@@ -868,6 +1108,11 @@ struct XLSParser::Implementation
 		bool in_dgg = false;
 		while (read_status)
 		{
+			if (oleEof(reader))
+			{
+				processRecord(XLS_EOF, std::vector<unsigned char>(), text);
+				break;
+			}
 			U16 rec_type;
 			if (!reader.readU16(rec_type))
 			{
@@ -889,6 +1134,11 @@ struct XLSParser::Implementation
 			{
 				rec.resize(rec_len);
 				read_status = reader.read(&*rec.begin(), rec_len);
+				if (!read_status)
+				{
+					*m_log_stream << reader.getLastError() << "\n";
+					break;
+				}
 			}
 			else
 				rec.clear();
@@ -909,7 +1159,7 @@ struct XLSParser::Implementation
 
 			if (eof_rec_found)
 			{
-				if (rec_type != XLS_BOF)
+				if (!isBofRecordType(rec_type))
 					break;
 			}
 			if (!processRecord(rec_type, rec, text))
@@ -932,6 +1182,7 @@ XLSParser::XLSParser(const std::string& file_name)
 	impl->m_codepage = "cp1251";
 	impl->m_error = false;
 	impl->m_encrypted = false;
+	impl->m_is_buffer = false;
 	impl->m_file_name = file_name;
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -947,6 +1198,7 @@ XLSParser::XLSParser(const char *buffer, size_t size)
 	impl->m_codepage = "cp1251";
 	impl->m_error = false;
 	impl->m_encrypted = false;
+	impl->m_is_buffer = true;
 	impl->m_file_name = "Memory buffer";
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -981,27 +1233,25 @@ bool XLSParser::isXLS()
 {
 	impl->m_error = false;
 	impl->m_encrypted = false;
-	ThreadSafeOLEStorage* storage;
-	if (impl->m_buffer)
-		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
-	else
-		storage = new ThreadSafeOLEStorage(impl->m_file_name);
-	if (!storage->isValid())
-	{
-		delete storage;
+	if (impl->m_is_buffer && (!impl->m_buffer || impl->m_buffer_size == 0))
 		return false;
-	}
-	AbstractOLEStreamReader* reader = storage->createStreamReader("Workbook");
-	if (reader == NULL)
-		reader = storage->createStreamReader("Book");
-	if (reader == NULL)
+	std::unique_ptr<ThreadSafeOLEStorage> storage(
+		impl->m_is_buffer ? new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size)
+		                  : new ThreadSafeOLEStorage(impl->m_file_name));
+	if (storage->isValid())
 	{
-		delete storage;
-		return false;
+		std::unique_ptr<ThreadSafeOLEStreamReader> reader(openWorkbookStream(*storage));
+		return reader != NULL;
 	}
-	delete reader;
-	delete storage;
-	return true;
+
+	std::unique_ptr<DataStream> raw_stream(
+		impl->m_is_buffer ? static_cast<DataStream*>(new BufferStream(impl->m_buffer, impl->m_buffer_size))
+		                  : static_cast<DataStream*>(new FileStream(impl->m_file_name)));
+	if (!raw_stream->open())
+		return false;
+	bool is_raw_biff = hasRawBiffBofHeader(*raw_stream);
+	raw_stream->close();
+	return is_raw_biff;
 }
 
 void XLSParser::getLinks(std::vector<Link>& links)
@@ -1013,39 +1263,50 @@ std::string XLSParser::plainText(const FormattingStyle& formatting)
 {
 	impl->m_error = false;
 	impl->m_encrypted = false;
-	ThreadSafeOLEStorage* storage;
-	if (impl->m_buffer)
-		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
-	else
-		storage = new ThreadSafeOLEStorage(impl->m_file_name);
-	if (!storage->isValid())
+	if (impl->m_is_buffer && (!impl->m_buffer || impl->m_buffer_size == 0))
 	{
-		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
+		*impl->m_log_stream << "Memory buffer is empty.\n";
 		impl->m_error = true;
-		delete storage;
 		return "";
 	}
-	std::string text = plainText(*storage, formatting);
-	delete storage;
-	return text;
+	std::unique_ptr<ThreadSafeOLEStorage> storage(
+		impl->m_is_buffer ? new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size)
+		                  : new ThreadSafeOLEStorage(impl->m_file_name));
+	if (!storage->isValid())
+	{
+		std::unique_ptr<DataStream> raw_stream(
+			impl->m_is_buffer ? static_cast<DataStream*>(new BufferStream(impl->m_buffer, impl->m_buffer_size))
+			                  : static_cast<DataStream*>(new FileStream(impl->m_file_name)));
+		if (raw_stream->open() && hasRawBiffBofHeader(*raw_stream))
+		{
+			RawBiffReader biff_reader(*raw_stream);
+			std::string text;
+			impl->parseXLS(biff_reader, text);
+			raw_stream->close();
+			return text;
+		}
+		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
+		impl->m_error = true;
+		return "";
+	}
+	return plainText(*storage, formatting);
 }
 
 std::string XLSParser::plainText(ThreadSafeOLEStorage& storage, const FormattingStyle& formatting)
 {
 	impl->m_error = false;
 	impl->m_encrypted = false;
-	ThreadSafeOLEStreamReader* reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader("Workbook");
-	if (reader == NULL)
-		reader = (ThreadSafeOLEStreamReader*)storage.createStreamReader("Book");
-	if (reader == NULL)
+	std::unique_ptr<ThreadSafeOLEStreamReader> reader(openWorkbookStream(storage));
+	if (!reader)
 	{
 		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
 		impl->m_error = true;
 		return "";
 	}
 	std::string text;
-	impl->parseXLS(*reader, text);
-	delete reader;
+	OleBiffReader biff_reader(*reader);
+	impl->parseXLS(biff_reader, text);
+	reader.reset();
 	if (formatting.parse_embedded_files && !impl->m_error)
 	{
 		doctotext::EmbeddedExtractionContext root_ctx;
@@ -1100,16 +1361,17 @@ std::string XLSParser::plainText(ThreadSafeOLEStorage& storage, const Formatting
 
 Metadata XLSParser::metaData()
 {
-	ThreadSafeOLEStorage* storage = NULL;
 	impl->m_error = false;
 	impl->m_encrypted = false;
 	Metadata meta;
-	if (impl->m_buffer)
-		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
-	else
-		storage = new ThreadSafeOLEStorage(impl->m_file_name);
+	if (impl->m_is_buffer && (!impl->m_buffer || impl->m_buffer_size == 0))
+		return meta;
+	std::unique_ptr<ThreadSafeOLEStorage> storage(
+		impl->m_is_buffer ? new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size)
+		                  : new ThreadSafeOLEStorage(impl->m_file_name));
+	if (!storage->isValid())
+		return meta;
 	impl->m_error = !parse_oshared_summary_info(*storage, *impl->m_log_stream, meta);
-	delete storage;
 	return meta;
 }
 

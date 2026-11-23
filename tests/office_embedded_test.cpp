@@ -2,6 +2,7 @@
 #include "../build/formatting_style.h"
 #include "../build/plain_text_extractor.h"
 #include "../src/pdf_parser.h"
+#include "../src/xls_parser.h"
 #include "../src/xlsb_parser.h"
 
 #include <cstdio>
@@ -1041,6 +1042,466 @@ static int test_step7_xlsb_velvet_rejection()
 	return 0;
 }
 
+static int test_step8_excel_edge_formats()
+{
+	doctotext::PlainTextExtractor ex;
+
+	// 8.1 Case-insensitive OLE stream name ("WORKBOOK")
+	{
+		OleSpecNode root;
+		root.name = "Root Entry";
+		root.is_storage = true;
+		root.children.push_back({"WORKBOOK", false, make_minimal_biff8_workbook("UPPERCASE_WORKBOOK_OK"), {}});
+		std::string xls_buf = build_ole2_from_tree(root);
+		std::string txt;
+		if (!ex.processFile(xls_buf.data(), xls_buf.size(), txt) ||
+		    txt.find("UPPERCASE_WORKBOOK_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 uppercase WORKBOOK stream failed: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	// 8.2 Pre-OLE2 raw BIFF4 stream (0x0409 BOF len=6, 0x0204 LABEL, 0x000A EOF)
+	{
+		std::string biff4;
+		// BOF BIFF4 (0x0409, len=6): ver=0x0000, type=0x0010 (worksheet), build=0
+		push_u16_le(biff4, 0x0409);
+		push_u16_le(biff4, 6);
+		push_u16_le(biff4, 0x0000);
+		push_u16_le(biff4, 0x0010);
+		push_u16_le(biff4, 0x0000);
+		// LABEL (0x0204): row=0, col=0, ixfe=0, cch(2)=11, ASCII="BIFF4_RAW_OK"
+		const std::string label = "BIFF4_RAW_OK";
+		push_u16_le(biff4, 0x0204);
+		push_u16_le(biff4, (uint16_t)(8 + label.size()));
+		push_u16_le(biff4, 0);
+		push_u16_le(biff4, 0);
+		push_u16_le(biff4, 0);
+		push_u16_le(biff4, (uint16_t)label.size());
+		biff4 += label;
+		// EOF (0x000A, len=0)
+		push_u16_le(biff4, 0x000A);
+		push_u16_le(biff4, 0);
+
+		std::string txt;
+		if (!ex.processFile(biff4.data(), biff4.size(), txt) ||
+		    txt.find("BIFF4_RAW_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 raw BIFF4 extraction failed: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	// 8.3 XLSX SmartArt diagramData (empty sheetData + xl/diagrams/data1.xml via drawing rels)
+	{
+		std::vector<std::pair<std::string, std::string> > entries;
+		entries.push_back({"xl/workbook.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>"});
+		entries.push_back({"xl/worksheets/sheet1.xml",
+			"<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+			"xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+			"<sheetData/><drawing r:id=\"rId1\"/></worksheet>"});
+		entries.push_back({"xl/worksheets/_rels/sheet1.xml.rels",
+			"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+			"<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing\" "
+			"Target=\"../drawings/drawing1.xml\"/></Relationships>"});
+		entries.push_back({"xl/drawings/drawing1.xml",
+			"<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"/>"});
+		entries.push_back({"xl/drawings/_rels/drawing1.xml.rels",
+			"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+			"<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData\" "
+			"Target=\"../diagrams/data1.xml\"/></Relationships>"});
+		entries.push_back({"xl/diagrams/data1.xml",
+			"<dgm:dataModel xmlns:dgm=\"http://schemas.openxmlformats.org/drawingml/2006/diagram\" "
+			"xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">"
+			"<dgm:ptLst><dgm:pt><dgm:t><a:p><a:r><a:t>SMARTART_DIAG_OK</a:t></a:r></a:p></dgm:t></dgm:pt></dgm:ptLst></dgm:dataModel>"});
+		std::string xlsx_buf = build_zip_from_entries(entries);
+		std::string txt;
+		if (!ex.processFile(xlsx_buf.data(), xlsx_buf.size(), txt) ||
+		    txt.find("SMARTART_DIAG_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 XLSX SmartArt diagramData failed: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	// 8.4 Mac XLSX embedded PDF inside xl/media/image1.emf EMR_COMMENT_MULTIFORMATS
+	{
+		std::string pdf = make_pdf_with_attachments("MAC_EMF_EMBED_PDF_OK", std::vector<std::pair<std::string, std::string> >());
+		// Pad PDF length to 4-byte boundary cleanly via EMF record size
+		size_t pdf_pad = (4 - (pdf.size() % 4)) % 4;
+		std::string emf;
+		// Minimal EMR_HEADER (0x01, 108 bytes)
+		push_u32_le(emf, 0x01);
+		push_u32_le(emf, 108);
+		emf.append(100, '\0');
+		// EMR_COMMENT (0x46): 12 + 44 header bytes before pdf + pdf + pad
+		uint32_t data_size = (uint32_t)(44 + pdf.size() + pdf_pad);
+		uint32_t rec_size = 12 + data_size;
+		push_u32_le(emf, 0x46);
+		push_u32_le(emf, rec_size);
+		push_u32_le(emf, data_size);
+		emf += "GDIC";
+		push_u32_le(emf, 0x40000004U); // EMR_COMMENT_MULTIFORMATS
+		emf.append(16, '\0');           // OutputRect
+		push_u32_le(emf, 1);            // CountFormats = 1
+		emf += " FDP";                  // Signature ('PDF ' little-endian)
+		push_u32_le(emf, 1);            // nVersion
+		push_u32_le(emf, (uint32_t)pdf.size());
+		push_u32_le(emf, 44);           // offData relative to rec+12
+		emf += pdf;
+		emf.append(pdf_pad, '\0');
+		// EMR_EOF (0x0E, 20 bytes)
+		push_u32_le(emf, 0x0E);
+		push_u32_le(emf, 20);
+		emf.append(12, '\0');
+
+		std::vector<std::pair<std::string, std::string> > entries;
+		entries.push_back({"xl/workbook.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>"});
+		entries.push_back({"xl/worksheets/sheet1.xml", "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData/></worksheet>"});
+		entries.push_back({"xl/media/image1.emf", emf});
+		std::string xlsx_buf = build_zip_from_entries(entries);
+		std::string txt;
+		if (!ex.processFile(xlsx_buf.data(), xlsx_buf.size(), txt) ||
+		    txt.find("MAC_EMF_EMBED_PDF_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 Mac XLSX EMF PDF extraction failed: " << txt << "\n";
+			return 1;
+		}
+
+		// 8.4b parse_embedded_files=false must skip EMF embedded PDF
+		doctotext::PlainTextExtractor ex_off;
+		ex_off.setParseEmbeddedFiles(false);
+		std::string txt_off;
+		if (!ex_off.processFile(xlsx_buf.data(), xlsx_buf.size(), txt_off) ||
+		    txt_off.find("MAC_EMF_EMBED_PDF_OK") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 EMF PDF extracted despite parse_embedded_files=false: " << txt_off << "\n";
+			return 1;
+		}
+	}
+
+	// 8.5 BIFF4W multi-sheet raw stream (0x0409 BOF -> EOF -> 0x0409 BOF -> EOF)
+	{
+		std::string biff4w;
+		auto append_sheet = [&](const std::string& label) {
+			push_u16_le(biff4w, 0x0409); // BOF_BIFF_4
+			push_u16_le(biff4w, 6);
+			push_u16_le(biff4w, 0x0000);
+			push_u16_le(biff4w, 0x0010);
+			push_u16_le(biff4w, 0x0000);
+			push_u16_le(biff4w, 0x0204); // XLS_LABEL
+			push_u16_le(biff4w, (uint16_t)(8 + label.size()));
+			push_u16_le(biff4w, 0);
+			push_u16_le(biff4w, 0);
+			push_u16_le(biff4w, 0);
+			push_u16_le(biff4w, (uint16_t)label.size());
+			biff4w += label;
+			push_u16_le(biff4w, 0x000A); // EOF
+			push_u16_le(biff4w, 0);
+		};
+		append_sheet("BIFF4W_SHEET1_OK");
+		append_sheet("BIFF4W_SHEET2_OK");
+
+		std::string txt;
+		if (!ex.processFile(biff4w.data(), biff4w.size(), txt) ||
+		    txt.find("BIFF4W_SHEET1_OK") == std::string::npos ||
+		    txt.find("BIFF4W_SHEET2_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 BIFF4W multi-sheet extraction failed: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	// 8.6 DOCX SmartArt fallback scan (word/diagrams/data1.xml without rels link)
+	{
+		std::vector<std::pair<std::string, std::string> > entries;
+		entries.push_back({"word/document.xml",
+			"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+			"<w:body><w:p><w:r><w:t>DOCX_MAIN_OK</w:t></w:r></w:p></w:body></w:document>"});
+		entries.push_back({"word/diagrams/data1.xml",
+			"<dgm:dataModel xmlns:dgm=\"http://schemas.openxmlformats.org/drawingml/2006/diagram\" "
+			"xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">"
+			"<dgm:ptLst><dgm:pt><dgm:t><a:p><a:r><a:t>DOCX_SMARTART_FALLBACK_OK</a:t></a:r></a:p></dgm:t></dgm:pt></dgm:ptLst></dgm:dataModel>"});
+		std::string docx_buf = build_zip_from_entries(entries);
+		std::string txt;
+		if (!ex.processFile(docx_buf.data(), docx_buf.size(), txt) ||
+		    txt.find("DOCX_MAIN_OK") == std::string::npos ||
+		    txt.find("DOCX_SMARTART_FALLBACK_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 DOCX SmartArt fallback scan failed: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	// 8.7 OLE embedded ObjectPool item containing a sub-storage (not stream) named "WORKBOOK" + \x01Ole10Native
+	{
+		OleSpecNode fake_workbook_dir;
+		fake_workbook_dir.name = "WORKBOOK";
+		fake_workbook_dir.is_storage = true;
+
+		OleSpecNode pool_item;
+		pool_item.name = "_222";
+		pool_item.is_storage = true;
+		pool_item.children.push_back(fake_workbook_dir);
+		pool_item.children.push_back({"\x01Ole10Native", false,
+			make_ole10_native_stream("note.rtf", "note.rtf", "{\\rtf1 WORKBOOK_DIR_FALLTHROUGH_OK}"), {}});
+
+		OleSpecNode pool_dir;
+		pool_dir.name = "ObjectPool";
+		pool_dir.is_storage = true;
+		pool_dir.children.push_back(pool_item);
+
+		OleSpecNode root;
+		root.name = "Root Entry";
+		root.is_storage = true;
+		root.children.push_back({"Workbook", false, make_minimal_biff8_workbook("PARENT_CELL"), {}});
+		root.children.push_back(pool_dir);
+
+		std::string xls_buf = build_ole2_from_tree(root);
+		std::string txt;
+		if (!ex.processFile(xls_buf.data(), xls_buf.size(), txt) ||
+		    txt.find("WORKBOOK_DIR_FALLTHROUGH_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 storage named WORKBOOK blocked Ole10Native fallback: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	// 8.8 Positive raw BIFF2 (0x0009 + 0x0004 XLS_LABEL_BIFF2) via on-disk FileStream, plus raw BIFF3 (0x0209)
+	{
+		std::string biff2;
+		push_u16_le(biff2, 0x0009); push_u16_le(biff2, 4);
+		push_u16_le(biff2, 0x0000); push_u16_le(biff2, 0x0010);
+		const std::string lbl2 = "BIFF2_FILE_OK";
+		push_u16_le(biff2, 0x0004);
+		push_u16_le(biff2, (uint16_t)(8 + lbl2.size()));
+		push_u16_le(biff2, 0);
+		push_u16_le(biff2, 0);
+		biff2.append(3, '\0');
+		biff2.push_back((char)lbl2.size());
+		biff2 += lbl2;
+		push_u16_le(biff2, 0x000A); push_u16_le(biff2, 0);
+
+		const char* tmp_path = "tmp_step8_biff2_test.xls";
+		FILE* f = std::fopen(tmp_path, "wb");
+		if (!f)
+		{
+			std::cerr << "FAIL: Step8 could not create temp file\n";
+			return 1;
+		}
+		std::fwrite(biff2.data(), 1, biff2.size(), f);
+		std::fclose(f);
+
+		XLSParser disk_parser(tmp_path);
+		bool is_xls = disk_parser.isXLS();
+		std::string disk_txt = disk_parser.plainText(doctotext::FormattingStyle());
+		std::remove(tmp_path);
+		if (!is_xls || disk_parser.error() || disk_txt.find("BIFF2_FILE_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 raw BIFF2 FileStream extraction failed: " << disk_txt << "\n";
+			return 1;
+		}
+
+		// BIFF3 (0x0209, len=6) + empty XLS_LABEL + XLS_DATE_1904 formatted XLS_NUMBER
+		std::string biff3;
+		push_u16_le(biff3, 0x0209); push_u16_le(biff3, 6);
+		push_u16_le(biff3, 0x0000); push_u16_le(biff3, 0x0010); push_u16_le(biff3, 0x0000);
+		// DATE_1904 (0x0022, len=2, flag=1) -> shift=24107.0
+		push_u16_le(biff3, 0x0022); push_u16_le(biff3, 2); push_u16_le(biff3, 1);
+		// XLS_XF_BIFF4 (0x0443, len=2, font=0, numFmt=0x0E %m-%d-%y)
+		push_u16_le(biff3, 0x0443); push_u16_le(biff3, 2); biff3.push_back(0); biff3.push_back(0x0E);
+		// Empty BIFF3 XLS_LABEL (cch=0, rec_len=8, no flags byte)
+		push_u16_le(biff3, 0x0204); push_u16_le(biff3, 8);
+		push_u16_le(biff3, 0); push_u16_le(biff3, 0); push_u16_le(biff3, 0); push_u16_le(biff3, 0);
+		// Non-empty BIFF3 XLS_LABEL
+		const std::string lbl3 = "BIFF3_RAW_OK";
+		push_u16_le(biff3, 0x0204); push_u16_le(biff3, (uint16_t)(8 + lbl3.size()));
+		push_u16_le(biff3, 0); push_u16_le(biff3, 1); push_u16_le(biff3, 0); push_u16_le(biff3, (uint16_t)lbl3.size());
+		biff3 += lbl3;
+		// XLS_NUMBER (0x0203) at row=1, col=0, xf=0, val=1462.0 (1904+1462 days = 1908-01-02)
+		push_u16_le(biff3, 0x0203); push_u16_le(biff3, 14);
+		push_u16_le(biff3, 1); push_u16_le(biff3, 0); push_u16_le(biff3, 0);
+		double dval = 1462.0;
+		unsigned char dbytes[8];
+		std::memcpy(dbytes, &dval, 8);
+		biff3.append((const char*)dbytes, 8);
+		push_u16_le(biff3, 0x000A); push_u16_le(biff3, 0);
+
+		std::string biff3_txt;
+		if (!ex.processFile(biff3.data(), biff3.size(), biff3_txt) ||
+		    biff3_txt.find("BIFF3_RAW_OK") == std::string::npos ||
+		    biff3_txt.find("01-02-08") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 raw BIFF3 + DATE_1904 extraction failed: " << biff3_txt << "\n";
+			return 1;
+		}
+	}
+
+	// 8.9 BIFF8 SST + CONTINUE (rich-text trailing block spanning across CONTINUE + empty CONTINUE + second string)
+	{
+		std::string sst_stream;
+		// BOF BIFF8 (0x0809, len=16)
+		push_u16_le(sst_stream, 0x0809); push_u16_le(sst_stream, 16);
+		push_u16_le(sst_stream, 0x0600); push_u16_le(sst_stream, 0x0005);
+		sst_stream.append(12, '\0');
+
+		// SST record (0x00FC): cstTotal=2, cstUnique=2, str0=("AB", rich=1 (4 trailing bytes, 2 in SST, 2 in CONTINUE))
+		std::string sst_rec;
+		push_u32_le(sst_rec, 2); // cstTotal
+		push_u32_le(sst_rec, 2); // cstUnique
+		push_u16_le(sst_rec, 2); // cch = 2
+		sst_rec.push_back(0x08); // flags: rich-text, 8-bit
+		push_u16_le(sst_rec, 1); // cRun = 1 -> 4 trailing bytes
+		sst_rec += "AB";         // 2 chars
+		sst_rec.append(2, '\0'); // first 2 bytes of rich-text run inside SST
+		push_u16_le(sst_stream, 0x00FC); push_u16_le(sst_stream, (uint16_t)sst_rec.size());
+		sst_stream += sst_rec;
+
+		// CONTINUE 1 (0x003C): empty 0-byte CONTINUE edge case
+		push_u16_le(sst_stream, 0x003C); push_u16_le(sst_stream, 0);
+
+		// CONTINUE 2 (0x003C): remaining 2 trailing rich-text bytes + str1 ("CD")
+		std::string cont2;
+		cont2.append(2, '\0');
+		push_u16_le(cont2, 2);   // cch = 2
+		cont2.push_back(0x00);   // 8-bit
+		cont2 += "CD";
+		push_u16_le(sst_stream, 0x003C); push_u16_le(sst_stream, (uint16_t)cont2.size());
+		sst_stream += cont2;
+
+		// Two XLS_LABEL_SST cells referencing index 0 and 1
+		push_u16_le(sst_stream, 0x00FD); push_u16_le(sst_stream, 10);
+		push_u16_le(sst_stream, 0); push_u16_le(sst_stream, 0); push_u16_le(sst_stream, 0); push_u32_le(sst_stream, 0);
+		push_u16_le(sst_stream, 0x00FD); push_u16_le(sst_stream, 10);
+		push_u16_le(sst_stream, 1); push_u16_le(sst_stream, 0); push_u16_le(sst_stream, 0); push_u32_le(sst_stream, 1);
+		push_u16_le(sst_stream, 0x000A); push_u16_le(sst_stream, 0);
+
+		OleSpecNode root;
+		root.name = "Root Entry";
+		root.is_storage = true;
+		root.children.push_back({"Workbook", false, sst_stream, {}});
+		std::string xls_buf = build_ole2_from_tree(root);
+		std::string txt;
+		if (!ex.processFile(xls_buf.data(), xls_buf.size(), txt) ||
+		    txt.find("AB") == std::string::npos ||
+		    txt.find("CD") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 SST+CONTINUE spanning trailing block failed: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	std::cout << "PASS: Step 8 Excel edge formats (WORKBOOK caps, BIFF2/3/4/4W, SST/CONTINUE, SmartArt, EMF PDF)\n";
+	return 0;
+}
+
+static int test_step9_xls_and_emf_malformed_guards()
+{
+	doctotext::PlainTextExtractor ex;
+
+	// 9.1 Null/empty buffer guard on XLSParser
+	{
+		XLSParser null_xls(NULL, 0);
+		if (null_xls.isXLS())
+		{
+			std::cerr << "FAIL: Step9 XLSParser(NULL, 0).isXLS() returned true\n";
+			return 1;
+		}
+		std::string txt = null_xls.plainText(doctotext::FormattingStyle());
+		if (!null_xls.error() || !txt.empty())
+		{
+			std::cerr << "FAIL: Step9 XLSParser(NULL, 0).plainText() expected error=true and empty output\n";
+			return 1;
+		}
+	}
+
+	// 9.2 Truncated / malformed BIFF records (must not crash or trigger UB/OOB under ASan/UBSan)
+	{
+		std::string bad_biff;
+		// BOF_BIFF_4 (0x0409, len=6)
+		push_u16_le(bad_biff, 0x0409); push_u16_le(bad_biff, 6);
+		push_u16_le(bad_biff, 0); push_u16_le(bad_biff, 0x0010); push_u16_le(bad_biff, 0);
+
+		// XLS_LABEL_BIFF2 (0x004) len=8 exact boundary (rec[7]=10, no rec[8])
+		push_u16_le(bad_biff, 0x004); push_u16_le(bad_biff, 8);
+		push_u16_le(bad_biff, 0); push_u16_le(bad_biff, 0);
+		bad_biff.append(3, '\0'); bad_biff.push_back(10);
+
+		// XLS_BLANK (0x201) len=2
+		push_u16_le(bad_biff, 0x201); push_u16_le(bad_biff, 2); push_u16_le(bad_biff, 0);
+		// XLS_FORMAT (0x41E) len=1
+		push_u16_le(bad_biff, 0x41E); push_u16_le(bad_biff, 1); bad_biff.push_back(0);
+		// XLS_LABEL_SST (0xFD) len=4
+		push_u16_le(bad_biff, 0xFD); push_u16_le(bad_biff, 4); push_u16_le(bad_biff, 0); push_u16_le(bad_biff, 0);
+		// XLS_MULBLANK (0xBE) len=4 & forged range len=6 (start=0, end=65535)
+		push_u16_le(bad_biff, 0xBE); push_u16_le(bad_biff, 4); push_u16_le(bad_biff, 0); push_u16_le(bad_biff, 0);
+		push_u16_le(bad_biff, 0xBE); push_u16_le(bad_biff, 6); push_u16_le(bad_biff, 0); push_u16_le(bad_biff, 0); push_u16_le(bad_biff, 0xFFFF);
+		// XLS_MULRK (0xBD) len=4
+		push_u16_le(bad_biff, 0xBD); push_u16_le(bad_biff, 4); push_u16_le(bad_biff, 0); push_u16_le(bad_biff, 0);
+		// XLS_NUMBER (0x203) len=8
+		push_u16_le(bad_biff, 0x203); push_u16_le(bad_biff, 8); bad_biff.append(8, '\0');
+		// XLS_RK (0x27E) len=4
+		push_u16_le(bad_biff, 0x27E); push_u16_le(bad_biff, 4); bad_biff.append(4, '\0');
+		// XLS_XF_BIFF4 with date format 0x0E + NaN/huge XLS_NUMBER (tests xlsDateToString guard)
+		push_u16_le(bad_biff, 0x443); push_u16_le(bad_biff, 2); bad_biff.push_back(0); bad_biff.push_back(0x0E);
+		push_u16_le(bad_biff, 0x203); push_u16_le(bad_biff, 14);
+		push_u16_le(bad_biff, 1); push_u16_le(bad_biff, 0); push_u16_le(bad_biff, 0);
+		// IEEE 754 NaN (8 bytes)
+		bad_biff.append("\x00\x00\x00\x00\x00\x00\xF8\x7F", 8);
+		// XLS_SST (0xFC) truncated len=4 + XLS_EOF
+		push_u16_le(bad_biff, 0xFC); push_u16_le(bad_biff, 4); bad_biff.append(4, '\0');
+		push_u16_le(bad_biff, 0x000A); push_u16_le(bad_biff, 0);
+
+		std::string txt;
+		ex.processFile(bad_biff.data(), bad_biff.size(), txt);
+	}
+
+	// 9.3 Overlapping offData inside EMF EMR_COMMENT_MULTIFORMATS must be ignored safely
+	{
+		std::string pdf = make_pdf_with_attachments("SHOULD_BE_IGNORED_EMF", std::vector<std::pair<std::string, std::string> >());
+		size_t pdf_pad = (4 - (pdf.size() % 4)) % 4;
+		std::string emf;
+		push_u32_le(emf, 0x01);
+		push_u32_le(emf, 108);
+		emf.append(100, '\0');
+		uint32_t data_size = (uint32_t)(44 + pdf.size() + pdf_pad);
+		uint32_t rec_size = 12 + data_size;
+		push_u32_le(emf, 0x46);
+		push_u32_le(emf, rec_size);
+		push_u32_le(emf, data_size);
+		emf += "GDIC";
+		push_u32_le(emf, 0x40000004U);
+		emf.append(16, '\0');
+		push_u32_le(emf, 1);
+		emf += " FDP";
+		push_u32_le(emf, 1);
+		push_u32_le(emf, (uint32_t)pdf.size());
+		push_u32_le(emf, 16); // Invalid: < 28 + 1*16 = 44 (points into header/EmrFormat table)
+		emf += pdf;
+		emf.append(pdf_pad, '\0');
+		push_u32_le(emf, 0x0E);
+		push_u32_le(emf, 20);
+		emf.append(12, '\0');
+
+		std::vector<std::pair<std::string, std::string> > entries;
+		entries.push_back({"xl/workbook.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>"});
+		entries.push_back({"xl/worksheets/sheet1.xml", "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData/></worksheet>"});
+		entries.push_back({"xl/media/image1.emf", emf});
+		std::string xlsx_buf = build_zip_from_entries(entries);
+		std::string txt;
+		if (!ex.processFile(xlsx_buf.data(), xlsx_buf.size(), txt) ||
+		    txt.find("SHOULD_BE_IGNORED_EMF") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step9 invalid offData EMF payload was unexpectedly accepted: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	std::cout << "PASS: Step 9 malformed XLS/BIFF and EMF boundary guards\n";
+	return 0;
+}
+
 int main()
 {
 	if (test_step1_unified_switch_pdf() != 0)
@@ -1056,6 +1517,10 @@ int main()
 	if (test_step6_ppt_exoleobjstg() != 0)
 		return 1;
 	if (test_step7_xlsb_velvet_rejection() != 0)
+		return 1;
+	if (test_step8_excel_edge_formats() != 0)
+		return 1;
+	if (test_step9_xls_and_emf_malformed_guards() != 0)
 		return 1;
 	std::cout << "office_embedded_test PASSED.\n";
 	return 0;

@@ -37,6 +37,7 @@
 #include "xml_fixer.h"
 #include "doctotext_unzip.h"
 #include "embedded_object_extractor.h"
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <libxml/xmlreader.h>
@@ -44,6 +45,7 @@
 #include "metadata.h"
 #include "misc.h"
 #include "oshared.h"
+#include <set>
 #include <stdlib.h>
 #include <string.h>
 #include <sstream>
@@ -521,6 +523,27 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		extended_impl->readStyles(zipfile, mode, options);
 	string content;
 	string text;
+	std::set<std::string> visited_diagrams;
+	auto appendBlockText = [](std::string& dst, const std::string& block)
+	{
+		if (block.empty())
+			return;
+		if (!dst.empty() && dst[dst.size() - 1] != '\n')
+			dst += "\n";
+		dst += block;
+	};
+	auto extractDiagramData = [&](const std::string& diag_path, std::string& dst)
+	{
+		if (diag_path.empty() || !visited_diagrams.insert(diag_path).second)
+			return;
+		std::string diag_content;
+		if (!zipfile.read(diag_path, &diag_content) || diag_content.empty())
+			return;
+		std::string diag_text;
+		if (extractText(diag_content, mode, options, &zipfile, diag_text, getInnerLinks()))
+			appendBlockText(dst, diag_text);
+	};
+
 	if (main_file_name == "ppt/presentation.xml")
 	{
 		if (!zipfile.loadDirectory())
@@ -646,6 +669,26 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 					if (zipfile.read(d_rels_path, &d_rels_content))
 					{
 						loadRelationshipsFromXml(d_rels_content, d_base);
+						XmlStream d_rel_stream(d_rels_content, manageXmlParser(), getXmlOptions());
+						if (d_rel_stream)
+						{
+							d_rel_stream.levelDown();
+							while (d_rel_stream)
+							{
+								if (d_rel_stream.name() == "Relationship")
+								{
+									string rtype = d_rel_stream.attribute("Type");
+									string rtarget = d_rel_stream.attribute("Target");
+									if (rtype.find("/diagramData") != string::npos && !rtarget.empty())
+									{
+										string diag_path = normalizeZipPath(
+											(rtarget[0] == '/') ? rtarget.substr(1) : (d_base + rtarget));
+										extractDiagramData(diag_path, sheet_text);
+									}
+								}
+								d_rel_stream.next();
+							}
+						}
 					}
 					string drawing_text;
 					xmlDocPtr ddoc = xmlReadMemory(drawing_content.c_str(), drawing_content.size(), "drawing.xml", NULL, getXmlOptions());
@@ -690,6 +733,26 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			setError(true);
 			zipfile.close();
 			return "";
+		}
+	}
+	// Extract SmartArt diagram data XML not already visited via drawing relationships (DOCX/PPTX/fallback XLSX)
+	if (main_file_name != "content.xml")
+	{
+		std::vector<std::string> diag_files;
+		if (zipfile.getFileList(diag_files))
+		{
+			std::sort(diag_files.begin(), diag_files.end());
+			for (size_t i = 0; i < diag_files.size(); ++i)
+			{
+				const std::string& p = diag_files[i];
+				bool is_diag_data =
+					(p.compare(0, 16, "xl/diagrams/data") == 0 ||
+					 p.compare(0, 18, "word/diagrams/data") == 0 ||
+					 p.compare(0, 17, "ppt/diagrams/data") == 0) &&
+					p.size() >= 4 && p.compare(p.size() - 4, 4, ".xml") == 0;
+				if (is_diag_data)
+					extractDiagramData(p, text);
+			}
 		}
 	}
 	decodeSpecialLinkBlocks(text, getInnerLinks(), getLogStream());
