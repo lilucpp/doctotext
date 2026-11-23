@@ -231,12 +231,19 @@ poppler_ccitt: poppler_ccitt/libpoppler_ccitt.a
 poppler_ccitt/libpoppler_ccitt.a:
 	cd poppler_ccitt && $(MAKE) CXX="$(CXX)" CXXFLAGS="$(ARCH_FLAGS) -O2 -std=c++14"
 
-.PHONY: jbig2dec poppler_ccitt poppler_decrypt clean
+.PHONY: jbig2dec poppler_ccitt poppler_decrypt snappy clean
 
 poppler_decrypt: poppler_decrypt/libpoppler_decrypt.a
 
 poppler_decrypt/libpoppler_decrypt.a: poppler_decrypt/poppler_decrypt.cpp poppler_decrypt/poppler_decrypt.h poppler_decrypt/Makefile
 	cd poppler_decrypt && $(MAKE) CXX="$(CXX)" CXXFLAGS="$(ARCH_FLAGS) -O2 -std=c++14"
+
+SNAPPY_ABI_FLAGS = $(if $(filter aarch64-linux,$(ARCH)),,-D_GLIBCXX_USE_CXX11_ABI=0)
+
+snappy: snappy/libsnappy.a
+
+snappy/libsnappy.a: snappy/snappy.cc snappy/snappy-sinksource.cc snappy/snappy-stubs-internal.cc snappy/Makefile snappy/snappy-stubs-public.h
+	cd snappy && $(MAKE) CXX="$(CXX)" CXXFLAGS="$(ARCH_FLAGS) -O2 -std=c++14 $(SNAPPY_ABI_FLAGS)"
 
 ifeq ($(WIN),1)
 unzip101e/unzip.o: zlib unzip101e/.unpacked
@@ -317,3 +324,4 @@ clean:
 	$(MAKE) -C jbig2dec clean
 	$(MAKE) -C poppler_ccitt clean
 	$(MAKE) -C poppler_decrypt clean
+	$(MAKE) -C snappy clean

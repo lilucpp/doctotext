@@ -34,6 +34,7 @@
 
 #include "iwork_parser.h"
 
+#include "iwork_iwa_parser.h"
 #include <stdlib.h>
 #include <iostream>
 #include <stdio.h>
@@ -2160,6 +2161,7 @@ bool IWorkParser::isIWork()
 		*impl->m_log_stream << "Cannot unzip file.\n";
 		return false;
 	}
+	impl->m_xml_file.clear();
 	if (unzip.exists("index.xml"))
 		impl->m_xml_file = "index.xml";
 	if (unzip.exists("index.apxl"))
@@ -2168,6 +2170,11 @@ bool IWorkParser::isIWork()
 		impl->m_xml_file = "presentation.apxl";
 	if (impl->m_xml_file.empty())
 	{
+		if (doctotext::iwa::isModernIWorkArchive(unzip))
+		{
+			unzip.close();
+			return true;
+		}
 		unzip.close();
 		*impl->m_log_stream << "None of the following files (index.xml, index.apxl, presentation.apxl) could not be found.\n";
 		return false;
@@ -2204,6 +2211,8 @@ Metadata IWorkParser::metaData()
 		impl->m_error = true;
 		return metadata;
 	}
+	impl->m_error = false;
+	impl->m_xml_file.clear();
 	if (unzip.exists("index.xml"))
 		impl->m_xml_file = "index.xml";
 	if (unzip.exists("index.apxl"))
@@ -2212,6 +2221,11 @@ Metadata IWorkParser::metaData()
 		impl->m_xml_file = "presentation.apxl";
 	if (impl->m_xml_file.empty())
 	{
+		if (doctotext::iwa::isModernIWorkArchive(unzip))
+		{
+			unzip.close();
+			return metadata;
+		}
 		*impl->m_log_stream << "File cannot be processed, because none of the following files (index.xml, index.apxl, presentation.apxl) could not be found.\n";
 		impl->m_error = true;
 		unzip.close();
@@ -2238,6 +2252,7 @@ std::string IWorkParser::plainText(const FormattingStyle& formatting)
 		impl->m_error = true;
 		return text;
 	}
+	impl->m_xml_file.clear();
 	if (unzip.exists("index.xml"))
 		impl->m_xml_file = "index.xml";
 	if (unzip.exists("index.apxl"))
@@ -2246,6 +2261,12 @@ std::string IWorkParser::plainText(const FormattingStyle& formatting)
 		impl->m_xml_file = "presentation.apxl";
 	if (impl->m_xml_file.empty())
 	{
+		if (doctotext::iwa::isModernIWorkArchive(unzip))
+		{
+			doctotext::iwa::extractModernIWorkText(unzip, impl->m_verbose_logging, *impl->m_log_stream, text, impl->m_error);
+			unzip.close();
+			return text;
+		}
 		*impl->m_log_stream << "File cannot be processed, because none of the following files (index.xml, index.apxl, presentacion.apxl) could not be found.\n";
 		impl->m_error = true;
 		unzip.close();

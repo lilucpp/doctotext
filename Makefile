@@ -49,6 +49,7 @@ build: version.h src doc/html
 	$(MAKE) -C 3rdparty jbig2dec
 	$(MAKE) -C 3rdparty poppler_ccitt
 	$(MAKE) -C 3rdparty poppler_decrypt
+	$(MAKE) -C 3rdparty snappy
 	#$(MAKE) -C 3rdparty aj16
 	#$(MAKE) -C 3rdparty ak12
 	#$(MAKE) -C 3rdparty ag15

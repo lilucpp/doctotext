@@ -40,34 +40,21 @@
 
 #undef XML_STREAM_DEBUG
 
-static size_t xml_parser_usage_counter = 0;
+static bool xml_parser_initialized = false;
 static pthread_mutex_t xml_parser_usage_counter_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static void checkXmlMemGet()
+void XmlStream::ensureXmlParserInitialized(bool manage_xml_parser)
 {
-	//in windows 64 bit there is a problem with initialization of some pointers to functions.
-	//to make sure xmlMemGet will not be called twice I'm protecting this code with mutexes.
 	pthread_mutex_lock(&xml_parser_usage_counter_mutex);
 	if (!xmlFree)
 		xmlMemGet(&xmlFree, &xmlMalloc, &xmlRealloc, NULL);
-	pthread_mutex_unlock(&xml_parser_usage_counter_mutex);
-}
-
-static void initXmlParser()
-{
-	pthread_mutex_lock(&xml_parser_usage_counter_mutex);
-	if (xml_parser_usage_counter == 0)
+	if (manage_xml_parser && !xml_parser_initialized)
+	{
+		// Initialize libxml2 globals once per process; calling xmlCleanupParser() when an active
+		// stream count hits 0 races with concurrent threads invoking xmlReadMemory/xmlDocDumpMemoryEnc.
 		xmlInitParser();
-	xml_parser_usage_counter++;
-	pthread_mutex_unlock(&xml_parser_usage_counter_mutex);
-}
-
-static void cleanupXmlParser()
-{
-	pthread_mutex_lock(&xml_parser_usage_counter_mutex);
-	xml_parser_usage_counter--;
-	if (xml_parser_usage_counter == 0)
-		xmlCleanupParser();
+		xml_parser_initialized = true;
+	}
 	pthread_mutex_unlock(&xml_parser_usage_counter_mutex);
 }
 
@@ -91,9 +78,7 @@ XmlStream::XmlStream(const std::string &xml, bool manage_xml_parser, int xml_par
 		impl = new Implementation;
 		impl->m_badbit = false;
 		impl->m_manage_xml_parser = manage_xml_parser;
-		checkXmlMemGet();
-		if (impl->m_manage_xml_parser)
-			initXmlParser();
+		ensureXmlParserInitialized(impl->m_manage_xml_parser);
 		impl->m_reader = xmlReaderForMemory(xml.c_str(), xml.length(), NULL, NULL, xml_parse_options);
 		if (impl->m_reader == NULL)
 		{
@@ -134,8 +119,6 @@ XmlStream::~XmlStream()
 {
 	if (impl->m_reader != NULL)
 		xmlFreeTextReader(impl->m_reader);
-	if (impl->m_manage_xml_parser)
-		cleanupXmlParser();
 	delete impl;
 }
 

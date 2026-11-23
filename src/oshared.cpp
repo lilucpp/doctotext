@@ -50,6 +50,7 @@
 #include <time.h>
 #include "thread_safe_ole_stream_reader.h"
 #include "thread_safe_ole_storage.h"
+#include "xml_stream.h"
 
 using namespace wvWare;
 
@@ -975,6 +976,7 @@ namespace
 	{
 		if (enc_info_len <= 8)
 			return false;
+		XmlStream::ensureXmlParserInitialized(true);
 		struct XmlDocGuard
 		{
 			xmlDocPtr doc;

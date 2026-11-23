@@ -1777,6 +1777,113 @@ static int test_step10_rtf_cp65001_and_unmatched_braces()
 	return 0;
 }
 
+static int test_step11_odf_negative_and_modern_iwork_guards()
+{
+	// 1. Corrupt non-ZIP ODT must fail cleanly without falling back to TXT
+	doctotext::PlainTextExtractor ex;
+	std::string out;
+	if (ex.processFile("testODTnotaZipFile.odt", out))
+	{
+		std::cerr << "FAIL: Step11 testODTnotaZipFile.odt unexpectedly succeeded: " << out << "\n";
+		return 1;
+	}
+	const std::string fake_odt = "This is not a zip file!\n";
+	if (ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, fake_odt.data(), fake_odt.size(), out))
+	{
+		std::cerr << "FAIL: Step11 fake ODT buffer unexpectedly succeeded\n";
+		return 1;
+	}
+
+	DocToTextExtractorParams* params = doctotext_create_extractor_params();
+	doctotext_extractor_params_set_log_file(params, "/dev/null");
+	doctotext_status st = DOCTOTEXT_STATUS_OK;
+	DocToTextException* exc = NULL;
+	DocToTextExtractedData* bad_data = doctotext_process_file_ex("testODTnotaZipFile.odt", params, &st, &exc);
+	if (bad_data != NULL || st != DOCTOTEXT_STATUS_ERROR)
+	{
+		std::cerr << "FAIL: Step11 C API did not report DOCTOTEXT_STATUS_ERROR on testODTnotaZipFile.odt\n";
+		if (bad_data) doctotext_free_extracted_data(bad_data);
+		if (exc) doctotext_free_exception(exc);
+		doctotext_free_extractor_params(params);
+		return 1;
+	}
+	if (exc)
+		doctotext_free_exception(exc);
+
+	// 2. Malformed IWA / corrupt nested Index.zip boundary guards must fail safely without crashing
+	const std::vector<std::string> bad_iwas = {
+		std::string("\x00\x05\x00", 3),                      // truncated 3B chunk header
+		std::string("\x00\xFF\x00\x00" "abc", 7),            // length exceeds input
+		std::string("\x01\x01\x00\x00\x00", 5),              // unsupported chunk type
+		std::string("\x00\x04\x00\x00\x05\xFF\xFF\xFF", 8)   // corrupt Snappy block
+	};
+	for (size_t i = 0; i < bad_iwas.size(); ++i)
+	{
+		std::vector<std::pair<std::string, std::string> > entries;
+		entries.push_back(std::make_pair(std::string("Index/Document.iwa"), bad_iwas[i]));
+		std::string zip_buf = build_zip_from_entries(entries);
+		std::string tmp_out;
+		if (ex.processFile(doctotext::PlainTextExtractor::PARSER_IWORK, false, zip_buf.data(), zip_buf.size(), tmp_out))
+		{
+			std::cerr << "FAIL: Step11 malformed IWA case " << i << " unexpectedly succeeded\n";
+			doctotext_free_extractor_params(params);
+			return 1;
+		}
+	}
+	{
+		std::vector<std::pair<std::string, std::string> > entries;
+		entries.push_back(std::make_pair(std::string("Presentation.key/Index.zip"), std::string("not_a_zip")));
+		std::string zip_buf = build_zip_from_entries(entries);
+		std::string tmp_out;
+		if (ex.processFile(doctotext::PlainTextExtractor::PARSER_IWORK, false, zip_buf.data(), zip_buf.size(), tmp_out))
+		{
+			std::cerr << "FAIL: Step11 corrupt nested Index.zip unexpectedly succeeded\n";
+			doctotext_free_extractor_params(params);
+			return 1;
+		}
+	}
+
+	// 3. Subsequent valid ODP & modern iWork '13/'18 files must still parse cleanly via C++ and C APIs
+	if (!ex.processFile("testMasterFooter.odp", out) || out.find("Master footer is here") == std::string::npos)
+	{
+		std::cerr << "FAIL: Step11 testMasterFooter.odp missing master footer: " << out << "\n";
+		doctotext_free_extractor_params(params);
+		return 1;
+	}
+	if (!ex.processFile("testKeynote2018.key", out) || out.find("Libreoffice 6.2") == std::string::npos ||
+	    out.find("Teks Judul") != std::string::npos)
+	{
+		std::cerr << "FAIL: Step11 testKeynote2018.key extraction mismatch: " << out << "\n";
+		doctotext_free_extractor_params(params);
+		return 1;
+	}
+	if (!ex.processFile("testPages2013.pages", out) ||
+	    out.find("Sample pages document") == std::string::npos ||
+	    out.find("Column one\nColumn two\nColumn three") == std::string::npos)
+	{
+		std::cerr << "FAIL: Step11 testPages2013.pages extraction mismatch: " << out << "\n";
+		doctotext_free_extractor_params(params);
+		return 1;
+	}
+	exc = NULL;
+	st = DOCTOTEXT_STATUS_ERROR;
+	DocToTextExtractedData* ok_data = doctotext_process_file_ex("testNumbers2013.numbers", params, &st, &exc);
+	if (!ok_data || st != DOCTOTEXT_STATUS_OK ||
+	    std::strstr(doctotext_extracted_data_get_text(ok_data), "Checking Account: 300545668") == NULL)
+	{
+		std::cerr << "FAIL: Step11 C API testNumbers2013.numbers failed\n";
+		if (ok_data) doctotext_free_extracted_data(ok_data);
+		if (exc) doctotext_free_exception(exc);
+		doctotext_free_extractor_params(params);
+		return 1;
+	}
+	doctotext_free_extracted_data(ok_data);
+	doctotext_free_extractor_params(params);
+
+	std::cout << "PASS: Step 11 negative ODT rejection, malformed IWA guards, ODP master footer, and iWork 13/18\n";
+	return 0;
+}
+
 int main()
 {
 	if (test_step1_unified_switch_pdf() != 0)
@@ -1798,6 +1905,8 @@ int main()
 	if (test_step9_xls_and_emf_malformed_guards() != 0)
 		return 1;
 	if (test_step10_rtf_cp65001_and_unmatched_braces() != 0)
+		return 1;
+	if (test_step11_odf_negative_and_modern_iwork_guards() != 0)
 		return 1;
 	std::cout << "office_embedded_test PASSED.\n";
 	return 0;

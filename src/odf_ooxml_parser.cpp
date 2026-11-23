@@ -169,6 +169,7 @@ namespace
 
 	bool filterPptxPlaceholderShapes(const std::string& xml_in,
 	                                 XmlParseMode mode,
+	                                 bool manage_xml_parser,
 	                                 int xml_options,
 	                                 bool check_images,
 	                                 std::string& xml_out)
@@ -183,6 +184,7 @@ namespace
 		}
 		if (src->size() > static_cast<size_t>(INT_MAX))
 			return false;
+		XmlStream::ensureXmlParserInitialized(manage_xml_parser);
 		struct XmlDocGuard
 		{
 			xmlDocPtr doc;
@@ -248,6 +250,204 @@ namespace
 		out_base_dir = (last_slash == std::string::npos) ? "" : part_path.substr(0, last_slash + 1);
 		std::string name = (last_slash == std::string::npos) ? part_path : part_path.substr(last_slash + 1);
 		return out_base_dir + "_rels/" + name + ".rels";
+	}
+
+	std::string getXmlPropLocal(xmlNodePtr node, const char* local_name)
+	{
+		for (xmlAttrPtr attr = node ? node->properties : NULL; attr != NULL; attr = attr->next)
+		{
+			if (attr->name && xmlStrcmp(attr->name, BAD_CAST local_name) == 0)
+			{
+				xmlChar* val = xmlNodeListGetString(node->doc, attr->children, 1);
+				if (!val)
+					return "";
+				std::string res(reinterpret_cast<const char*>(val));
+				xmlFree(val);
+				return res;
+			}
+		}
+		return "";
+	}
+
+	bool hasNonSpaceText(const std::string& s)
+	{
+		for (size_t i = 0; i < s.size(); ++i)
+		{
+			unsigned char c = static_cast<unsigned char>(s[i]);
+			if (c > 0x7F || !std::isspace(c))
+				return true;
+		}
+		return false;
+	}
+
+	void collectOdfFrameText(xmlNodePtr node, std::string& cur_line, std::vector<std::string>& out_lines)
+	{
+		for (xmlNodePtr cur = node; cur != NULL; cur = cur->next)
+		{
+			if (cur->type == XML_TEXT_NODE || cur->type == XML_CDATA_SECTION_NODE)
+			{
+				if (cur->content)
+					cur_line += reinterpret_cast<const char*>(cur->content);
+				continue;
+			}
+			if (cur->type != XML_ELEMENT_NODE || !cur->name)
+				continue;
+			if (xmlStrcmp(cur->name, BAD_CAST "page-number") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "page-count") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "date-time") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "header") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "footer") == 0)
+			{
+				continue;
+			}
+			if (xmlStrcmp(cur->name, BAD_CAST "line-break") == 0)
+			{
+				if (hasNonSpaceText(cur_line))
+					out_lines.push_back(cur_line);
+				cur_line.clear();
+				continue;
+			}
+			bool is_para = (xmlStrcmp(cur->name, BAD_CAST "p") == 0 || xmlStrcmp(cur->name, BAD_CAST "h") == 0);
+			if (cur->children)
+				collectOdfFrameText(cur->children, cur_line, out_lines);
+			if (is_para && hasNonSpaceText(cur_line))
+			{
+				out_lines.push_back(cur_line);
+				cur_line.clear();
+			}
+		}
+	}
+
+	void extractReferencedOdfMasterFooters(const std::string& content_xml,
+	                                       const std::string& styles_xml,
+	                                       XmlParseMode mode,
+	                                       bool manage_xml_parser,
+	                                       int xml_options,
+	                                       std::string& out_footer_text)
+	{
+		out_footer_text.clear();
+		if (styles_xml.find("master-styles") == std::string::npos)
+			return;
+		XmlStream::ensureXmlParserInitialized(manage_xml_parser);
+
+		struct XmlDocGuard
+		{
+			xmlDocPtr doc;
+			explicit XmlDocGuard(xmlDocPtr d) : doc(d) {}
+			~XmlDocGuard() { if (doc) xmlFreeDoc(doc); }
+		};
+
+		auto parseXmlString = [&](const std::string& raw, const char* name) -> xmlDocPtr
+		{
+			std::string fixed;
+			const std::string* src = &raw;
+			if (mode == FIX_XML)
+			{
+				DocToTextXmlFixer xml_fixer;
+				fixed = xml_fixer.fix(raw);
+				src = &fixed;
+			}
+			if (src->size() > static_cast<size_t>(INT_MAX))
+				return NULL;
+			return xmlReadMemory(src->data(), static_cast<int>(src->size()), name, NULL,
+			                     xml_options | XML_PARSE_NONET | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+		};
+
+		XmlDocGuard content_doc(parseXmlString(content_xml, "content.xml"));
+		XmlDocGuard styles_doc(parseXmlString(styles_xml, "styles.xml"));
+		if (!content_doc.doc || !styles_doc.doc)
+			return;
+
+		// 1. Gather display-header / display-footer visibility per drawing-page style in content.xml.
+		struct PageVis { bool show_header; bool show_footer; };
+		std::map<std::string, PageVis> style_vis;
+		std::map<std::string, PageVis> active_master_vis;
+
+		auto scanContent = [&](auto& self, xmlNodePtr node) -> void
+		{
+			for (xmlNodePtr cur = node; cur != NULL; cur = cur->next)
+			{
+				if (cur->type != XML_ELEMENT_NODE || !cur->name)
+					continue;
+				if (xmlStrcmp(cur->name, BAD_CAST "style") == 0)
+				{
+					std::string sname = getXmlPropLocal(cur, "name");
+					xmlNodePtr dpp = findChildElementByLocalName(cur, "drawing-page-properties");
+					if (!sname.empty() && dpp != NULL)
+					{
+						PageVis pv;
+						pv.show_header = (getXmlPropLocal(dpp, "display-header") == "true");
+						pv.show_footer = (getXmlPropLocal(dpp, "display-footer") != "false");
+						style_vis[sname] = pv;
+					}
+				}
+				else if (xmlStrcmp(cur->name, BAD_CAST "page") == 0)
+				{
+					std::string mp = getXmlPropLocal(cur, "master-page-name");
+					std::string st = getXmlPropLocal(cur, "style-name");
+					if (!mp.empty())
+					{
+						PageVis pv = {false, true};
+						std::map<std::string, PageVis>::const_iterator it = style_vis.find(st);
+						if (it != style_vis.end())
+							pv = it->second;
+						PageVis& dst = active_master_vis[mp];
+						dst.show_header = dst.show_header || pv.show_header;
+						dst.show_footer = dst.show_footer || pv.show_footer;
+					}
+				}
+				if (cur->children)
+					self(self, cur->children);
+			}
+		};
+		scanContent(scanContent, xmlDocGetRootElement(content_doc.doc));
+		if (active_master_vis.empty())
+			return;
+
+		// 2. Inspect referenced <style:master-page> nodes in styles.xml.
+		xmlNodePtr styles_root = xmlDocGetRootElement(styles_doc.doc);
+		xmlNodePtr master_styles = findChildElementByLocalName(styles_root, "master-styles");
+		if (!master_styles)
+			return;
+
+		std::set<std::string> seen_lines;
+		for (xmlNodePtr mp = master_styles->children; mp != NULL; mp = mp->next)
+		{
+			if (mp->type != XML_ELEMENT_NODE || !mp->name || xmlStrcmp(mp->name, BAD_CAST "master-page") != 0)
+				continue;
+			std::string mp_name = getXmlPropLocal(mp, "name");
+			std::map<std::string, PageVis>::const_iterator vit = active_master_vis.find(mp_name);
+			if (vit == active_master_vis.end())
+				continue;
+			for (xmlNodePtr ch = mp->children; ch != NULL; ch = ch->next)
+			{
+				if (ch->type != XML_ELEMENT_NODE || !ch->name || xmlStrcmp(ch->name, BAD_CAST "frame") != 0)
+					continue;
+				if (getXmlPropLocal(ch, "placeholder") == "true")
+					continue;
+				std::string cls = getXmlPropLocal(ch, "class");
+				bool allow = (cls == "footer" && vit->second.show_footer) ||
+				             (cls == "header" && vit->second.show_header);
+				if (!allow)
+					continue;
+				std::string cur_line;
+				std::vector<std::string> lines;
+				collectOdfFrameText(ch->children, cur_line, lines);
+				if (hasNonSpaceText(cur_line))
+					lines.push_back(cur_line);
+				for (size_t i = 0; i < lines.size(); ++i)
+				{
+					if (seen_lines.insert(lines[i]).second)
+					{
+						if (!out_footer_text.empty() && out_footer_text[out_footer_text.size() - 1] != '\n')
+							out_footer_text.push_back('\n');
+						out_footer_text += lines[i];
+					}
+				}
+			}
+		}
+		if (!out_footer_text.empty() && out_footer_text[out_footer_text.size() - 1] != '\n')
+			out_footer_text.push_back('\n');
 	}
 }
 
@@ -775,7 +975,7 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			if (!zipfile.read(part_path, &part_xml) || part_xml.empty())
 				return;
 			std::string filtered_xml;
-			if (!filterPptxPlaceholderShapes(part_xml, mode, getXmlOptions(), getImageParserCallback() != NULL, filtered_xml))
+			if (!filterPptxPlaceholderShapes(part_xml, mode, manageXmlParser(), getXmlOptions(), getImageParserCallback() != NULL, filtered_xml))
 				return;
 			std::string part_text;
 			XmlParseMode part_mode = (mode == STRIP_XML) ? STRIP_XML : PARSE_XML;
@@ -906,6 +1106,7 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 						}
 					}
 					string drawing_text;
+					XmlStream::ensureXmlParserInitialized(manageXmlParser());
 					xmlDocPtr ddoc = xmlReadMemory(drawing_content.c_str(), drawing_content.size(), "drawing.xml", NULL, getXmlOptions());
 					if (ddoc != NULL)
 					{
@@ -948,6 +1149,19 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			setError(true);
 			zipfile.close();
 			return "";
+		}
+		if (main_file_name == "content.xml" &&
+		    content.find("<office:presentation") != std::string::npos &&
+		    mode != STRIP_XML &&
+		    zipfile.exists("styles.xml"))
+		{
+			std::string styles_content;
+			if (zipfile.read("styles.xml", &styles_content))
+			{
+				std::string master_footer_text;
+				extractReferencedOdfMasterFooters(content, styles_content, mode, manageXmlParser(), getXmlOptions(), master_footer_text);
+				appendBlockText(text, master_footer_text);
+			}
 		}
 	}
 	// Extract SmartArt diagram data XML not already visited via drawing relationships (DOCX/PPTX/fallback XLSX)

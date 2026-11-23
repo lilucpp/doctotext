@@ -13,6 +13,7 @@ class XmlStream
 		Implementation* impl;
 
 	public:
+		static void ensureXmlParserInitialized(bool manage_xml_parser = true);
 		XmlStream(const std::string& xml, bool manage_xml_parser, int xml_parse_options = 0);
 		~XmlStream();
 		operator bool();
