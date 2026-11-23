@@ -34,9 +34,11 @@
 
 #include "rtf_parser.h"
 
+#include <cstdint>
 #include "data_stream.h"
 #include <iostream>
 #include <map>
+#include <memory>
 #include "metadata.h"
 #include "misc.h"
 #include <sstream>
@@ -275,7 +277,109 @@ struct RTFParserState
 	std::string author_of_next_annotation;
 	tm annotation_time;
 	UString annotation_text;
+	bool doc_is_utf8;
+	bool is_utf8;
+	std::string pending_utf8;
 };
+
+static void appendTargetText(RTFParserState& state, UString& text, const UString& fragment)
+{
+	if (state.groups.top().in_annotation)
+		state.annotation_text += fragment;
+	else
+		text += fragment;
+}
+
+static size_t expectedUtf8SeqLen(unsigned char lead)
+{
+	if (lead < 0x80)
+		return 1;
+	if ((lead & 0xE0) == 0xC0)
+		return (lead >= 0xC2) ? 2 : 0;
+	if ((lead & 0xF0) == 0xE0)
+		return 3;
+	if ((lead & 0xF8) == 0xF0)
+		return (lead <= 0xF4) ? 4 : 0;
+	return 0;
+}
+
+static void appendCodePointToUString(uint32_t cp, UString& out)
+{
+	if (cp <= 0xFFFF)
+	{
+		out += UString(static_cast<UChar>(cp));
+	}
+	else if (cp <= 0x10FFFF)
+	{
+		cp -= 0x10000;
+		out += UString(static_cast<UChar>(0xD800 | ((cp >> 10) & 0x3FF)));
+		out += UString(static_cast<UChar>(0xDC00 | (cp & 0x3FF)));
+	}
+}
+
+static void flushPendingUtf8(RTFParserState& state, UString& text)
+{
+	if (state.pending_utf8.empty())
+		return;
+	UString fallback;
+	for (size_t i = 0; i < state.pending_utf8.size(); ++i)
+		fallback += UString(static_cast<UChar>(static_cast<unsigned char>(state.pending_utf8[i])));
+	state.pending_utf8.clear();
+	appendTargetText(state, text, fallback);
+}
+
+static void pushUtf8Byte(unsigned char b, RTFParserState& state, UString& text)
+{
+	if (b < 0x80)
+	{
+		flushPendingUtf8(state, text);
+		appendTargetText(state, text, UString(static_cast<UChar>(b)));
+		return;
+	}
+	if (!state.pending_utf8.empty() && (b & 0xC0) != 0x80)
+		flushPendingUtf8(state, text);
+	if (state.pending_utf8.empty())
+	{
+		size_t need = expectedUtf8SeqLen(b);
+		if (need < 2)
+		{
+			appendTargetText(state, text, UString(static_cast<UChar>(b)));
+			return;
+		}
+		state.pending_utf8.push_back(static_cast<char>(b));
+		return;
+	}
+	state.pending_utf8.push_back(static_cast<char>(b));
+	size_t need = expectedUtf8SeqLen(static_cast<unsigned char>(state.pending_utf8[0]));
+	if (state.pending_utf8.size() < need)
+		return;
+	const unsigned char* s = reinterpret_cast<const unsigned char*>(state.pending_utf8.data());
+	uint32_t cp = 0;
+	bool valid = true;
+	if (need == 2)
+		cp = ((s[0] & 0x1F) << 6) | (s[1] & 0x3F);
+	else if (need == 3)
+	{
+		cp = ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+		if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF))
+			valid = false;
+	}
+	else if (need == 4)
+	{
+		cp = ((s[0] & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+		if (cp < 0x10000 || cp > 0x10FFFF)
+			valid = false;
+	}
+	if (!valid)
+	{
+		flushPendingUtf8(state, text);
+		return;
+	}
+	state.pending_utf8.clear();
+	UString decoded;
+	appendCodePointToUString(cp, decoded);
+	appendTargetText(state, text, decoded);
+}
 
 static RTFCommand commandNameToEnum(char* name)
 {
@@ -337,8 +441,10 @@ static bool parseCommand(DataStream& data_stream, RTFCommand& cmd, long int& arg
 
 static std::string codepage_to_encoding(int codepage)
 {
-	char encoding[7];
-	snprintf(encoding, 7, "CP%i", codepage);
+	if (codepage == 65001)
+		return "UTF-8";
+	char encoding[32];
+	snprintf(encoding, sizeof(encoding), "CP%i", codepage);
 	return encoding;
 }
 
@@ -394,8 +500,10 @@ static std::string format_comment(const std::string& author, const std::string& 
 }
 
 static void execCommand(DataStream& data_stream, UString& text, int& skip, RTFParserState& state, RTFCommand cmd, long int arg,
-	TextConverter*& converter, bool verbose, std::ostream& log_stream)
+	std::unique_ptr<TextConverter>& converter, bool verbose, std::ostream& log_stream, UString& doc_text)
 {
+	if (cmd != RTF_CHAR)
+		flushPendingUtf8(state, doc_text);
 	switch (cmd)
 	{
 		case RTF_SPEC_CHAR:
@@ -439,7 +547,9 @@ static void execCommand(DataStream& data_stream, UString& text, int& skip, RTFPa
 		case RTF_CHAR:
 			if (skip == 0)
 			{
-				if (converter != NULL)
+				if (state.is_utf8)
+					pushUtf8Byte(static_cast<unsigned char>(arg & 0xFF), state, doc_text);
+				else if (converter != NULL)
 					text += converter->convert((const char*)&arg, sizeof(arg));
 				else
 					text += UString((UChar)arg);
@@ -499,9 +609,11 @@ static void execCommand(DataStream& data_stream, UString& text, int& skip, RTFPa
 			text += UString("\n");
 			break;
 		case RTF_CODEPAGE:
+			state.doc_is_utf8 = (arg == 65001);
+			state.is_utf8 = state.doc_is_utf8;
 			if (verbose)
 				log_stream << "Initializing converter for codepage " << arg << "\n";
-			converter = new TextConverter(codepage_to_encoding(arg));
+			converter.reset(new TextConverter(codepage_to_encoding(arg)));
 			if (converter->isOk())
 			{
 				if (verbose)
@@ -510,26 +622,32 @@ static void execCommand(DataStream& data_stream, UString& text, int& skip, RTFPa
 			else
 			{
 				log_stream << "Converter initialization ERROR!\n";
-				delete converter;
-				converter = NULL;
+				converter.reset();
 			}
 			break;
 		case RTF_FONT_CHARSET:
 			if (verbose)
 				log_stream << "Setting win charset " << arg << " for font number " << state.last_font_ref_num << "\n";
-			state.font_table[state.last_font_ref_num] = win_charset_to_encoding(arg);
+			if (state.doc_is_utf8 && (arg == 0 || arg == 1))
+				state.font_table[state.last_font_ref_num] = "UTF-8";
+			else
+				state.font_table[state.last_font_ref_num] = win_charset_to_encoding(arg);
 			break;
 		case RTF_F:
-			if (state.font_table.find(arg) != state.font_table.end())
+		{
+			std::map<long int, std::string>::const_iterator it = state.font_table.find(arg);
+			if (it != state.font_table.end())
 			{
 				if (verbose)
-					log_stream << "Font number " << arg << " referenced. Setting converter for encoding " << state.font_table[arg] << "\n";
+					log_stream << "Font number " << arg << " referenced. Setting converter for encoding " << it->second << "\n";
+				state.is_utf8 = (it->second == "UTF-8");
 				if (converter != NULL)
-					converter->setFromCode(state.font_table[arg]);
+					converter->setFromCode(it->second);
 			}
 			else
 				state.last_font_ref_num = arg;
 			break;
+		}
 
 		case RTF_ANNOTATION:
 			state.groups.top().in_annotation = true;
@@ -566,7 +684,7 @@ std::string RTFParser::plainText()
 {
 	impl->m_error = false;
 	UString text;
-	TextConverter* converter = NULL;
+	std::unique_ptr<TextConverter> converter;
 	if (!isRTF())	//check if this is really rtf file
 	{
 		*impl->m_log_stream << "File " << impl->m_file_name << " is not rtf.\n";
@@ -579,12 +697,20 @@ std::string RTFParser::plainText()
 		impl->m_error = true;
 		return "";
 	}
+	struct DataStreamGuard
+	{
+		DataStream* ds;
+		explicit DataStreamGuard(DataStream* s) : ds(s) {}
+		~DataStreamGuard() { if (ds) ds->close(); }
+	} stream_guard(impl->m_data_stream);
 	int ch;
 	RTFParserState state;
 	state.groups.push(RTFGroup());
 	state.groups.top().uc = 1;
 	state.groups.top().in_annotation = false;
 	state.last_font_ref_num = 0;
+	state.doc_is_utf8 = false;
+	state.is_utf8 = false;
 	int skip = 0;
 	while ((ch = impl->m_data_stream->getc()) != EOF)
 	{
@@ -597,25 +723,29 @@ std::string RTFParser::plainText()
 				if (!parseCommand(*impl->m_data_stream, cmd, arg, impl->m_verbose_logging, *impl->m_log_stream))
 					break;
 				UString fragment_text;
-				execCommand(*impl->m_data_stream, fragment_text, skip, state, cmd, arg, converter, impl->m_verbose_logging, *impl->m_log_stream);
-				if (state.groups.top().in_annotation)
-					state.annotation_text += fragment_text;
-				else
-					text += fragment_text;
+				execCommand(*impl->m_data_stream, fragment_text, skip, state, cmd, arg, converter, impl->m_verbose_logging, *impl->m_log_stream, text);
+				appendTargetText(state, text, fragment_text);
 				break;
 			}
 
 			case '{':
+				flushPendingUtf8(state, text);
 				state.groups.push(state.groups.top());
 				state.groups.top().in_annotation = false;
 				break;
 			case '}':
 			{
+				flushPendingUtf8(state, text);
+				if (state.groups.size() <= 1)
+				{
+					skip = 0;
+					break;
+				}
 				bool in_annotation = state.groups.top().in_annotation;
 				state.groups.pop();
 				if (in_annotation && !state.groups.top().in_annotation)
 					text += UString(format_comment(state.author_of_next_annotation, date_to_string(state.annotation_time), ustring_to_string(state.annotation_text)).c_str());
-				if (skip > state.groups.size() - 1)
+				if (skip > static_cast<int>(state.groups.size()) - 1)
 					skip = 0;
 				break;
 			}
@@ -623,27 +753,23 @@ std::string RTFParser::plainText()
 			default:
 				if (skip == 0 && (ch != '\n' || state.groups.top().in_annotation) && ch != '\r')
 				{
-					UString fragment_text;
-					if (converter != NULL)
-						fragment_text = converter->convert((const char*)&ch, sizeof(ch));
+					if (state.is_utf8)
+					{
+						pushUtf8Byte(static_cast<unsigned char>(ch), state, text);
+					}
 					else
-						fragment_text = UString((UChar)ch);
-					if (state.groups.top().in_annotation)
-						state.annotation_text += fragment_text;
-					else
-						text += fragment_text;
+					{
+						UString fragment_text;
+						if (converter != NULL)
+							fragment_text = converter->convert((const char*)&ch, sizeof(ch));
+						else
+							fragment_text = UString((UChar)ch);
+						appendTargetText(state, text, fragment_text);
+					}
 				}
 		}
-		if (state.groups.size() == 0)	//it will crash soon if groups.size() returns zero... better to check
-		{
-			*impl->m_log_stream << "Error parsing file " << impl->m_file_name << ". Perhaps it is not rtf document.\n";
-			impl->m_error = true;
-			return "";
-		}
 	}
-	impl->m_data_stream->close();
-	if (converter != NULL)
-		delete converter;
+	flushPendingUtf8(state, text);
 	return ustring_to_string(text);
 }
 

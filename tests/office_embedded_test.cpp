@@ -1754,6 +1754,29 @@ static int test_step9_xls_and_emf_malformed_guards()
 	return 0;
 }
 
+static int test_step10_rtf_cp65001_and_unmatched_braces()
+{
+	doctotext::PlainTextExtractor ex;
+	const std::string rtf_utf8 =
+		"{\\rtf1\\ansi\\ansicpg65001\\deff0"
+		"{\\fonttbl{\\f0\\fcharset0 Arial;}{\\f1\\fcharset204 Times;}}"
+		"\\f0 HEX:\\'e4\\'b8\\'ad\\'e6\\'96\\'87_\\'f0\\'9f\\'98\\'80 "
+		"{\\f1 \\'ef\\f0 }"
+		"RAW:\xE4\xB8\xAD\xE6\x96\x87_\xF0\x9F\x98\x80"
+		"\\par ExtraClosingOk\\'e4}}}";
+	std::string out;
+	if (!ex.processFile(rtf_utf8.data(), rtf_utf8.size(), out) ||
+	    out.find("HEX:\xE4\xB8\xAD\xE6\x96\x87_\xF0\x9F\x98\x80") == std::string::npos ||
+	    out.find("RAW:\xE4\xB8\xAD\xE6\x96\x87_\xF0\x9F\x98\x80") == std::string::npos ||
+	    out.find("ExtraClosingOk") == std::string::npos)
+	{
+		std::cerr << "FAIL: Step10 RTF ansicpg65001 / unmatched braces extraction mismatch: " << out << "\n";
+		return 1;
+	}
+	std::cout << "PASS: Step 10 RTF ansicpg65001 UTF-8 (hex/raw/4-byte) and extra closing braces\n";
+	return 0;
+}
+
 int main()
 {
 	if (test_step1_unified_switch_pdf() != 0)
@@ -1773,6 +1796,8 @@ int main()
 	if (test_step8_excel_edge_formats() != 0)
 		return 1;
 	if (test_step9_xls_and_emf_malformed_guards() != 0)
+		return 1;
+	if (test_step10_rtf_cp65001_and_unmatched_braces() != 0)
 		return 1;
 	std::cout << "office_embedded_test PASSED.\n";
 	return 0;

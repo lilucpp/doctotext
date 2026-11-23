@@ -106,6 +106,7 @@ else
 			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf \
 			testPDF_diffTitles.pdf testPPT_EmbeddedPDF.ppt testPPT_diagramData.pptx \
 			testPPT_masterText.ppt testPPT_masterText2.ppt testPPT_masterText.pptx testPPT_masterText2.pptx \
+			testRTFTIKA_1713.rtf testRTFTIKA_2500.rtf \
 			testEXCEL_4.xls testEXCEL_diagramData.xlsx testEXCEL_embeddedPDF_mac.xlsx testEXCEL_embeddedPDF_mac.xls testEXCEL_WORKBOOK_in_capitals.xls \
 			testPDF_no_extract_no_accessibility_owner_empty.pdf testPDF_protected.pdf; do \
 		echo TESTING $$f; \
@@ -264,6 +265,7 @@ update_tests:
 			testPDF_XFA_govdocs1_258578.pdf testPDF_acroform3.pdf testPDF_bad_page_303226.pdf \
 			testPDF_diffTitles.pdf testPPT_EmbeddedPDF.ppt testPPT_diagramData.pptx \
 			testPPT_masterText.ppt testPPT_masterText2.ppt testPPT_masterText.pptx testPPT_masterText2.pptx \
+			testRTFTIKA_1713.rtf testRTFTIKA_2500.rtf \
 			testEXCEL_4.xls testEXCEL_diagramData.xlsx testEXCEL_embeddedPDF_mac.xlsx testEXCEL_embeddedPDF_mac.xls testEXCEL_WORKBOOK_in_capitals.xls \
 			testPDF_no_extract_no_accessibility_owner_empty.pdf testPDF_protected.pdf; do \
 		echo PROCESSING $$f; \
