@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <zlib.h>
 
 namespace doctotext
 {
@@ -526,65 +527,211 @@ namespace
 			return true;
 		return false;
 	}
-	bool extractEmfEmbeddedObjects(const unsigned char* data,
-	                                 size_t size,
-	                                 const std::string& hint_name,
-	                                 EmbeddedExtractionContext& ctx,
-	                                 std::string& out_text)
+}
+
+bool extractEmfEmbeddedObjects(const unsigned char* data,
+                                 size_t size,
+                                 const std::string& hint_name,
+                                 EmbeddedExtractionContext& ctx,
+                                 std::string& out_text)
+{
+	if (!ctx.formatting.parse_embedded_files || !data || size < 8)
+		return false;
+	if (ctx.depth >= ctx.max_depth || ctx.extracted_count >= ctx.max_count)
+		return false;
+	static const uint32_t kEmrEof = 0x0E;
+	static const uint32_t kEmrComment = 0x46;
+	static const uint32_t kEmrCommentMultiFormats = 0x40000004U;
+	bool any = false;
+	size_t off = 0;
+	while (off + 8 <= size && ctx.extracted_count < ctx.max_count)
 	{
-		if (!data || size < 8)
-			return false;
-		static const uint32_t kEmrEof = 0x0E;
-		static const uint32_t kEmrComment = 0x46;
-		static const uint32_t kEmrCommentMultiFormats = 0x40000004U;
-		bool any = false;
-		size_t off = 0;
-		while (off + 8 <= size && ctx.extracted_count < ctx.max_count)
+		uint32_t rec_type = readU32LE(data + off);
+		uint32_t rec_size = readU32LE(data + off + 4);
+		if (rec_size < 8 || (rec_size & 3U) != 0 || rec_size > size - off)
+			break;
+		if (rec_type == kEmrEof)
+			break;
+		if (rec_type == kEmrComment && rec_size >= 40)
 		{
-			uint32_t rec_type = readU32LE(data + off);
-			uint32_t rec_size = readU32LE(data + off + 4);
-			if (rec_size < 8 || (rec_size & 3U) != 0 || rec_size > size - off)
-				break;
-			if (rec_type == kEmrEof)
-				break;
-			if (rec_type == kEmrComment && rec_size >= 40)
+			const unsigned char* rec = data + off;
+			uint32_t data_size = readU32LE(rec + 8);
+			if (data_size >= 28 && data_size <= rec_size - 12 &&
+			    std::memcmp(rec + 12, "GDIC", 4) == 0 &&
+			    readU32LE(rec + 16) == kEmrCommentMultiFormats)
 			{
-				const unsigned char* rec = data + off;
-				uint32_t data_size = readU32LE(rec + 8);
-				if (data_size >= 28 && data_size <= rec_size - 12 &&
-				    std::memcmp(rec + 12, "GDIC", 4) == 0 &&
-				    readU32LE(rec + 16) == kEmrCommentMultiFormats)
+				uint32_t count_formats = readU32LE(rec + 36);
+				uint32_t max_formats = (rec_size - 40) / 16U;
+				if (count_formats > max_formats)
+					count_formats = max_formats;
+				for (uint32_t k = 0; k < count_formats && ctx.extracted_count < ctx.max_count; ++k)
 				{
-					uint32_t count_formats = readU32LE(rec + 36);
-					uint32_t max_formats = (rec_size - 40) / 16U;
-					if (count_formats > max_formats)
-						count_formats = max_formats;
-					for (uint32_t k = 0; k < count_formats && ctx.extracted_count < ctx.max_count; ++k)
+					size_t fmt_off = 40 + (size_t)k * 16;
+					if (std::memcmp(rec + fmt_off, " FDP", 4) == 0 ||
+					    std::memcmp(rec + fmt_off, "PDF ", 4) == 0)
 					{
-						size_t fmt_off = 40 + (size_t)k * 16;
-						if (std::memcmp(rec + fmt_off, " FDP", 4) == 0 ||
-						    std::memcmp(rec + fmt_off, "PDF ", 4) == 0)
+						uint32_t cb_data = readU32LE(rec + fmt_off + 8);
+						uint32_t off_data = readU32LE(rec + fmt_off + 12);
+						// [MS-EMF] 2.3.3.4: offData is relative to start of EmrCommentMultiFormats payload (rec + 12, where "GDIC" begins).
+						size_t min_off_data = 28 + (size_t)count_formats * 16;
+						if (off_data >= min_off_data && off_data <= rec_size - 12 &&
+						    cb_data > 0 && cb_data <= ctx.max_bytes &&
+						    cb_data <= (rec_size - 12 - off_data))
 						{
-							uint32_t cb_data = readU32LE(rec + fmt_off + 8);
-							uint32_t off_data = readU32LE(rec + fmt_off + 12);
-							// [MS-EMF] 2.3.3.4: offData is relative to start of EmrCommentMultiFormats payload (rec + 12, where "GDIC" begins).
-							size_t min_off_data = 28 + (size_t)count_formats * 16;
-							if (off_data >= min_off_data && off_data <= rec_size - 12 &&
-							    cb_data > 0 && cb_data <= ctx.max_bytes &&
-							    cb_data <= (rec_size - 12 - off_data))
+							const unsigned char* pdf_ptr = rec + 12 + off_data;
+							if (extractFromEmbeddedBuffer(pdf_ptr, cb_data, hint_name + ".pdf", ctx, out_text))
+								any = true;
+						}
+					}
+				}
+			}
+		}
+		off += rec_size;
+	}
+	return any;
+}
+
+bool extractOfficeArtDrawingEmbeddings(const std::vector<unsigned char>& dgg_data,
+                                       EmbeddedExtractionContext& ctx,
+                                       std::string& out_text)
+{
+	if (!ctx.formatting.parse_embedded_files || dgg_data.size() < 8)
+		return false;
+	if (ctx.depth >= ctx.max_depth || ctx.extracted_count >= ctx.max_count)
+		return false;
+
+	struct ZlibStreamGuard
+	{
+		z_stream zs;
+		bool active;
+		ZlibStreamGuard() : active(false) { std::memset(&zs, 0, sizeof(zs)); }
+		~ZlibStreamGuard() { if (active) inflateEnd(&zs); }
+	};
+
+	bool any = false;
+	int emf_index = 0;
+	size_t total_emf_bytes = 0;
+	for (size_t i = 0;
+	     i + 8 <= dgg_data.size() &&
+	     ctx.extracted_count < ctx.max_count &&
+	     emf_index < ctx.max_count &&
+	     total_emf_bytes < ctx.max_bytes; )
+	{
+		uint16_t ver_inst = (uint16_t)dgg_data[i] | ((uint16_t)dgg_data[i + 1] << 8);
+		uint16_t rec_type = (uint16_t)dgg_data[i + 2] | ((uint16_t)dgg_data[i + 3] << 8);
+		uint32_t rec_len = readU32LE(&dgg_data[i + 4]);
+		uint16_t ver = ver_inst & 0x0F;
+
+		if (ver == 0x0F)
+		{
+			i += 8;
+			continue;
+		}
+		if ((size_t)rec_len > dgg_data.size() - (i + 8))
+			break;
+
+		if (rec_type == 0xF007) // OfficeArtFBSE
+		{
+			size_t fbse_end = i + 8 + (size_t)rec_len;
+			if (rec_len >= 36)
+			{
+				size_t cb_name = dgg_data[i + 8 + 33];
+				if (cb_name <= (size_t)rec_len - 36)
+				{
+					size_t blip_off = i + 8 + 36 + cb_name;
+					if (blip_off + 8 <= fbse_end)
+					{
+						uint16_t b_ver_inst = (uint16_t)dgg_data[blip_off] | ((uint16_t)dgg_data[blip_off + 1] << 8);
+						uint16_t b_rec_type = (uint16_t)dgg_data[blip_off + 2] | ((uint16_t)dgg_data[blip_off + 3] << 8);
+						uint32_t b_rec_len = readU32LE(&dgg_data[blip_off + 4]);
+						uint16_t b_inst = b_ver_inst >> 4;
+						// [MS-ODRAW] 2.2.24: OfficeArtBlipEMF (0xF01A), recInstance 0x3D4 (1 UID) or 0x3D5 (2 UIDs)
+						if (b_rec_type == 0xF01A &&
+						    (b_inst == 0x3D4 || b_inst == 0x3D5) &&
+						    (size_t)b_rec_len <= fbse_end - (blip_off + 8))
+						{
+							size_t uid_bytes = (b_inst == 0x3D5) ? 32 : 16;
+							if ((size_t)b_rec_len > uid_bytes + 34)
 							{
-								const unsigned char* pdf_ptr = rec + 12 + off_data;
-								if (extractFromEmbeddedBuffer(pdf_ptr, cb_data, hint_name + ".pdf", ctx, out_text))
-									any = true;
+								const unsigned char* mh = &dgg_data[blip_off + 8 + uid_bytes];
+								uint32_t cb_size = readU32LE(mh);
+								uint32_t cb_save = readU32LE(mh + 28);
+								uint8_t f_compression = mh[32];
+								size_t payload_off = blip_off + 8 + uid_bytes + 34;
+								size_t avail = (size_t)b_rec_len - (uid_bytes + 34);
+								size_t comp_len = (cb_save > 0 && (size_t)cb_save <= avail) ? (size_t)cb_save : avail;
+								if (comp_len > 0)
+								{
+									size_t remaining_budget = ctx.max_bytes - total_emf_bytes;
+									if (f_compression == 0xFE) // msocompressionNone
+									{
+										if (comp_len <= remaining_budget)
+										{
+											++emf_index;
+											total_emf_bytes += comp_len;
+											std::string hint = "xls/drawing_emf_" + std::to_string(emf_index);
+											if (extractEmfEmbeddedObjects(&dgg_data[payload_off], comp_len, hint, ctx, out_text))
+												any = true;
+										}
+									}
+									else if (f_compression == 0x00 && cb_size > 0 && (size_t)cb_size <= remaining_budget) // zlib deflate
+									{
+										if (comp_len <= (size_t)UINT_MAX)
+										{
+											++emf_index;
+											size_t max_uncomp = std::min<size_t>((size_t)cb_size, remaining_budget);
+											ZlibStreamGuard zguard;
+											zguard.zs.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(&dgg_data[payload_off]));
+											zguard.zs.avail_in = (uInt)comp_len;
+											if (inflateInit(&zguard.zs) == Z_OK)
+											{
+												zguard.active = true;
+												std::vector<unsigned char> emf_buf;
+												emf_buf.reserve(std::min<size_t>(max_uncomp, 256U * 1024U));
+												unsigned char chunk[32768];
+												bool ok = false;
+												for (;;)
+												{
+													zguard.zs.next_out = chunk;
+													zguard.zs.avail_out = sizeof(chunk);
+													int zret = inflate(&zguard.zs, Z_NO_FLUSH);
+													size_t produced = sizeof(chunk) - zguard.zs.avail_out;
+													if (produced > max_uncomp - emf_buf.size())
+														break;
+													if (produced > 0)
+														emf_buf.insert(emf_buf.end(), chunk, chunk + produced);
+													if (zret == Z_STREAM_END)
+													{
+														ok = true;
+														break;
+													}
+													if (zret != Z_OK || (zguard.zs.avail_in == 0 && produced == 0))
+														break;
+												}
+												total_emf_bytes += emf_buf.size();
+												if (ok && !emf_buf.empty())
+												{
+													std::string hint = "xls/drawing_emf_" + std::to_string(emf_index);
+													if (extractEmfEmbeddedObjects(emf_buf.data(), emf_buf.size(), hint, ctx, out_text))
+														any = true;
+												}
+											}
+										}
+									}
+								}
 							}
 						}
 					}
 				}
 			}
-			off += rec_size;
+			i = fbse_end;
 		}
-		return any;
+		else
+		{
+			i += 8 + (size_t)rec_len;
+		}
 	}
+	return any;
 }
 
 bool extractFromEmbeddedContainerBuffer(const unsigned char* data,

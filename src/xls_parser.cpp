@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <utility>
 #include <wv2/ustring.h>
 #include "wv2/textconverter.h"
 #include "wv2/utilities.h"
@@ -897,76 +898,98 @@ struct XLSParser::Implementation
 		int img_count = 0;
 		for (size_t i = 0; i + 8 <= dgg_data.size(); )
 		{
-			uint16_t ver_inst = dgg_data[i] | (dgg_data[i+1] << 8);
-			uint16_t rec_type = dgg_data[i+2] | (dgg_data[i+3] << 8);
-			uint32_t rec_len = dgg_data[i+4] | (dgg_data[i+5] << 8) | (dgg_data[i+6] << 16) | (dgg_data[i+7] << 24);
+			uint16_t ver_inst = (uint16_t)dgg_data[i] | ((uint16_t)dgg_data[i+1] << 8);
+			uint16_t rec_type = (uint16_t)dgg_data[i+2] | ((uint16_t)dgg_data[i+3] << 8);
+			uint32_t rec_len = (uint32_t)dgg_data[i+4] | ((uint32_t)dgg_data[i+5] << 8) | ((uint32_t)dgg_data[i+6] << 16) | ((uint32_t)dgg_data[i+7] << 24);
 			uint16_t ver = ver_inst & 0x0F;
+			if (ver == 0x0F) // container
+			{
+				i += 8;
+				continue;
+			}
+			if ((size_t)rec_len > dgg_data.size() - (i + 8))
+				break;
 
 			if (rec_type == 0xF007) // msofbtBSE
 			{
-				if (i + 8 + 36 + 8 <= dgg_data.size())
+				size_t fbse_end = i + 8 + (size_t)rec_len;
+				if (rec_len >= 36)
 				{
-					size_t blip_offset = i + 8 + 36;
-					uint16_t b_rec_type = dgg_data[blip_offset+2] | (dgg_data[blip_offset+3] << 8);
-					uint32_t b_rec_len = dgg_data[blip_offset+4] | (dgg_data[blip_offset+5] << 8) |
-					                     (dgg_data[blip_offset+6] << 16) | (dgg_data[blip_offset+7] << 24);
-
-					if (b_rec_type >= 0xF018 && b_rec_type <= 0xF02A && blip_offset + 8 + b_rec_len <= dgg_data.size())
+					size_t cb_name = dgg_data[i + 8 + 33];
+					if (cb_name <= (size_t)rec_len - 36)
 					{
-						size_t header_skip = 17;
-						if (b_rec_len >= 33 + 4)
+						size_t blip_offset = i + 8 + 36 + cb_name;
+						if (blip_offset + 8 <= fbse_end)
 						{
-							if (memcmp(&dgg_data[blip_offset + 8 + 33], "\x89PNG", 4) == 0 ||
-							    (dgg_data[blip_offset + 8 + 33] == 0xFF && dgg_data[blip_offset + 8 + 34] == 0xD8) ||
-							    memcmp(&dgg_data[blip_offset + 8 + 33], "BM", 2) == 0)
+							uint16_t b_rec_type = (uint16_t)dgg_data[blip_offset+2] | ((uint16_t)dgg_data[blip_offset+3] << 8);
+							uint32_t b_rec_len = (uint32_t)dgg_data[blip_offset+4] | ((uint32_t)dgg_data[blip_offset+5] << 8) |
+							                     ((uint32_t)dgg_data[blip_offset+6] << 16) | ((uint32_t)dgg_data[blip_offset+7] << 24);
+
+							// Only extract raster bitmap BLIPs (PNG/JPEG/DIB/TIFF: 0xF01D..0xF02A); skip metafiles (EMF/WMF/PICT).
+							if (b_rec_type >= 0xF01D && b_rec_type <= 0xF02A &&
+							    (size_t)b_rec_len <= fbse_end - (blip_offset + 8))
 							{
-								header_skip = 33;
-							}
-						}
+								size_t header_skip = 17;
+								if (b_rec_len >= 33 + 4)
+								{
+									if (memcmp(&dgg_data[blip_offset + 8 + 33], "\x89PNG", 4) == 0 ||
+									    (dgg_data[blip_offset + 8 + 33] == 0xFF && dgg_data[blip_offset + 8 + 34] == 0xD8) ||
+									    memcmp(&dgg_data[blip_offset + 8 + 33], "BM", 2) == 0)
+									{
+										header_skip = 33;
+									}
+								}
 
-						if (b_rec_len > header_skip)
-						{
-							size_t img_size = b_rec_len - header_skip;
-							const uint8_t* img_bytes = &dgg_data[blip_offset + 8 + header_skip];
+								if (b_rec_len > header_skip)
+								{
+									size_t img_size = (size_t)b_rec_len - header_skip;
+									const uint8_t* img_bytes = &dgg_data[blip_offset + 8 + header_skip];
 
-							std::string ext = "png";
-							if (img_size >= 4 && memcmp(img_bytes, "\x89PNG", 4) == 0)
-								ext = "png";
-							else if (img_size >= 3 && img_bytes[0] == 0xFF && img_bytes[1] == 0xD8)
-								ext = "jpg";
-							else if (img_size >= 2 && memcmp(img_bytes, "BM", 2) == 0)
-								ext = "bmp";
-							else if (b_rec_type == 0xF01D || b_rec_type == 0xF01F || b_rec_type == 0xF029)
-								ext = "jpg";
+									std::string ext = "png";
+									if (img_size >= 4 && memcmp(img_bytes, "\x89PNG", 4) == 0)
+										ext = "png";
+									else if (img_size >= 3 && img_bytes[0] == 0xFF && img_bytes[1] == 0xD8)
+										ext = "jpg";
+									else if (img_size >= 2 && memcmp(img_bytes, "BM", 2) == 0)
+										ext = "bmp";
+									else if (b_rec_type == 0xF01D || b_rec_type == 0xF01F || b_rec_type == 0xF029)
+										ext = "jpg";
 
-							img_count++;
-							std::string img_name = "xl/media/image" + std::to_string(img_count) + "." + ext;
-							std::string parsed = m_image_callback(img_name, reinterpret_cast<const char*>(img_bytes), img_size, m_image_user_data);
-							if (!parsed.empty())
-							{
-								if (!text.empty() && text[text.size() - 1] != '\n')
-									text += "\n";
-								text += parsed;
-								if (text[text.size() - 1] != '\n')
-									text += "\n";
+									img_count++;
+									std::string img_name = "xl/media/image" + std::to_string(img_count) + "." + ext;
+									std::string parsed = m_image_callback(img_name, reinterpret_cast<const char*>(img_bytes), img_size, m_image_user_data);
+									if (!parsed.empty())
+									{
+										if (!text.empty() && text[text.size() - 1] != '\n')
+											text += "\n";
+										text += parsed;
+										if (text[text.size() - 1] != '\n')
+											text += "\n";
+									}
+								}
 							}
 						}
 					}
 				}
-				i += 8 + rec_len;
-			}
-			else if (ver == 0x0F) // container
-			{
-				i += 8;
+				i = fbse_end;
 			}
 			else
 			{
-				i += 8 + rec_len;
+				i += 8 + (size_t)rec_len;
 			}
 		}
 	}
 
-	void parseXLS(BiffReader& reader, std::string& text)
+	void initEmbedContext(const FormattingStyle& formatting, doctotext::EmbeddedExtractionContext& root_ctx) const
+	{
+		root_ctx.formatting = formatting;
+		root_ctx.verbose_logging = m_verbose_logging;
+		root_ctx.log_stream = m_log_stream;
+		root_ctx.image_callback = m_image_callback;
+		root_ctx.image_user_data = m_image_user_data;
+	}
+
+	void parseXLS(BiffReader& reader, std::string& text, std::vector<uint8_t>* out_dgg_buf = NULL)
 	{
 		m_xf_records.clear();
 		m_date_shift = 25569.0;
@@ -1146,11 +1169,17 @@ struct XLSParser::Implementation
 			if (rec_type == 0x00EB) // MSODRAWINGGROUP
 			{
 				in_dgg = true;
-				dgg_buf.insert(dgg_buf.end(), rec.begin(), rec.end());
+				if (rec.size() <= doctotext::kMaxEmbedBytes - dgg_buf.size())
+					dgg_buf.insert(dgg_buf.end(), rec.begin(), rec.end());
+				else
+					in_dgg = false;
 			}
 			else if (in_dgg && rec_type == 0x003C) // CONTINUE
 			{
-				dgg_buf.insert(dgg_buf.end(), rec.begin(), rec.end());
+				if (rec.size() <= doctotext::kMaxEmbedBytes - dgg_buf.size())
+					dgg_buf.insert(dgg_buf.end(), rec.begin(), rec.end());
+				else
+					in_dgg = false;
 			}
 			else if (in_dgg)
 			{
@@ -1172,6 +1201,10 @@ struct XLSParser::Implementation
 		if (!dgg_buf.empty() && m_image_callback)
 		{
 			extract_xls_drawing_images(dgg_buf, text);
+		}
+		if (out_dgg_buf)
+		{
+			*out_dgg_buf = std::move(dgg_buf);
 		}
 	}
 };
@@ -1281,8 +1314,16 @@ std::string XLSParser::plainText(const FormattingStyle& formatting)
 		{
 			RawBiffReader biff_reader(*raw_stream);
 			std::string text;
-			impl->parseXLS(biff_reader, text);
+			std::vector<uint8_t> dgg_buf;
+			impl->parseXLS(biff_reader, text, &dgg_buf);
 			raw_stream->close();
+			if (formatting.parse_embedded_files && !impl->m_error && !dgg_buf.empty())
+			{
+				doctotext::EmbeddedExtractionContext root_ctx;
+				impl->initEmbedContext(formatting, root_ctx);
+				doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
+				doctotext::extractOfficeArtDrawingEmbeddings(dgg_buf, tls_scope.context(), text);
+			}
 			return text;
 		}
 		*impl->m_log_stream << "Error opening " << impl->m_file_name << " as OLE file.\n";
@@ -1304,19 +1345,18 @@ std::string XLSParser::plainText(ThreadSafeOLEStorage& storage, const Formatting
 		return "";
 	}
 	std::string text;
+	std::vector<uint8_t> dgg_buf;
 	OleBiffReader biff_reader(*reader);
-	impl->parseXLS(biff_reader, text);
+	impl->parseXLS(biff_reader, text, &dgg_buf);
 	reader.reset();
 	if (formatting.parse_embedded_files && !impl->m_error)
 	{
 		doctotext::EmbeddedExtractionContext root_ctx;
-		root_ctx.formatting = formatting;
-		root_ctx.verbose_logging = impl->m_verbose_logging;
-		root_ctx.log_stream = impl->m_log_stream;
-		root_ctx.image_callback = impl->m_image_callback;
-		root_ctx.image_user_data = impl->m_image_user_data;
+		impl->initEmbedContext(formatting, root_ctx);
 		doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
 		doctotext::EmbeddedExtractionContext& embed_ctx = tls_scope.context();
+		if (!dgg_buf.empty())
+			doctotext::extractOfficeArtDrawingEmbeddings(dgg_buf, embed_ctx, text);
 
 		std::vector<std::string> entries;
 		if (storage.getStreamsAndStoragesList(entries))

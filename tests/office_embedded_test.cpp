@@ -1392,6 +1392,178 @@ static int test_step8_excel_edge_formats()
 		}
 	}
 
+	// 8.10 Mac XLS MSODRAWINGGROUP (0x00EB + 0x003C CONTINUE) zlib-compressed 0xF01A EMF BLIP PDF
+	{
+		std::string pdf = make_pdf_with_attachments("MAC_XLS_EMF_ZLIB_PDF_OK", std::vector<std::pair<std::string, std::string> >());
+		size_t pdf_pad = (4 - (pdf.size() % 4)) % 4;
+		std::string emf;
+		push_u32_le(emf, 0x01); push_u32_le(emf, 108); emf.append(100, '\0');
+		uint32_t data_size = (uint32_t)(44 + pdf.size() + pdf_pad);
+		push_u32_le(emf, 0x46); push_u32_le(emf, 12 + data_size); push_u32_le(emf, data_size);
+		emf += "GDIC";
+		push_u32_le(emf, 0x40000004U);
+		emf.append(16, '\0');
+		push_u32_le(emf, 1);
+		emf += " FDP";
+		push_u32_le(emf, 1);
+		push_u32_le(emf, (uint32_t)pdf.size());
+		push_u32_le(emf, 44);
+		emf += pdf;
+		emf.append(pdf_pad, '\0');
+		push_u32_le(emf, 0x0E); push_u32_le(emf, 20); emf.append(12, '\0');
+
+		uLongf comp_bound = compressBound((uLong)emf.size());
+		std::string comp(comp_bound, '\0');
+		uLongf comp_len = comp_bound;
+		if (compress2(reinterpret_cast<Bytef*>(&comp[0]), &comp_len,
+		              reinterpret_cast<const Bytef*>(emf.data()), (uLong)emf.size(),
+		              Z_DEFAULT_COMPRESSION) != Z_OK)
+		{
+			std::cerr << "FAIL: Step8 compress2 failed\n";
+			return 1;
+		}
+		comp.resize((size_t)comp_len);
+
+		// OfficeArtBlipEMF (0xF01A, inst=0x3D4 -> ver_inst=0x3D40)
+		std::string blip;
+		push_u16_le(blip, 0x3D40); push_u16_le(blip, 0xF01A);
+		push_u32_le(blip, (uint32_t)(16 + 34 + comp.size()));
+		blip.append(16, '\x11');                  // rgbUid1
+		push_u32_le(blip, (uint32_t)emf.size());  // cbSize uncompressed
+		blip.append(16, '\0');                    // rcBounds
+		blip.append(8, '\0');                     // ptSize
+		push_u32_le(blip, (uint32_t)comp.size()); // cbSave compressed
+		blip.push_back(0x00);                     // fCompression = deflate
+		blip.push_back((char)0xFE);               // fFilter
+
+		blip += comp;
+
+		// OfficeArtFBSE (0xF007, ver=2, inst=2 -> ver_inst=0x0022)
+		std::string fbse;
+		push_u16_le(fbse, 0x0022); push_u16_le(fbse, 0xF007);
+		push_u32_le(fbse, (uint32_t)(36 + blip.size()));
+		fbse.append(36, '\0');
+		fbse += blip;
+
+		// OfficeArtBStoreContainer (0xF001, ver=0xF, inst=1 -> ver_inst=0x001F)
+		std::string bstore;
+		push_u16_le(bstore, 0x001F); push_u16_le(bstore, 0xF001);
+		push_u32_le(bstore, (uint32_t)fbse.size());
+		bstore += fbse;
+
+		// OfficeArtDggContainer (0xF000, ver=0xF -> ver_inst=0x000F)
+		std::string dgg;
+		push_u16_le(dgg, 0x000F); push_u16_le(dgg, 0xF000);
+		push_u32_le(dgg, (uint32_t)bstore.size());
+		dgg += bstore;
+
+		// Build BIFF8 Workbook splitting dgg across 0x00EB + 0x003C CONTINUE
+		size_t split = dgg.size() / 2;
+		std::string wb;
+		push_u16_le(wb, 0x0809); push_u16_le(wb, 16);
+		push_u16_le(wb, 0x0600); push_u16_le(wb, 0x0005); wb.append(12, '\0');
+		push_u16_le(wb, 0x00EB); push_u16_le(wb, (uint16_t)split);
+		wb += dgg.substr(0, split);
+		push_u16_le(wb, 0x003C); push_u16_le(wb, (uint16_t)(dgg.size() - split));
+		wb += dgg.substr(split);
+		push_u16_le(wb, 0x000A); push_u16_le(wb, 0);
+
+		OleSpecNode root;
+		root.name = "Root Entry"; root.is_storage = true;
+		root.children.push_back({"Workbook", false, wb, {}});
+		std::string xls_buf = build_ole2_from_tree(root);
+
+		std::string txt;
+		if (!ex.processFile(xls_buf.data(), xls_buf.size(), txt) ||
+		    txt.find("MAC_XLS_EMF_ZLIB_PDF_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 Mac XLS MSODRAWINGGROUP EMF PDF failed: " << txt << "\n";
+			return 1;
+		}
+
+		doctotext::PlainTextExtractor ex_off;
+		ex_off.setParseEmbeddedFiles(false);
+		std::string txt_off;
+		if (!ex_off.processFile(xls_buf.data(), xls_buf.size(), txt_off) ||
+		    txt_off.find("MAC_XLS_EMF_ZLIB_PDF_OK") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 Mac XLS EMF PDF extracted despite parse_embedded_files=false: " << txt_off << "\n";
+			return 1;
+		}
+
+		// With OCR image callback enabled, raster callback must ignore 0xF01A EMF BLIP (not emit fake PNG),
+		// while EMF PDF extraction still works.
+		int img_cb_calls = 0;
+		auto img_cb = [](const std::string&, const char*, size_t, void* ud) -> std::string {
+			++(*static_cast<int*>(ud));
+			return "RASTER_CALLED";
+		};
+		doctotext::PlainTextExtractor ex_img;
+		ex_img.setImageParserCallback(+img_cb, &img_cb_calls);
+		std::string txt_img;
+		if (!ex_img.processFile(xls_buf.data(), xls_buf.size(), txt_img) ||
+		    img_cb_calls != 0 ||
+		    txt_img.find("MAC_XLS_EMF_ZLIB_PDF_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 image callback wrongly invoked for 0xF01A EMF BLIP: calls=" << img_cb_calls << "\n";
+			return 1;
+		}
+
+		// 8.10b Raw BIFF4 + uncompressed EMF (fCompression=0xFE) + 2 UIDs (inst=0x3D5) + cbName=4 + truncated outer container
+		std::string pdf_raw = make_pdf_with_attachments("RAW_BIFF_UNCOMP_EMF_OK", std::vector<std::pair<std::string, std::string> >());
+		size_t pdf_raw_pad = (4 - (pdf_raw.size() % 4)) % 4;
+		std::string emf_raw;
+		push_u32_le(emf_raw, 0x01); push_u32_le(emf_raw, 108); emf_raw.append(100, '\0');
+		uint32_t ds_raw = (uint32_t)(44 + pdf_raw.size() + pdf_raw_pad);
+		push_u32_le(emf_raw, 0x46); push_u32_le(emf_raw, 12 + ds_raw); push_u32_le(emf_raw, ds_raw);
+		emf_raw += "GDIC"; push_u32_le(emf_raw, 0x40000004U); emf_raw.append(16, '\0');
+		push_u32_le(emf_raw, 1); emf_raw += "PDF "; push_u32_le(emf_raw, 1);
+		push_u32_le(emf_raw, (uint32_t)pdf_raw.size()); push_u32_le(emf_raw, 44);
+		emf_raw += pdf_raw; emf_raw.append(pdf_raw_pad, '\0');
+		push_u32_le(emf_raw, 0x0E); push_u32_le(emf_raw, 20); emf_raw.append(12, '\0');
+
+		std::string blip2;
+		push_u16_le(blip2, 0x3D50); push_u16_le(blip2, 0xF01A); // inst=0x3D5 (32B UIDs)
+		push_u32_le(blip2, (uint32_t)(32 + 34 + emf_raw.size()));
+		blip2.append(32, '\x33');
+		push_u32_le(blip2, (uint32_t)emf_raw.size());
+		blip2.append(24, '\0');
+		push_u32_le(blip2, (uint32_t)emf_raw.size());
+		blip2.push_back((char)0xFE); // uncompressed
+		blip2.push_back((char)0xFE);
+		blip2 += emf_raw;
+
+		std::string fbse2;
+		push_u16_le(fbse2, 0x0022); push_u16_le(fbse2, 0xF007);
+		push_u32_le(fbse2, (uint32_t)(36 + 4 + blip2.size()));
+		fbse2.append(33, '\0');
+		fbse2.push_back(4); // cbName = 4
+		fbse2.append(2, '\0');
+		fbse2.append("a\0b\0", 4);
+		fbse2 += blip2;
+
+		// Outer container claims larger rec_len (truncated) to test container traversal resilience
+		std::string dgg2;
+		push_u16_le(dgg2, 0x000F); push_u16_le(dgg2, 0xF000);
+		push_u32_le(dgg2, (uint32_t)(fbse2.size() + 64));
+		dgg2 += fbse2;
+
+		std::string raw_biff;
+		push_u16_le(raw_biff, 0x0409); push_u16_le(raw_biff, 6);
+		push_u16_le(raw_biff, 0); push_u16_le(raw_biff, 0x0010); push_u16_le(raw_biff, 0);
+		push_u16_le(raw_biff, 0x00EB); push_u16_le(raw_biff, (uint16_t)dgg2.size());
+		raw_biff += dgg2;
+		push_u16_le(raw_biff, 0x000A); push_u16_le(raw_biff, 0);
+
+		std::string txt_raw;
+		if (!ex.processFile(raw_biff.data(), raw_biff.size(), txt_raw) ||
+		    txt_raw.find("RAW_BIFF_UNCOMP_EMF_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step8 raw BIFF + 0x3D5 uncompressed EMF + cbName failed: " << txt_raw << "\n";
+			return 1;
+		}
+	}
+
 	std::cout << "PASS: Step 8 Excel edge formats (WORKBOOK caps, BIFF2/3/4/4W, SST/CONTINUE, SmartArt, EMF PDF)\n";
 	return 0;
 }
@@ -1494,6 +1666,86 @@ static int test_step9_xls_and_emf_malformed_guards()
 		    txt.find("SHOULD_BE_IGNORED_EMF") != std::string::npos)
 		{
 			std::cerr << "FAIL: Step9 invalid offData EMF payload was unexpectedly accepted: " << txt << "\n";
+			return 1;
+		}
+	}
+
+	// 9.4 Oversized cbSize & corrupt deflate stream in XLS MSODRAWINGGROUP EMF BLIP must fail safely
+	{
+		auto make_bad_emf_xls = [&](uint32_t claimed_cb_size, const std::string& comp_bytes) -> std::string {
+			std::string blip;
+			push_u16_le(blip, 0x3D40); push_u16_le(blip, 0xF01A);
+			push_u32_le(blip, (uint32_t)(16 + 34 + comp_bytes.size()));
+			blip.append(16, '\x22');
+			push_u32_le(blip, claimed_cb_size);
+			blip.append(24, '\0');
+			push_u32_le(blip, (uint32_t)comp_bytes.size());
+			blip.push_back(0x00); // deflate
+			blip.push_back((char)0xFE);
+			blip += comp_bytes;
+
+			std::string fbse;
+			push_u16_le(fbse, 0x0022); push_u16_le(fbse, 0xF007);
+			push_u32_le(fbse, (uint32_t)(36 + blip.size()));
+			fbse.append(36, '\0');
+			fbse += blip;
+
+			std::string dgg;
+			push_u16_le(dgg, 0x000F); push_u16_le(dgg, 0xF000);
+			push_u32_le(dgg, (uint32_t)fbse.size());
+			dgg += fbse;
+
+			std::string wb;
+			push_u16_le(wb, 0x0809); push_u16_le(wb, 16);
+			push_u16_le(wb, 0x0600); push_u16_le(wb, 0x0005); wb.append(12, '\0');
+			push_u16_le(wb, 0x00EB); push_u16_le(wb, (uint16_t)dgg.size());
+			wb += dgg;
+			push_u16_le(wb, 0x000A); push_u16_le(wb, 0);
+
+			OleSpecNode root;
+			root.name = "Root Entry"; root.is_storage = true;
+			root.children.push_back({"Workbook", false, wb, {}});
+			return build_ole2_from_tree(root);
+		};
+
+		// 9.4a Forged huge cbSize (> kMaxEmbedBytes)
+		std::string xls_huge = make_bad_emf_xls(0xFFFFFFFFU, std::string("\x78\x9c\x03\x00\x00\x00\x00\x01", 8));
+		std::string txt1;
+		if (!ex.processFile(xls_huge.data(), xls_huge.size(), txt1) ||
+		    txt1.find_first_not_of(" \t\r\n") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step9 forged cbSize EMF XLS unexpected output: " << txt1 << "\n";
+			return 1;
+		}
+
+		// 9.4b Valid cbSize=64 with corrupt deflate bytes (exercises inflateInit + inflate failure + ZlibStreamGuard)
+		std::string xls_corrupt = make_bad_emf_xls(64U, std::string("\x78\x9c\xff\xff\x00\x00\xde\xad", 8));
+		std::string txt2;
+		if (!ex.processFile(xls_corrupt.data(), xls_corrupt.size(), txt2) ||
+		    txt2.find_first_not_of(" \t\r\n") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step9 corrupt zlib EMF XLS unexpected output: " << txt2 << "\n";
+			return 1;
+		}
+
+		// 9.4c Declared cbSize=8 smaller than actual compressed stream (128B zeroes) must stop at cbSize and reject
+		std::string big_zeros(128, '\0');
+		uLongf zlen = compressBound((uLong)big_zeros.size());
+		std::string zdata(zlen, '\0');
+		if (compress2(reinterpret_cast<Bytef*>(&zdata[0]), &zlen,
+		              reinterpret_cast<const Bytef*>(big_zeros.data()), (uLong)big_zeros.size(),
+		              Z_DEFAULT_COMPRESSION) != Z_OK)
+		{
+			std::cerr << "FAIL: Step9c compress2 failed\n";
+			return 1;
+		}
+		zdata.resize((size_t)zlen);
+		std::string xls_mismatch = make_bad_emf_xls(8U, zdata);
+		std::string txt3;
+		if (!ex.processFile(xls_mismatch.data(), xls_mismatch.size(), txt3) ||
+		    txt3.find_first_not_of(" \t\r\n") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step9 cbSize<actual EMF XLS unexpected output: " << txt3 << "\n";
 			return 1;
 		}
 	}

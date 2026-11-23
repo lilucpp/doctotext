@@ -104,6 +104,18 @@ namespace doctotext
 	                           EmbeddedExtractionContext& ctx,
 	                           std::string& out_text);
 
+	/// Scans an EMF metafile buffer for EMR_COMMENT_MULTIFORMATS embedded PDFs and extracts text.
+	bool extractEmfEmbeddedObjects(const unsigned char* data,
+	                                 size_t size,
+	                                 const std::string& hint_name,
+	                                 EmbeddedExtractionContext& ctx,
+	                                 std::string& out_text);
+
+	/// Scans an OfficeArt DrawingGroup (MSODRAWINGGROUP) buffer for EMF BLIPs containing embedded PDFs.
+	bool extractOfficeArtDrawingEmbeddings(const std::vector<unsigned char>& dgg_data,
+	                                       EmbeddedExtractionContext& ctx,
+	                                       std::string& out_text);
+
 	/// Dispatches an arbitrary embedded container or file buffer (detecting OLE2 wrapper containers vs direct formats).
 	bool extractFromEmbeddedContainerBuffer(const unsigned char* data,
 	                                        size_t size,
