@@ -2,8 +2,10 @@
 #include "../build/formatting_style.h"
 #include "../build/metadata.h"
 #include "../build/plain_text_extractor.h"
+#include "../src/doc_parser.h"
 #include "../src/doctotext_unzip.h"
 #include "../src/pdf_parser.h"
+#include "../src/ppt_parser.h"
 #include "../src/xls_parser.h"
 #include "../src/xlsb_parser.h"
 
@@ -2265,6 +2267,135 @@ static int test_step12_rtf_objdata_charts_numbers()
 		    out.find("LIT_A\tLIT_B\n99") == std::string::npos)
 		{
 			std::cerr << "FAIL: Step13 XLSX chart/strLit/numLit mismatch: " << out << "\n";
+			return 1;
+		}
+
+		// 5g. BIFF8 XLS TXO (0x1B6) textbox extraction (8-bit compressed & UTF-16LE, ignoring cbRuns CONTINUE)
+		auto push_rec_biff = [](std::string& dst, uint16_t type, const std::string& body) {
+			push_u16_le(dst, type);
+			push_u16_le(dst, (uint16_t)body.size());
+			dst += body;
+		};
+		std::string wb;
+		std::string bof;
+		push_u16_le(bof, 0x0600); push_u16_le(bof, 0x0010);
+		for (int z = 0; z < 12; ++z) bof.push_back('\0');
+		push_rec_biff(wb, 0x0809, bof);
+		std::string txo1(18, '\0');
+		const std::string t1_ascii = "XLS_TXO_ASCII_OK";
+		txo1[10] = static_cast<char>(t1_ascii.size() & 0xFF);
+		txo1[12] = 8; // cbRuns
+		push_rec_biff(wb, 0x01B6, txo1);
+		push_rec_biff(wb, 0x003C, std::string(1, '\0') + t1_ascii);
+		push_rec_biff(wb, 0x003C, std::string(8, '\x41')); // formatting runs MUST NOT leak into text
+
+		std::string txo2(18, '\0');
+		txo2[10] = 3; // 3 UTF-16LE chars
+		txo2[12] = 8;
+		push_rec_biff(wb, 0x01B6, txo2);
+		std::string u16_cont(1, '\x01');
+		push_u16_le(u16_cont, 0x6771u); // 東
+		push_u16_le(u16_cont, 0x4EACu); // 京
+		push_u16_le(u16_cont, 0x0021u); // !
+		push_rec_biff(wb, 0x003C, u16_cont);
+		push_rec_biff(wb, 0x003C, std::string(8, '\x42'));
+		push_rec_biff(wb, 0x000A, "");
+
+		OleSpecNode txo_root;
+		txo_root.name = "Root Entry";
+		txo_root.is_storage = true;
+		txo_root.children.push_back({"Workbook", false, wb, {}});
+		std::string txo_xls = build_ole2_from_tree(txo_root);
+		if (!ex.processFile(txo_xls.data(), txo_xls.size(), out) ||
+		    out.find("XLS_TXO_ASCII_OK") == std::string::npos ||
+		    out.find("\xE6\x9D\xB1\xE4\xBA\xAC!") == std::string::npos ||
+		    out.find("AAAAAAAA") != std::string::npos ||
+		    out.find("BBBBBBBB") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 XLS TXO textbox mismatch: " << out << "\n";
+			return 1;
+		}
+
+		// 5h. DOC EQ phonetic field parsing edge cases
+		if (doctotext::extract_doc_eq_field_text("\\o\\ad(\\s\\up 10(\xE3\x81\xA8\xE3\x81\x86\xE3\x81\x8D\xE3\x82\x87\xE3\x81\x86),\xE6\x9D\xB1\xE4\xBA\xAC)") != "\xE6\x9D\xB1\xE4\xBA\xAC" ||
+		    doctotext::extract_doc_eq_field_text("\\o\\ad(\\s\\up 10(r1),A)\\o\\ad(\\s\\up 10(r2),B)") != "AB" ||
+		    doctotext::extract_doc_eq_field_text("prefix \\o(\\s\\up 10(ruby),base) suffix") != "prefix base suffix" ||
+		    doctotext::extract_doc_eq_field_text("\\over(a,b)") != "\\over(a,b)" ||
+		    doctotext::extract_doc_eq_field_text("\\o(\\s\\up 10(a),x\\)y\\,z)") != "x)y,z" ||
+		    doctotext::extract_doc_eq_field_text("\\o(a,\\o(\\s\\up 10(ruby),b))") != "ab" ||
+		    doctotext::extract_doc_eq_field_text("\\o(a,\\f(1,2))").find("\\f(") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 DOC EQ field extraction mismatch\n";
+			return 1;
+		}
+
+		// 5i. BIFF8 XLS TXO UTF-16LE split surrogate, Mac CR newline, Latin-1 (under CODEPAGE 1200), & ANSI DBCS (CODEPAGE 936)
+		std::string wb2;
+		push_rec_biff(wb2, 0x0809, bof);
+		std::string cp1200;
+		push_u16_le(cp1200, 1200);
+		push_rec_biff(wb2, 0x0042, cp1200);
+		// Split U+1F600 (D83D DE00) across two CONTINUEs + Mac '\r' newline -> \n + Latin-1 0xE9 ('é')
+		std::string txo_u16(18, '\0');
+		txo_u16[10] = 5; // D83D, DE00, 'A', '\r', 'B' (5 UTF-16 code units)
+		push_rec_biff(wb2, 0x01B6, txo_u16);
+		std::string c1(1, '\x01');
+		push_u16_le(c1, 0xD83Du);
+		push_rec_biff(wb2, 0x003C, c1);
+		std::string c2(1, '\x01');
+		push_u16_le(c2, 0xDE00u);
+		push_u16_le(c2, 0x0041u);
+		push_u16_le(c2, 0x000Du);
+		push_u16_le(c2, 0x0042u);
+		push_rec_biff(wb2, 0x003C, c2);
+
+		// Latin-1 compressed 8-bit under CODEPAGE 1200: "caf\xE9" + Mac '\r' + "end"
+		std::string txo_latin1(18, '\0');
+		txo_latin1[10] = 8;
+		push_rec_biff(wb2, 0x01B6, txo_latin1);
+		push_rec_biff(wb2, 0x003C, std::string(1, '\0') + "caf\xE9\rend");
+
+		// Explicit DBCS CODEPAGE 936 ("中文") compressed 8-bit TXO (also left un-EOF'd to test post-loop flushTxoText)
+		std::string cp936;
+		push_u16_le(cp936, 936);
+		push_rec_biff(wb2, 0x0042, cp936);
+		std::string txo_gbk(18, '\0');
+		txo_gbk[10] = 4;
+		push_rec_biff(wb2, 0x01B6, txo_gbk);
+		push_rec_biff(wb2, 0x003C, std::string(1, '\0') + "\xD6\xD0\xCE\xC4");
+
+		OleSpecNode txo_root2;
+		txo_root2.name = "Root Entry";
+		txo_root2.is_storage = true;
+		txo_root2.children.push_back({"Workbook", false, wb2, {}});
+		std::string txo_xls2 = build_ole2_from_tree(txo_root2);
+		std::string out2;
+		if (!ex.processFile(txo_xls2.data(), txo_xls2.size(), out2) ||
+		    out2.find("\xF0\x9F\x98\x80" "A\nB") == std::string::npos ||
+		    out2.find("caf\xC3\xA9\nend") == std::string::npos ||
+		    out2.find("\xE4\xB8\xAD\xE6\x96\x87") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 XLS TXO edge cases mismatch: " << out2 << "\n";
+			return 1;
+		}
+
+		// 5j. PPTParser / ThreadSafeOLEStreamReader exact-EOF sector boundary (4096 B) vs truncated FAT
+		std::string ppt_stream;
+		push_u16_le(ppt_stream, 0x0000);
+		push_u16_le(ppt_stream, 0x03EA); // RT_END_DOCUMENT_ATOM
+		push_u32_le(ppt_stream, 4088);
+		ppt_stream.append(4088, '\0');
+		OleSpecNode ppt_root;
+		ppt_root.name = "Root Entry";
+		ppt_root.is_storage = true;
+		ppt_root.children.push_back({"PowerPoint Document", false, ppt_stream, {}});
+		std::string empty_ppt_ole = build_ole2_from_tree(ppt_root);
+		PPTParser ppt_parser(empty_ppt_ole.data(), empty_ppt_ole.size());
+		FormattingStyle ppt_fmt;
+		std::string ppt_text = ppt_parser.plainText(ppt_fmt);
+		if (!ppt_parser.isPPT() || ppt_parser.error() || !ppt_text.empty())
+		{
+			std::cerr << "FAIL: Step13 PPT sector-boundary EOF failed: error=" << ppt_parser.error() << "\n";
 			return 1;
 		}
 	}

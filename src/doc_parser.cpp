@@ -93,6 +93,7 @@ enum FieldType
 {
 	FLT_NONE = 0,
 	FLT_FILLIN = 0x27,
+	FLT_EQ = 0x31,
 	FLT_EMBED = 0x3A,
 	FLT_HYPERLINK = 0x58
 };
@@ -483,6 +484,182 @@ static std::string format_comment(const std::string& author, const std::string& 
 	return comment;
 }
 
+static bool isEqSwitchBoundary(unsigned short c)
+{
+	return c == '(' || c == '\\' || c == ' ' || c == '\t';
+}
+
+static bool skipEqSwitchHeader(const UString& params, int start, int* out_paren_idx)
+{
+	int len = params.length();
+	int j = start;
+	if (j < len && !isEqSwitchBoundary(params[j].unicode()))
+		return false;
+	bool expect_switch_name = false;
+	while (j < len)
+	{
+		unsigned short c = params[j].unicode();
+		if (c == '(')
+		{
+			*out_paren_idx = j;
+			return true;
+		}
+		if (c == '\\')
+		{
+			expect_switch_name = true;
+			++j;
+			continue;
+		}
+		if (expect_switch_name && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
+		{
+			++j;
+			continue;
+		}
+		if (c == ' ' || c == '\t')
+		{
+			expect_switch_name = false;
+			++j;
+			continue;
+		}
+		break;
+	}
+	return false;
+}
+
+static bool splitBalancedEqArgs(const UString& params, int open_paren_idx, std::vector<UString>* out_args, int* out_end_idx)
+{
+	int len = params.length();
+	int depth = 1;
+	int arg_start = open_paren_idx + 1;
+	int k = open_paren_idx + 1;
+	bool q = false;
+	for (; k < len && depth > 0; ++k)
+	{
+		unsigned short c = params[k].unicode();
+		if (c == '\\' && k + 1 < len)
+		{
+			unsigned short next = params[k + 1].unicode();
+			if (next == '\\' || next == '(' || next == ')' || next == ',' || next == '"')
+			{
+				++k;
+				continue;
+			}
+		}
+		if (c == '"')
+			q = !q;
+		else if (!q)
+		{
+			if (c == '(')
+				++depth;
+			else if (c == ')')
+			{
+				--depth;
+				if (depth == 0)
+				{
+					out_args->push_back(params.substr(arg_start, k - arg_start));
+					*out_end_idx = k;
+					return true;
+				}
+			}
+			else if (c == ',' && depth == 1)
+			{
+				out_args->push_back(params.substr(arg_start, k - arg_start));
+				arg_start = k + 1;
+			}
+		}
+	}
+	if (arg_start < len)
+		out_args->push_back(params.substr(arg_start, len - arg_start));
+	*out_end_idx = len - 1;
+	return false;
+}
+
+static UString trimEqSpaces(const UString& s)
+{
+	int start = 0;
+	int end = s.length();
+	while (start < end && (s[start].unicode() == ' ' || s[start].unicode() == '\t'))
+		++start;
+	while (end > start && (s[end - 1].unicode() == ' ' || s[end - 1].unicode() == '\t'))
+		--end;
+	return (end > start) ? s.substr(start, end - start) : UString();
+}
+
+static UString extractEqFieldText(const UString& params)
+{
+	// Extract readable text from Word EQ fields (including \o(\s\up 10(ruby),base) phonetic guides)
+	int len = params.length();
+	UString result;
+	bool in_quotes = false;
+	for (int i = 0; i < len; ++i)
+	{
+		unsigned short ch = params[i].unicode();
+		if (ch == '\\' && i + 1 < len)
+		{
+			unsigned short next = params[i + 1].unicode();
+			if (next == '\\' || next == '(' || next == ')' || next == ',' || next == '"')
+			{
+				result += UString(params[i + 1]);
+				++i;
+				continue;
+			}
+			if (!in_quotes && ((next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z')))
+			{
+				int open_paren = -1;
+				if (skipEqSwitchHeader(params, i + 2, &open_paren))
+				{
+					std::vector<UString> args;
+					int end_idx = len - 1;
+					splitBalancedEqArgs(params, open_paren, &args, &end_idx);
+					const bool is_overstrike = (next == 'o' || next == 'O');
+					const bool is_displace = (next == 'd' || next == 'D');
+					UString extracted;
+					if (!is_displace)
+					{
+						for (size_t a = 0; a < args.size(); ++a)
+						{
+							UString trimmed = trimEqSpaces(args[a]);
+							if (trimmed.isEmpty())
+								continue;
+							if (is_overstrike && trimmed.length() >= 2 && trimmed[0].unicode() == '\\' &&
+							    (trimmed[1].unicode() == 's' || trimmed[1].unicode() == 'S') &&
+							    (trimmed.length() == 2 || isEqSwitchBoundary(trimmed[2].unicode())))
+							{
+								continue;
+							}
+							UString piece = trimEqSpaces(extractEqFieldText(trimmed));
+							if (!piece.isEmpty())
+							{
+								if (!is_overstrike && !extracted.isEmpty())
+									extracted += UString(" ");
+								extracted += piece;
+							}
+						}
+					}
+					result += extracted;
+					i = end_idx;
+					continue;
+				}
+			}
+		}
+		if (ch == '"')
+		{
+			in_quotes = !in_quotes;
+			continue;
+		}
+		result += UString(params[i]);
+	}
+	return trimEqSpaces(result);
+}
+
+namespace doctotext
+{
+	std::string extract_doc_eq_field_text(const std::string& utf8_params)
+	{
+		return ustring_to_string(extractEqFieldText(utf8_to_ustring(utf8_params)));
+	}
+}
+
 class DocToTextTextHandler : public TextHandler
 {
 	private:
@@ -659,14 +836,14 @@ class DocToTextTextHandler : public TextHandler
 		{
 			UString params = m_curr_state->field_params;
 			int i = 0;
-			while (i < params.length() && params[i] == ' ') i++;
+			while (i < params.length() && (params[i] == ' ' || params[i] == '\t')) i++;
 			UString field_type;
-			while (i < params.length() && params[i] != ' ')
+			while (i < params.length() && params[i] != ' ' && params[i] != '\t' && params[i] != '\\')
 			{
 				field_type += UString(params[i]);
 				i++;
 			}
-			while (i < params.length() && params[i] == ' ') i++;
+			while (i < params.length() && (params[i] == ' ' || params[i] == '\t')) i++;
 			params = params.substr(i);
 			UString res_text;
 			switch (m_curr_state->field_type)
@@ -676,6 +853,14 @@ class DocToTextTextHandler : public TextHandler
 					break;
 				case FLT_EMBED:
 					break;
+				case FLT_EQ:
+				{
+					UString trimmed_val = trimEqSpaces(m_curr_state->field_value);
+					res_text = !trimmed_val.isEmpty()
+						? m_curr_state->field_value
+						: extractEqFieldText(params);
+					break;
+				}
 				case FLT_HYPERLINK:
 					if (params[0] == '"')
 					{
@@ -692,6 +877,8 @@ class DocToTextTextHandler : public TextHandler
 			}
 			m_curr_state->field_type = FLT_NONE;
 			m_curr_state->field_part = FIELD_PART_NONE;
+			m_curr_state->field_params = "";
+			m_curr_state->field_value = "";
 			if (m_curr_state->table.in_table)
 				m_curr_state->table.curr_cell_text += ustring_to_string(res_text);
 			else if (m_curr_state->header_footer.in_header)

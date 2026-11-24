@@ -532,15 +532,33 @@ struct PPTParser::Implementation
 		std::stack<long> container_ends;
 		while (read_status)
 		{
-			int pos = reader.tell();
-			read_status = reader.read(&*rec.begin(), 8);
+			if (!reader.isValid())
+			{
+				*m_log_stream << reader.getLastError() + "\n";
+				m_error = true;
+				return;
+			}
 			if (oleEof(reader))
 			{
 				parseRecord(RT_END_DOCUMENT_ATOM, 0, 0, reader, text);
 				return;
 			}
-			if (rec.size() < 8)
+			int pos = reader.tell();
+			if (pos < 0 || static_cast<size_t>(pos) > reader.size() || reader.size() - static_cast<size_t>(pos) < 8)
+			{
+				*m_log_stream << "Warning: Read past EOF\n";
 				break;
+			}
+			read_status = reader.read(&*rec.begin(), 8);
+			if (!read_status || !reader.isValid())
+			{
+				if (!reader.isValid())
+				{
+					*m_log_stream << reader.getLastError() + "\n";
+					m_error = true;
+				}
+				break;
+			}
 			U16 rec_inst = getU16LittleEndian(rec.begin()) >> 4;
 			int rec_type = getU16LittleEndian(rec.begin() + 2);
 			U32 rec_len = getU32LittleEndian(rec.begin() + 4);

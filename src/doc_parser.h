@@ -9,6 +9,7 @@ namespace doctotext
 {
 	class FormattingStyle;
 	class Metadata;
+	std::string extract_doc_eq_field_text(const std::string& utf8_params);
 	typedef std::string (*ImageParserCallback)(const std::string& image_name,
 	                                          const char* image_buffer,
 	                                          size_t image_size,

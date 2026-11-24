@@ -205,9 +205,20 @@ bool ThreadSafeOLEStreamReader::seek(int offset, int whence)
 		impl->m_error = "New position is beyond stream size";
 		return false;
 	}
+	if (impl->m_sector_size == 0)
+	{
+		impl->m_valid = false;
+		impl->m_error = "Invalid sector size";
+		return false;
+	}
 	impl->m_position = new_position;
 	impl->m_current_sector = new_position / impl->m_sector_size;
 	impl->m_chunk_position = new_position - impl->m_current_sector * impl->m_sector_size;
+	if (new_position == impl->m_size && impl->m_chunk_position == 0 && impl->m_current_sector > 0)
+	{
+		--impl->m_current_sector;
+		impl->m_chunk_position = impl->m_sector_size;
+	}
 	if (impl->m_current_sector >= impl->m_sector_positions.size())
 	{
 		impl->m_valid = false;

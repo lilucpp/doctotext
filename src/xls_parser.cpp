@@ -82,6 +82,7 @@ enum RecordType
 	XLS_RK = 0x27E,
 	XLS_SST = 0xFC,
 	XLS_STRING = 0x207,
+	XLS_TXO = 0x1B6,
 	XLS_XF = 0xE0,
 	XLS_XF_BIFF4 = 0x443,
 	XLS_EOF = 0x0A
@@ -234,6 +235,11 @@ struct XLSParser::Implementation
 	int m_prev_rec_type;
 	int m_last_string_formula_row;
 	int m_last_string_formula_col;
+	size_t m_txo_chars_remaining;
+	unsigned int m_txo_pending_high_surrogate;
+	bool m_txo_pending_cr;
+	bool m_has_ansi_codepage;
+	std::string m_txo_text;
 	std::set<int> m_defined_num_format_ids;
 	int m_last_row, m_last_col;
 	doctotext::ImageParserCallback m_image_callback;
@@ -593,12 +599,224 @@ struct XLSParser::Implementation
 		return r;
 	}
 
+	void flushTxoText(std::string& text)
+	{
+		if (m_txo_pending_high_surrogate != 0)
+		{
+			m_txo_text += unichar_to_utf8(0xFFFD);
+			m_txo_pending_high_surrogate = 0;
+		}
+		if (m_txo_pending_cr)
+		{
+			m_txo_pending_cr = false;
+		}
+		if (!m_txo_text.empty())
+		{
+			if (!text.empty() && text[text.size() - 1] != '\n')
+				text.push_back('\n');
+			text += m_txo_text;
+			if (text[text.size() - 1] != '\n')
+				text.push_back('\n');
+			m_txo_text.clear();
+		}
+		m_txo_chars_remaining = 0;
+	}
+
+	void appendTxoAsciiOrAnsiRun(const std::string& raw_chunk)
+	{
+		if (raw_chunk.empty())
+			return;
+		bool has_non_ascii = false;
+		for (size_t i = 0; i < raw_chunk.size(); ++i)
+		{
+			if (static_cast<unsigned char>(raw_chunk[i]) >= 0x80u)
+			{
+				has_non_ascii = true;
+				break;
+			}
+		}
+		if (!has_non_ascii)
+		{
+			m_txo_text += raw_chunk;
+			return;
+		}
+		if (m_has_ansi_codepage)
+		{
+			TextConverter tc(m_codepage);
+			std::string converted = ustring_to_string(tc.convert(raw_chunk));
+			if (!converted.empty())
+			{
+				m_txo_text += converted;
+				return;
+			}
+		}
+		// BIFF8 compressed 8-bit TXO stores Latin-1 code points U+0000..U+00FF (high byte 0x00)
+		for (size_t i = 0; i < raw_chunk.size(); ++i)
+		{
+			unsigned char ch = static_cast<unsigned char>(raw_chunk[i]);
+			if (ch < 0x80u)
+				m_txo_text.push_back(static_cast<char>(ch));
+			else
+				m_txo_text += unichar_to_utf8(ch);
+		}
+	}
+
+	void appendTxoContinue(const std::vector<unsigned char>& rec, std::string& text)
+	{
+		if (m_txo_chars_remaining == 0 || rec.size() < 2)
+		{
+			m_txo_chars_remaining = 0;
+			flushTxoText(text);
+			return;
+		}
+		bool unicode = (rec[0] & 0x01u) != 0;
+		size_t pos = 1;
+		if (unicode)
+		{
+			while (m_txo_chars_remaining > 0 && pos < rec.size())
+			{
+				if (rec.size() - pos < 2)
+				{
+					// Malformed/truncated odd-byte UTF-16LE CONTINUE: do not consume subsequent run CONTINUE records
+					m_txo_chars_remaining = 0;
+					break;
+				}
+				unsigned int uc = static_cast<unsigned int>(rec[pos]) |
+				                  (static_cast<unsigned int>(rec[pos + 1]) << 8);
+				pos += 2;
+				--m_txo_chars_remaining;
+
+				if (m_txo_pending_high_surrogate != 0)
+				{
+					if ((uc & 0xFC00u) == 0xDC00u)
+					{
+						if (m_txo_pending_cr)
+						{
+							m_txo_text.push_back('\n');
+							m_txo_pending_cr = false;
+						}
+						unsigned int combined = (m_txo_pending_high_surrogate << 16) | uc;
+						m_txo_pending_high_surrogate = 0;
+						m_txo_text += unichar_to_utf8(combined);
+						continue;
+					}
+					if (m_txo_pending_cr)
+					{
+						m_txo_text.push_back('\n');
+						m_txo_pending_cr = false;
+					}
+					m_txo_text += unichar_to_utf8(0xFFFD);
+					m_txo_pending_high_surrogate = 0;
+				}
+
+				if (uc == '\r')
+				{
+					if (m_txo_pending_cr)
+						m_txo_text.push_back('\n');
+					m_txo_pending_cr = true;
+					continue;
+				}
+				if (m_txo_pending_cr)
+				{
+					if (uc != '\n')
+						m_txo_text.push_back('\n');
+					m_txo_pending_cr = false;
+				}
+				if (uc == 0)
+					continue;
+
+				if ((uc & 0xFC00u) == 0xD800u)
+				{
+					if (m_txo_chars_remaining > 0 && rec.size() - pos >= 2)
+					{
+						unsigned int uc2 = static_cast<unsigned int>(rec[pos]) |
+						                   (static_cast<unsigned int>(rec[pos + 1]) << 8);
+						if ((uc2 & 0xFC00u) == 0xDC00u)
+						{
+							pos += 2;
+							--m_txo_chars_remaining;
+							m_txo_text += unichar_to_utf8((uc << 16) | uc2);
+						}
+						else
+						{
+							m_txo_text += unichar_to_utf8(0xFFFD);
+						}
+					}
+					else if (m_txo_chars_remaining > 0 && pos == rec.size())
+					{
+						m_txo_pending_high_surrogate = uc;
+					}
+					else
+					{
+						m_txo_text += unichar_to_utf8(0xFFFD);
+						if (m_txo_chars_remaining > 0 && rec.size() - pos == 1)
+							m_txo_chars_remaining = 0;
+					}
+				}
+				else if ((uc & 0xFC00u) == 0xDC00u)
+				{
+					m_txo_text += unichar_to_utf8(0xFFFD);
+				}
+				else
+				{
+					m_txo_text += unichar_to_utf8(uc);
+				}
+			}
+		}
+		else
+		{
+			if (m_txo_pending_high_surrogate != 0)
+			{
+				if (m_txo_pending_cr)
+				{
+					m_txo_text.push_back('\n');
+					m_txo_pending_cr = false;
+				}
+				m_txo_text += unichar_to_utf8(0xFFFD);
+				m_txo_pending_high_surrogate = 0;
+			}
+			std::string run_chunk;
+			run_chunk.reserve(std::min<size_t>(m_txo_chars_remaining, rec.size() - pos));
+			while (m_txo_chars_remaining > 0 && pos < rec.size())
+			{
+				unsigned char ch = rec[pos++];
+				--m_txo_chars_remaining;
+				if (ch == '\r')
+				{
+					appendTxoAsciiOrAnsiRun(run_chunk);
+					run_chunk.clear();
+					if (m_txo_pending_cr)
+						m_txo_text.push_back('\n');
+					m_txo_pending_cr = true;
+					continue;
+				}
+				if (m_txo_pending_cr)
+				{
+					if (ch != '\n')
+					{
+						appendTxoAsciiOrAnsiRun(run_chunk);
+						run_chunk.clear();
+						m_txo_text.push_back('\n');
+					}
+					m_txo_pending_cr = false;
+				}
+				if (ch != 0)
+					run_chunk.push_back(static_cast<char>(ch));
+			}
+			appendTxoAsciiOrAnsiRun(run_chunk);
+		}
+		if (m_txo_chars_remaining == 0)
+			flushTxoText(text);
+	}
+
 	bool processRecord(int rec_type, const std::vector<unsigned char>& rec, std::string& text)
 	{
 		if (m_verbose_logging)
 			*m_log_stream << std::hex << "record=0x" << rec_type << std::endl;
 		if (rec_type != XLS_CONTINUE && m_prev_rec_type == XLS_SST)
 			parseSharedStringTable(m_shared_string_table_buf);
+		if (rec_type != XLS_CONTINUE && (m_txo_chars_remaining > 0 || !m_txo_text.empty()))
+			flushTxoText(text);
 		switch (rec_type)
 		{
 			case XLS_BLANK:
@@ -627,16 +845,30 @@ struct XLSParser::Implementation
 				{
 					int codepage = getU16LittleEndian(rec.begin());
 					if (codepage == 1200)
+					{
+						m_has_ansi_codepage = false;
 						break;
+					}
 					else if (codepage == 367)
+					{
 						m_codepage = "ASCII";
+						m_has_ansi_codepage = false;
+					}
 					else
+					{
 						m_codepage = "cp" + int2string(codepage);
+						m_has_ansi_codepage = true;
+					}
 				}
 				break;
 			}
 			case XLS_CONTINUE:
 			{
+				if (m_txo_chars_remaining > 0)
+				{
+					appendTxoContinue(rec, text);
+					return true;
+				}
 				if (m_prev_rec_type != XLS_SST)
 					return true; // do not change m_prev_rec_type
 				m_shared_string_table_buf.reserve(m_shared_string_table_buf.size() + rec.size());
@@ -645,6 +877,17 @@ struct XLSParser::Implementation
 				if (m_verbose_logging)
 					*m_log_stream << "XLS_CONTINUE record for XLS_SST found. Index: " << m_shared_string_table_record_sizes.size() - 1 << ", size:" << rec.size() << ".\n";
 				return true;
+			}
+			case XLS_TXO:
+			{
+				if (rec.size() >= 14)
+				{
+					m_txo_chars_remaining = getU16LittleEndian(rec.begin() + 10);
+					m_txo_pending_high_surrogate = 0;
+					m_txo_pending_cr = false;
+					m_txo_text.clear();
+				}
+				break;
 			}
 			case XLS_DATE_1904:
 				m_date_shift = 24107.0; 
@@ -999,6 +1242,11 @@ struct XLSParser::Implementation
 		m_prev_rec_type = 0;
 		m_last_string_formula_row = -1;
 		m_last_string_formula_col = -1;
+		m_txo_chars_remaining = 0;
+		m_txo_pending_high_surrogate = 0;
+		m_txo_pending_cr = false;
+		m_has_ansi_codepage = false;
+		m_txo_text.clear();
 		m_defined_num_format_ids.clear();
 		m_last_row = 0;
 		m_last_col = 0;
@@ -1198,6 +1446,7 @@ struct XLSParser::Implementation
 			else
 				eof_rec_found = false;	
 		}
+		flushTxoText(text);
 		if (!dgg_buf.empty() && m_image_callback)
 		{
 			extract_xls_drawing_images(dgg_buf, text);
