@@ -56,7 +56,7 @@ Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlow
 | **Microsoft Office (Legacy)** | `doc`, `xls`, `xlsb`, `ppt` | Native OLE2 / BIFF | Yes | Yes |
 | **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | Native XML / Unzip | Yes | Yes |
 | **OpenDocument (ODF)** | `odt`, `ods`, `odp`, `odg`, `fodt`, `fods`, `fodp` | Native XML / ZIP / Flat | Yes | Yes |
-| **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | Native XML & `.iwa` (Snappy/Protobuf) | - | Text only (09 & 13/18+) |
+| **Apple iWork** | `pages`, `numbers`, `key` | Native XML & `.iwa` (Snappy/Protobuf) | - | Text only (09 & 13/18+) |
 | **Portable Document Format** | `pdf` (Typeset text & Scans) | Native PDFParser | Yes (2D In-Place & Scan Fallback) | Yes |
 | **Web & Rich Text** | `html`, `htm`, `rtf` | HTML / RTF Parser | Embedded RTF OLE | Headless HTML fragments, Hyperlinks |
 | **Email Message** | `eml` (RFC 822) | Mimetic MIME Parser | - | Headers & Parts |
@@ -65,7 +65,7 @@ Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlow
 
 | Category | Supported Formats | Detection Method |
 | :--- | :--- | :--- |
-| **Raster Images** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | Magic byte header sniffing & file extension |
+| **Raster Images** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | Magic byte sniffing (`png`, `jpg`/`jfif`, `webp`, `bmp`, `tiff`, `gif`) & file extension (`pnm`) |
 
 ### Plain Text, Source Code & Data (Explicit `--txt` / `PARSER_TXT`)
 

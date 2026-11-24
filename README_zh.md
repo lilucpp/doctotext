@@ -56,7 +56,7 @@ DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 
 | **Microsoft Office 经典二进制** | `doc`, `xls`, `xlsb`, `ppt` | 原生 OLE2 / BIFF | 支持 | 支持 |
 | **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | 原生 XML / Unzip | 支持 | 支持 |
 | **OpenDocument (ODF)** | `odt`, `ods`, `odp`, `odg`, `fodt`, `fods`, `fodp` | 原生 XML / ZIP / Flat | 支持 | 支持 |
-| **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | 原生 XML 与 `.iwa` (Snappy/Protobuf) | - | 仅文本（支持 09 与 13/18+） |
+| **Apple iWork** | `pages`, `numbers`, `key` | 原生 XML 与 `.iwa` (Snappy/Protobuf) | - | 仅文本（支持 09 与 13/18+） |
 | **便携式文档格式 (PDF)** | `pdf` (排版文字与扫描件) | 原生 PDFParser | 支持（几何原位注入与扫描兜底） | 支持 |
 | **网页与富文本** | `html`, `htm`, `rtf` | HTML / RTF Parser | 支持内嵌 RTF OLE | 支持裸 HTML 片段与超链接 |
 | **电子邮件格式 (Email)** | `eml` (RFC 822) | Mimetic MIME Parser | - | 邮件头与附件 |
@@ -65,7 +65,7 @@ DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 
 
 | 类别 | 支持格式 | 识别机制 |
 | :--- | :--- | :--- |
-| **光栅图像** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | 文件头魔数嗅探与扩展名结合 |
+| **光栅图像** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | 文件头魔数嗅探（`png`/`jpg`/`jfif`/`webp`/`bmp`/`tiff`/`gif`）与扩展名识别（`pnm`） |
 
 ### 纯文本、编程源码与数据（显式 `--txt` / `PARSER_TXT`）
 

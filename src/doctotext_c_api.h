@@ -1,3 +1,6 @@
+#ifndef DOCTOTEXT_C_API_H
+#define DOCTOTEXT_C_API_H
+
 #include <stdio.h>
 #include <time.h>
 
@@ -6,10 +9,18 @@ extern "C"
 {
 #endif
 
-#define DOCTOTEXT_VERSION_MAJOR 5
-#define DOCTOTEXT_VERSION_MINOR 1
-#define DOCTOTEXT_VERSION_PATCH 5
-#define DOCTOTEXT_VERSION "5.1.5"
+#ifndef DOCTOTEXT_VERSION_MAJOR
+	#define DOCTOTEXT_VERSION_MAJOR 5
+#endif
+#ifndef DOCTOTEXT_VERSION_MINOR
+	#define DOCTOTEXT_VERSION_MINOR 1
+#endif
+#ifndef DOCTOTEXT_VERSION_PATCH
+	#define DOCTOTEXT_VERSION_PATCH 5
+#endif
+#ifndef DOCTOTEXT_VERSION
+	#define DOCTOTEXT_VERSION "5.1.5"
+#endif
 
 #ifndef DOCTOTEXT_CALL
 	#if defined(_WIN32) && !defined(_WIN64)
@@ -682,3 +693,5 @@ const char* DOCTOTEXT_CALL doctotext_detect_file_encoding(const char* file_name)
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* DOCTOTEXT_C_API_H */

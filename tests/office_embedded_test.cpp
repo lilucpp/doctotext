@@ -2498,12 +2498,63 @@ static int test_step12_rtf_objdata_charts_numbers()
 			return 1;
 		}
 
+		// 65539-byte boundary straddle: "</p>" starts at byte 65535 and ends at 65538
+		const std::string straddle_close_p = "<p>" + std::string(65521, 'A') + "StraddleEnd</p>";
+		std::string straddle_close_out;
+		if (straddle_close_p.size() != 65539 ||
+		    !ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, straddle_close_p.data(), straddle_close_p.size(), straddle_close_out) ||
+		    straddle_close_out.find("StraddleEnd") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b 65539-byte </p> boundary straddle failed\n";
+			return 1;
+		}
+
+		// 65537-byte boundary straddle: "/>" of "<br/>" splits across bytes 65535..65536
+		const std::string straddle_self_close = "<p>SelfCloseEdge" + std::string(65516, 'B') + "<br/>";
+		std::string straddle_self_out;
+		if (straddle_self_close.size() != 65537 ||
+		    !ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, straddle_self_close.data(), straddle_self_close.size(), straddle_self_out) ||
+		    straddle_self_out.find("SelfCloseEdge") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b 65537-byte /> boundary straddle failed\n";
+			return 1;
+		}
+
+		// Non-UTF-8 (GB18030/GBK) headless <p> fragment without <body> or <meta charset>
+		const std::string gbk_p =
+			"<p>\xd7\xa1\xb7\xbf\xb3\xc7\xcf\xe7\xbd\xa8\xc9\xe8\xb2\xbf\xb9\xd8\xd3\xda\xbf\xaa\xd5\xb9\xc2\xcc\xc9\xab\xc5\xa9\xb7\xbf\xbd\xa8\xc9\xe8\xb5\xc4\xcd\xa8\xd6\xaa\xa3\xac\xb4\xd9\xbd\xf8\xc5\xa9\xb4\xe5\xc2\xcc\xc9\xab\xbd\xa8\xd6\xfe\xb7\xa2\xd5\xb9\xa1\xa3&nbsp;</p>";
+		std::string gbk_out;
+		if (!ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, gbk_p.data(), gbk_p.size(), gbk_out) ||
+		    gbk_out.find("\xe4\xbd\x8f\xe6\x88\xbf\xe5\x9f\x8e\xe4\xb9\xa1\xe5\xbb\xba\xe8\xae\xbe\xe9\x83\xa8") == std::string::npos ||
+		    gbk_out.find("&nbsp;") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b headless GBK <p> charset detection failed: " << gbk_out << "\n";
+			return 1;
+		}
+
+		// Valid XHTML with <?xml ...?> prolog must still match PARSER_HTML
+		const std::string valid_xhtml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><p>XhtmlOk</p></html>";
+		std::string xhtml_out;
+		if (!ex.processFile(valid_xhtml.data(), valid_xhtml.size(), xhtml_out) ||
+		    xhtml_out.find("XhtmlOk") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b valid XHTML failed: " << xhtml_out << "\n";
+			return 1;
+		}
+
 		// Negative guards for HTMLParser::isHTML()
 		const std::vector<std::string> non_html_cases = {
 			"<?xml version=\"1.0\"?><p>XmlNotHtml</p>",
+			"<?xml version=\"1.0\"?><!-- <html> --><office:document>NotHtml</office:document>",
+			"<?xml version=\"1.0\"?><doc><![CDATA[<html>]]></doc>",
+			"<article><title>DocBook</title></article>",
+			"<section><title>DocBook</title></section>",
 			"<person>XmlTagNotHtml</person>",
 			std::string("<p>Lucene\0\0Binary</p>", 21),
-			"<p>Unclosed fragment without closing slash"
+			"<p>Unclosed fragment without closing slash",
+			"<p>ratio </ 5",
+			"<pre>cmd 2>&1 /dev/null />",
+			"<p>only comment<!-- </p> -->"
 		};
 		for (size_t i = 0; i < non_html_cases.size(); ++i)
 		{

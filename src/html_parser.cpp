@@ -254,6 +254,39 @@ class DocToTextSaxParser : public ParserSax
 			}
 		}
 
+		void ensureCharsetDetected()
+		{
+			if (!m_charset.empty())
+				return;
+			if (!m_skip_decoding)
+			{
+				csd_t charset_detector = csd_open();
+				if (charset_detector == (csd_t)-1)
+				{
+					m_log_stream << "Warning: Could not create charset detector\n";
+				}
+				else
+				{
+					csd_consider(charset_detector, m_html_content.c_str(), m_html_content.length());
+					const char* res = csd_close(charset_detector);
+					if (res != NULL)
+					{
+						m_charset = std::string(res);
+						if (m_verbose_logging)
+							m_log_stream << "Could not found explicit information about encoding. Estimated encoding: " + m_charset + "\n";
+						createCharsetConverter();
+					}
+				}
+			}
+			// If we still don't know which encoding is used...
+			if (m_charset.empty())
+			{
+				if (m_verbose_logging)
+					m_log_stream << "Could not detect encoding. Document is assumed to be encoded in UTF-8\n";
+				m_charset = "UTF-8";
+			}
+		}
+
 		void parseStyleAttributes(const std::string& style, std::map<std::string, std::string>& attributes)
 		{
 			#warning TODO: I have not found similar function in htmlcxx, but my searches were perfunctory
@@ -554,6 +587,7 @@ class DocToTextSaxParser : public ParserSax
 				std::pair<bool, std::string> title = node.attribute("alt");
 				if (title.first)
 				{
+					ensureCharsetDetected();
 					convertToUtf8(title.second);
 					addTextToCurrBlock(title.second + "\n");
 				}
@@ -569,33 +603,7 @@ class DocToTextSaxParser : public ParserSax
 			else if (strcasecmp(node.tagName().c_str(), "body") == 0)
 			{
 				//if we still dont have an ancoding, we can try guess it.
-				if (m_charset.empty())
-				{
-					csd_t charset_detector = csd_open();
-					if (charset_detector == (csd_t)-1)
-					{
-						m_log_stream << "Warning: Could not create charset detector\n";
-					}
-					else
-					{
-						csd_consider(charset_detector, m_html_content.c_str(), m_html_content.length());
-						const char* res = csd_close(charset_detector);
-						if (res != NULL)
-						{
-							m_charset = std::string(res);
-							if (m_verbose_logging)
-								m_log_stream << "Could not found explicit information about encoding. Estimated encoding: " + m_charset + "\n";
-							createCharsetConverter();
-						}
-					}
-					//if we still dont know which encoding is used...
-					if (m_charset.empty())
-					{
-						if (m_verbose_logging)
-							m_log_stream << "Could not detect encoding. Document is assumed to be encoded in UTF-8\n";
-						m_charset = "UTF-8";
-					}
-				}
+				ensureCharsetDetected();
 			}
 			else if (strcasecmp(node.tagName().c_str(), "meta") == 0)
 			{
@@ -651,6 +659,18 @@ class DocToTextSaxParser : public ParserSax
 			if (m_in_title || m_in_script)
 				return;
 			std::string text = normalizeSpaces(node.text(), lastIsSpaceInCurrBlock());
+			if (m_charset.empty())
+			{
+				for (size_t i = 0; i < text.size(); ++i)
+				{
+					unsigned char ch = static_cast<unsigned char>(text[i]);
+					if (ch > ' ')
+					{
+						ensureCharsetDetected();
+						break;
+					}
+				}
+			}
 			convertToUtf8(text);
 			addTextToCurrBlock(text);
 		}
@@ -852,12 +872,40 @@ namespace
 		return true;
 	}
 
+	bool isAsciiAlpha(char ch)
+	{
+		unsigned char u = static_cast<unsigned char>(ch);
+		return (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z');
+	}
+
+	bool isHtmlTagNameChar(char ch)
+	{
+		unsigned char u = static_cast<unsigned char>(ch);
+		return isAsciiAlpha(ch) || (u >= '0' && u <= '9') || ch == '-' || ch == ':';
+	}
+
 	bool containsCaseInsensitiveHtmlOrDoctype(const std::string& content)
 	{
 		for (size_t i = 0; i < content.size(); ++i)
 		{
 			if (content[i] != '<')
 				continue;
+			if (asciiStartsWithIgnoreCase(content, i, "<!--", 4))
+			{
+				size_t end_comment = content.find("-->", i + 4);
+				if (end_comment == std::string::npos)
+					return false;
+				i = end_comment + 2;
+				continue;
+			}
+			if (asciiStartsWithIgnoreCase(content, i, "<![cdata[", 9))
+			{
+				size_t end_cdata = content.find("]]>", i + 9);
+				if (end_cdata == std::string::npos)
+					return false;
+				i = end_cdata + 2;
+				continue;
+			}
 			if (i + 5 < content.size() &&
 			    asciiStartsWithIgnoreCase(content, i + 1, "html", 4) &&
 			    isHtmlTagBoundary(content[i + 5]))
@@ -884,11 +932,14 @@ namespace
 
 	bool hasAnchoredHeadlessHtmlOpeningTag(const std::string& content, size_t* out_tag_pos)
 	{
+		// Deliberately exclude tags commonly used by headerless non-HTML XML (e.g. <section>, <article>, <title>).
 		static const char* const kHtmlLeadingTags[] = {
-			"head", "body", "meta", "title", "style", "script",
-			"p", "div", "table", "span", "section", "article",
+			"head", "body", "meta", "style", "script",
+			"p", "div", "table", "span",
 			"h1", "h2", "h3", "h4", "h5", "h6",
-			"ul", "ol", "dl", "blockquote", "pre", "center", "font"
+			"ul", "ol", "dl", "blockquote", "pre", "center", "font",
+			"main", "header", "footer", "nav", "aside", "form",
+			"br", "img", "strong", "b", "a"
 		};
 		size_t pos = 0;
 		if (content.size() >= 3 &&
@@ -898,7 +949,7 @@ namespace
 		{
 			pos = 3;
 		}
-		for (int comment_count = 0; comment_count < 32; ++comment_count)
+		for (int comment_count = 0; comment_count < 128; ++comment_count)
 		{
 			while (pos < content.size() && isAsciiWhitespace(content[pos]))
 				++pos;
@@ -931,7 +982,7 @@ namespace
 			return false;
 
 		const size_t open_gt = content.find('>', pos + 1);
-		if (open_gt == std::string::npos || open_gt - pos > 4096)
+		if (open_gt == std::string::npos || open_gt - pos > 16384)
 			return false;
 		if (out_tag_pos)
 			*out_tag_pos = pos;
@@ -940,8 +991,47 @@ namespace
 
 	bool hasHtmlClosingMarker(const std::string& content, size_t start_pos)
 	{
-		return content.find("</", start_pos) != std::string::npos ||
-		       content.find("/>", start_pos) != std::string::npos;
+		for (size_t i = start_pos; i < content.size(); ++i)
+		{
+			if (content[i] != '<')
+				continue;
+			if (asciiStartsWithIgnoreCase(content, i, "<!--", 4))
+			{
+				size_t end_comment = content.find("-->", i + 4);
+				if (end_comment == std::string::npos)
+					break;
+				i = end_comment + 2;
+				continue;
+			}
+			// Valid closing tag: </tagName ...>
+			if (i + 3 < content.size() && content[i + 1] == '/' && isAsciiAlpha(content[i + 2]))
+			{
+				size_t j = i + 3;
+				while (j < content.size() && isHtmlTagNameChar(content[j]))
+					++j;
+				while (j < content.size() && isAsciiWhitespace(content[j]))
+					++j;
+				if (j < content.size() && content[j] == '>')
+					return true;
+			}
+			// Valid self-closing HTML tag: <tagName .../> (not bare prose "cmd />")
+			if (i + 3 < content.size() && isAsciiAlpha(content[i + 1]))
+			{
+				size_t limit = std::min(content.size(), i + 4096);
+				for (size_t j = i + 2; j < limit; ++j)
+				{
+					if (content[j] == '<')
+						break;
+					if (content[j] == '>')
+					{
+						if (content[j - 1] == '/')
+							return true;
+						break;
+					}
+				}
+			}
+		}
+		return false;
 	}
 }
 
@@ -986,22 +1076,29 @@ bool HTMLParser::isHTML()
 		impl->m_data_stream->close();
 		return false;
 	}
-	if (hasHtmlClosingMarker(content, tag_pos + 1))
+	if (hasHtmlClosingMarker(content, tag_pos))
 	{
 		impl->m_data_stream->close();
 		return true;
 	}
-	// Large single-paragraph fragment (e.g. >64 KB before </p>): inspect tail slice without loading entire file.
+	// Large single-paragraph fragment (e.g. >64 KB before </p>): inspect overlapping tail slice without loading entire file.
 	if (size > probe_size)
 	{
-		const size_t tail_len = std::min<size_t>(size - probe_size, 4096);
+		const size_t kTailWindow = 4096;
+		const size_t tail_len = std::min(size, kTailWindow);
 		const size_t tail_offset = size - tail_len;
 		if (tail_offset <= static_cast<size_t>(std::numeric_limits<int>::max()) &&
 		    impl->m_data_stream->seek(static_cast<int>(tail_offset), SEEK_SET))
 		{
 			std::string tail(tail_len, '\0');
-			if (impl->m_data_stream->read(&tail[0], sizeof(unsigned char), tail_len) &&
-			    tail.find('\0') == std::string::npos &&
+			if (!impl->m_data_stream->read(&tail[0], sizeof(unsigned char), tail_len))
+			{
+				impl->m_data_stream->close();
+				*impl->m_log_stream << "Error reading file " << impl->m_file_name << ".\n";
+				impl->m_error = true;
+				return false;
+			}
+			if (tail.find('\0') == std::string::npos &&
 			    hasHtmlClosingMarker(tail, 0))
 			{
 				impl->m_data_stream->close();

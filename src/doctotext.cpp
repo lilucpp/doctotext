@@ -50,7 +50,12 @@ using namespace std;
 
 static void version()
 {
-	printf("DocToText v%s\nConverts DOC, XLS, PPT, RTF, ODF (ODT, ODS, ODP), OOXML (DOCX, XLSX, PPTX) and HTML documents to plain text\nCopyright (c) 2006-20112 SILVERCODERS(R)\nhttp://silvercoders.com\n", VERSION);
+	printf("DocToText v%s\n"
+		"Converts DOC, XLS, XLSB, PPT, RTF, ODF (ODT, ODS, ODP, ODG), OOXML (DOCX, XLSX, PPTX),\n"
+		"iWork (PAGES, NUMBERS, KEY), ODFXML, PDF, EML, HTML, and Images to plain text.\n"
+		"Copyright (c) 2006-2013 SILVERCODERS(R) (http://silvercoders.com)\n"
+		"Modernized and maintained by lithiumFlower (2020-2022) and lilucpp (2025-present)\n",
+		VERSION);
 }
 
 static void help()
@@ -88,6 +93,8 @@ static void help()
 	printf("--compact-whitespace\tcollapse excess whitespace and blank lines.\n");
 	printf("--parse-embedded\tenable parsing embedded files/objects (default).\n");
 	printf("--no-parse-embedded\tdisable parsing embedded files/objects.\n");
+	printf("--version, -V\tprint version information and exit.\n");
+	printf("--help, -h\tdisplay this help message and exit.\n");
 }
 
 int main(int argc, char* argv[])
@@ -100,6 +107,20 @@ int main(int argc, char* argv[])
 	{
 		help();
 		return EXIT_FAILURE;
+	}
+
+	for (int i = 1; i < argc; ++i)
+	{
+		if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0)
+		{
+			version();
+			return EXIT_SUCCESS;
+		}
+		if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+		{
+			help();
+			return EXIT_SUCCESS;
+		}
 	}
 
 	std::string arg;
@@ -118,9 +139,9 @@ int main(int argc, char* argv[])
 	bool verbose = false;
 	ofstream* log_stream = NULL;
 
-	for(int i = 1 ; i < argc ; i ++)
+	for (int i = 1; i + 1 < argc; ++i)
 	{
-		arg = argv[i-1];
+		arg = argv[i];
 
 		if (arg.find("--meta", 0) != -1)
 			extract_metadata = true;
