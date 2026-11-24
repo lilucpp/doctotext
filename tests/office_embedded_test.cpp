@@ -2399,6 +2399,63 @@ static int test_step12_rtf_objdata_charts_numbers()
 			std::cerr << "FAIL: Step13 PPT sector-boundary EOF failed: error=" << ppt_parser.error() << "\n";
 			return 1;
 		}
+
+		// 5k. OOXML DOCX alternate main document path via _rels/.rels (/word/document2.xml)
+		std::vector<std::pair<std::string, std::string> > alt_docx_entries = {
+			{"[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"utf-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>"},
+			{"_rels/.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"/word/external_decoy.xml\" TargetMode=\"External\" Id=\"rId0\"/><Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"/word/document2.xml\" Id=\"rId1\"/></Relationships>"},
+			{"word/_rels/document2.xml.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>"},
+			{"word/external_decoy.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>EXT_DECOY_SKIP</w:t></w:r></w:p></w:body></w:document>"},
+			{"word/document2.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>ALT_DOC_PATH_OK</w:t></w:r></w:p></w:body></w:document>"}
+		};
+		std::string alt_docx_buf = build_zip_from_entries(alt_docx_entries);
+		std::string alt_out;
+		if (!ex.processFile(alt_docx_buf.data(), alt_docx_buf.size(), alt_out) ||
+		    alt_out.find("ALT_DOC_PATH_OK") == std::string::npos ||
+		    alt_out.find("EXT_DECOY_SKIP") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 DOCX alternate document path mismatch: " << alt_out << "\n";
+			return 1;
+		}
+
+		// 5l. OOXML PPTX/XLSX alternate main document paths (ppt/presentation2.xml & xl/workbook2.xml)
+		std::vector<std::pair<std::string, std::string> > alt_pptx_entries = {
+			{"_rels/.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"/ppt/presentation2.xml\" Id=\"rId1\"/></Relationships>"},
+			{"ppt/presentation2.xml", "<p:presentation xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"/>"},
+			{"ppt/_rels/presentation2.xml.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/custom_slide.xml\" Id=\"rId1\"/></Relationships>"},
+			{"ppt/slides/custom_slide.xml", "<p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>ALT_PPTX_SLIDE_OK</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"}
+		};
+		std::string alt_pptx_buf = build_zip_from_entries(alt_pptx_entries);
+		std::string alt_pptx_out;
+		if (!ex.processFile(alt_pptx_buf.data(), alt_pptx_buf.size(), alt_pptx_out) ||
+		    alt_pptx_out.find("ALT_PPTX_SLIDE_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 PPTX alternate presentation path mismatch: " << alt_pptx_out << "\n";
+			return 1;
+		}
+		Metadata alt_pptx_meta;
+		if (!ex.extractMetadata(alt_pptx_buf.data(), alt_pptx_buf.size(), alt_pptx_meta) ||
+		    alt_pptx_meta.pageCount() != 1)
+		{
+			std::cerr << "FAIL: Step13 PPTX alternate pageCount mismatch: " << alt_pptx_meta.pageCount() << "\n";
+			return 1;
+		}
+
+		std::vector<std::pair<std::string, std::string> > alt_xlsx_entries = {
+			{"_rels/.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"/xl/workbook2.xml\" Id=\"rId1\"/></Relationships>"},
+			{"xl/workbook2.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>"},
+			{"xl/_rels/workbook2.xml.rels", "<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"/xl/custom_sharedStrings.xml\" Id=\"rId1\"/><Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/custom_sheet.xml\" Id=\"rId2\"/></Relationships>"},
+			{"xl/custom_sharedStrings.xml", "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><si><t>ALT_XLSX_CUSTOM_RELS_OK</t></si></sst>"},
+			{"xl/worksheets/custom_sheet.xml", "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c></row></sheetData></worksheet>"}
+		};
+		std::string alt_xlsx_buf = build_zip_from_entries(alt_xlsx_entries);
+		std::string alt_xlsx_out;
+		if (!ex.processFile(alt_xlsx_buf.data(), alt_xlsx_buf.size(), alt_xlsx_out) ||
+		    alt_xlsx_out.find("ALT_XLSX_CUSTOM_RELS_OK") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 XLSX alternate workbook path mismatch: " << alt_xlsx_out << "\n";
+			return 1;
+		}
 	}
 
 	std::cout << "PASS: Step 12 & 13 RTF/OOXML/iWork/XLS-TXO/DOC-EQ/PPT-EOF regression checks\n";

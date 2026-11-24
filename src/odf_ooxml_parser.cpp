@@ -67,20 +67,6 @@ static bool has_odf_encryption_manifest(const DocToTextUnzip& zipfile)
 	return manifest.find("encryption-data") != std::string::npos;
 }
 
-static string locate_main_file(const DocToTextUnzip& zipfile, std::ostream& log_stream)
-{
-	if (zipfile.exists("content.xml"))
-		return "content.xml";
-	if (zipfile.exists("word/document.xml"))
-		return "word/document.xml";
-	if (zipfile.exists("xl/workbook.xml"))
-		return "xl/workbook.xml";
-	if (zipfile.exists("ppt/presentation.xml"))
-		return "ppt/presentation.xml";
-	log_stream << "Error - no content.xml, no word/document.xml and no ppt/presentation.xml" << endl;
-	return "";
-}
-
 namespace
 {
 	xmlNodePtr findChildElementByLocalName(xmlNodePtr parent, const char* name)
@@ -223,7 +209,8 @@ namespace
 	{
 		if (rels_xml.find(type_suffix) == std::string::npos)
 			return;
-		XmlStream rel_stream(rels_xml, manage_xml_parser, xml_options);
+		XmlStream rel_stream(rels_xml, manage_xml_parser,
+		                     xml_options | XML_PARSE_NONET | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
 		if (!rel_stream)
 			return;
 		rel_stream.levelDown();
@@ -231,11 +218,35 @@ namespace
 		{
 			if (rel_stream.name() == "Relationship")
 			{
+				std::string tmode = rel_stream.attribute("TargetMode");
+				bool is_external = (tmode.size() == 8);
+				if (is_external)
+				{
+					const char* ext_str = "external";
+					for (size_t k = 0; k < 8; ++k)
+					{
+						if (std::tolower(static_cast<unsigned char>(tmode[k])) != ext_str[k])
+						{
+							is_external = false;
+							break;
+						}
+					}
+				}
+				if (is_external)
+				{
+					rel_stream.next();
+					continue;
+				}
 				std::string rtype = rel_stream.attribute("Type");
 				std::string rtarget = rel_stream.attribute("Target");
 				if (!rtarget.empty() && rtype.size() >= type_suffix.size() &&
 				    rtype.compare(rtype.size() - type_suffix.size(), type_suffix.size(), type_suffix) == 0)
 				{
+					for (size_t k = 0; k < rtarget.size(); ++k)
+					{
+						if (rtarget[k] == '\\')
+							rtarget[k] = '/';
+					}
 					std::string full_target = (rtarget[0] == '/') ? rtarget.substr(1) : (base_dir + rtarget);
 					out_targets.push_back(normalizeZipPath(full_target));
 				}
@@ -244,12 +255,133 @@ namespace
 		}
 	}
 
+	bool readBoundedZipXml(const DocToTextUnzip& zipfile, const std::string& path, std::string& out)
+	{
+		out.clear();
+		unsigned long entry_size = 0;
+		const int read_limit = static_cast<int>(doctotext::kMaxEmbedBytes + 1);
+		if (!zipfile.getFileSize(path, entry_size) || entry_size > doctotext::kMaxEmbedBytes)
+			return false;
+		if (!zipfile.read(path, &out, read_limit) || out.size() > doctotext::kMaxEmbedBytes)
+		{
+			out.clear();
+			return false;
+		}
+		return true;
+	}
+
 	std::string makeRelsPathForPart(const std::string& part_path, std::string& out_base_dir)
 	{
 		size_t last_slash = part_path.find_last_of('/');
 		out_base_dir = (last_slash == std::string::npos) ? "" : part_path.substr(0, last_slash + 1);
 		std::string name = (last_slash == std::string::npos) ? part_path : part_path.substr(last_slash + 1);
 		return out_base_dir + "_rels/" + name + ".rels";
+	}
+
+	std::string locate_main_file(const DocToTextUnzip& zipfile,
+	                             std::ostream& log_stream,
+	                             bool manage_xml_parser,
+	                             int xml_options)
+	{
+		if (zipfile.exists("content.xml"))
+			return "content.xml";
+		if (zipfile.exists("word/document.xml"))
+			return "word/document.xml";
+		if (zipfile.exists("xl/workbook.xml"))
+			return "xl/workbook.xml";
+		if (zipfile.exists("ppt/presentation.xml"))
+			return "ppt/presentation.xml";
+
+		// ECMA-376 allows package relationships (_rels/.rels) to specify an alternate main part (e.g. /word/document2.xml).
+		std::string pkg_rels;
+		if (readBoundedZipXml(zipfile, "_rels/.rels", pkg_rels))
+		{
+			std::vector<std::string> targets;
+			collectRelTargetsBySuffix(pkg_rels, "", "/officeDocument", manage_xml_parser, xml_options, targets);
+			for (size_t i = 0; i < targets.size(); ++i)
+			{
+				const std::string& t = targets[i];
+				// Skip binary OOXML main parts such as xl/workbook.bin (handled by XLSBParser)
+				if (t.size() >= 4 &&
+				    (t[t.size() - 4] == '.') &&
+				    (std::tolower(static_cast<unsigned char>(t[t.size() - 3])) == 'x') &&
+				    (std::tolower(static_cast<unsigned char>(t[t.size() - 2])) == 'm') &&
+				    (std::tolower(static_cast<unsigned char>(t[t.size() - 1])) == 'l') &&
+				    zipfile.exists(t))
+				{
+					return t;
+				}
+			}
+		}
+
+		log_stream << "Error - no content.xml, no word/document.xml and no ppt/presentation.xml" << endl;
+		return "";
+	}
+
+	enum MainPartKind { MAIN_DOCX_OR_ODF, MAIN_PPTX, MAIN_XLSX };
+
+	MainPartKind classifyMainPart(const DocToTextUnzip& zipfile, const std::string& main_file_name)
+	{
+		if (main_file_name == "ppt/presentation.xml")
+			return MAIN_PPTX;
+		if (main_file_name == "xl/workbook.xml")
+			return MAIN_XLSX;
+		if (main_file_name == "content.xml" || main_file_name == "word/document.xml")
+			return MAIN_DOCX_OR_ODF;
+
+		std::string head;
+		if (zipfile.read(main_file_name, &head, 4096) && !head.empty())
+		{
+			auto has_root = [&head](const char* local_name) -> bool {
+				const size_t nlen = strlen(local_name);
+				size_t pos = 0;
+				while ((pos = head.find('<', pos)) != std::string::npos)
+				{
+					if (head.compare(pos, 4, "<!--") == 0)
+					{
+						size_t end_cmt = head.find("-->", pos + 4);
+						if (end_cmt == std::string::npos)
+							return false;
+						pos = end_cmt + 3;
+						continue;
+					}
+					if (head.compare(pos, 2, "<?") == 0)
+					{
+						size_t end_pi = head.find("?>", pos + 2);
+						if (end_pi == std::string::npos)
+							return false;
+						pos = end_pi + 2;
+						continue;
+					}
+					if (pos + 1 < head.size() && head[pos + 1] == '!')
+					{
+						size_t end_decl = head.find('>', pos + 2);
+						if (end_decl == std::string::npos)
+							return false;
+						pos = end_decl + 1;
+						continue;
+					}
+					size_t name_start = pos + 1;
+					size_t name_end = name_start;
+					while (name_end < head.size() && !std::isspace(static_cast<unsigned char>(head[name_end])) &&
+					       head[name_end] != '>' && head[name_end] != '/')
+					{
+						++name_end;
+					}
+					size_t colon = head.rfind(':', name_end - 1);
+					size_t local_start = (colon != std::string::npos && colon >= name_start) ? (colon + 1) : name_start;
+					if (name_end - local_start == nlen && head.compare(local_start, nlen, local_name) == 0)
+						return true;
+					return false;
+				}
+				return false;
+			};
+			if (has_root("presentation"))
+				return MAIN_PPTX;
+			if (has_root("workbook"))
+				return MAIN_XLSX;
+		}
+		return MAIN_DOCX_OR_ODF;
 	}
 
 	std::string getXmlPropLocal(xmlNodePtr node, const char* local_name)
@@ -953,7 +1085,7 @@ bool ODFOOXMLParser::isODFOOXML()
 		extended_impl->clearDecryptedZip();
 		return true;
 	}
-	string main_file_name = locate_main_file(zipfile, getLogStream());
+	string main_file_name = locate_main_file(zipfile, getLogStream(), manageXmlParser(), getXmlOptions());
 	if (main_file_name == "")
 	{
 		zipfile.close();
@@ -1003,7 +1135,7 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		zipfile.close();
 		return "";
 	}
-	string main_file_name = locate_main_file(zipfile, getLogStream());
+	string main_file_name = locate_main_file(zipfile, getLogStream(), manageXmlParser(), getXmlOptions());
 	if (main_file_name == "")
 	{
 		getLogStream() << "Could not locate main file.\n";
@@ -1047,7 +1179,9 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			appendBlockText(dst, diag_text);
 	};
 
-	if (main_file_name == "ppt/presentation.xml")
+	const MainPartKind main_kind = classifyMainPart(zipfile, main_file_name);
+
+	if (main_kind == MAIN_PPTX)
 	{
 		if (!zipfile.loadDirectory())
 		{
@@ -1056,33 +1190,65 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			setError(true);
 			return "";
 		}
+		std::string pres_base_dir;
+		const std::string pres_rels_path = makeRelsPathForPart(main_file_name, pres_base_dir);
+		std::string pres_rels;
+		readBoundedZipXml(zipfile, pres_rels_path, pres_rels);
+
 		std::set<std::string> visited_slide_parts;
 		std::vector<std::string> slide_layouts;
 		std::vector<std::string> slide_masters;
-		for (int i = 1; zipfile.read("ppt/slides/slide" + int_to_str(i) + ".xml", &content) && i < 2500; i++)
+		std::vector<std::string> slide_paths;
+		if (!pres_rels.empty())
 		{
+			collectRelTargetsBySuffix(pres_rels, pres_base_dir, "/slide",
+			                          manageXmlParser(), getXmlOptions(), slide_paths);
+		}
+		auto processPptSlide = [&](const std::string& slide_path, const std::string& slide_content) -> bool
+		{
+			std::string slide_base_dir;
+			const std::string slide_rels_path = makeRelsPathForPart(slide_path, slide_base_dir);
 			string slide_rels;
 			clearImageRelationships();
-			if (zipfile.read("ppt/slides/_rels/slide" + int_to_str(i) + ".xml.rels", &slide_rels))
+			if (readBoundedZipXml(zipfile, slide_rels_path, slide_rels))
 			{
-				loadRelationshipsFromXml(slide_rels, "ppt/slides/");
-				collectRelTargetsBySuffix(slide_rels, "ppt/slides/", "/slideLayout",
+				loadRelationshipsFromXml(slide_rels, slide_base_dir);
+				collectRelTargetsBySuffix(slide_rels, slide_base_dir, "/slideLayout",
 				                          manageXmlParser(), getXmlOptions(), slide_layouts);
 			}
 			string slide_text;
-			if (!extractText(content, mode, options, &zipfile, slide_text, getInnerLinks()))
+			if (!extractText(slide_content, mode, options, &zipfile, slide_text, getInnerLinks()))
 			{
 				getLogStream() << "Parser error." << endl;
 				setError(true);
+				return false;
+			}
+			text += slide_text;
+			return true;
+		};
+		for (int i = 1; zipfile.read("ppt/slides/slide" + int_to_str(i) + ".xml", &content) && i < 2500; i++)
+		{
+			const std::string sp = "ppt/slides/slide" + int_to_str(i) + ".xml";
+			visited_slide_parts.insert(sp);
+			if (!processPptSlide(sp, content))
+			{
 				zipfile.close();
 				return "";
 			}
-			text += slide_text;
 		}
-		string pres_rels;
-		if (zipfile.read("ppt/_rels/presentation.xml.rels", &pres_rels))
+		for (size_t i = 0; i < slide_paths.size(); ++i)
 		{
-			collectRelTargetsBySuffix(pres_rels, "ppt/", "/slideMaster",
+			if (!visited_slide_parts.insert(slide_paths[i]).second)
+				continue;
+			if (zipfile.read(slide_paths[i], &content) && !processPptSlide(slide_paths[i], content))
+			{
+				zipfile.close();
+				return "";
+			}
+		}
+		if (!pres_rels.empty())
+		{
+			collectRelTargetsBySuffix(pres_rels, pres_base_dir, "/slideMaster",
 			                          manageXmlParser(), getXmlOptions(), slide_masters);
 		}
 		auto processMasterOrLayoutPart = [&](const std::string& part_path, bool collect_masters)
@@ -1093,7 +1259,7 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			std::string rels_path = makeRelsPathForPart(part_path, part_base_dir);
 			clearImageRelationships();
 			std::string part_rels;
-			if (zipfile.read(rels_path, &part_rels))
+			if (readBoundedZipXml(zipfile, rels_path, part_rels))
 			{
 				loadRelationshipsFromXml(part_rels, part_base_dir);
 				if (collect_masters)
@@ -1118,13 +1284,34 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 		for (size_t i = 0; i < slide_masters.size(); ++i)
 			processMasterOrLayoutPart(slide_masters[i], false);
 	}
-	else if (main_file_name == "xl/workbook.xml")
+	else if (main_kind == MAIN_XLSX)
 	{
-		if (!zipfile.read("xl/sharedStrings.xml", &content))
+		std::string wb_base_dir;
+		const std::string wb_rels_path = makeRelsPathForPart(main_file_name, wb_base_dir);
+		std::string wb_rels;
+		std::vector<std::string> shared_strings_paths;
+		std::vector<std::string> worksheet_rel_paths;
+		if (readBoundedZipXml(zipfile, wb_rels_path, wb_rels))
+		{
+			collectRelTargetsBySuffix(wb_rels, wb_base_dir, "/sharedStrings",
+			                          manageXmlParser(), getXmlOptions(), shared_strings_paths);
+			collectRelTargetsBySuffix(wb_rels, wb_base_dir, "/worksheet",
+			                          manageXmlParser(), getXmlOptions(), worksheet_rel_paths);
+		}
+		std::string shared_strings_path = "xl/sharedStrings.xml";
+		for (size_t i = 0; i < shared_strings_paths.size(); ++i)
+		{
+			if (!shared_strings_paths[i].empty() && zipfile.exists(shared_strings_paths[i]))
+			{
+				shared_strings_path = shared_strings_paths[i];
+				break;
+			}
+		}
+		if (!zipfile.read(shared_strings_path, &content))
 		{
 			//file may not exist, but this is not reason to report an error.
 			if (verbose())
-				getLogStream() << "xl/sharedStrings.xml does not exist" << endl;
+				getLogStream() << shared_strings_path << " does not exist" << endl;
 		}
 		else
 		{
@@ -1146,7 +1333,7 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			XmlStream xml_stream(xml, manageXmlParser(), getXmlOptions());
 			if (!xml_stream)
 			{
-				getLogStream() << "Error parsing xl/sharedStrings.xml" << endl;
+				getLogStream() << "Error parsing " << shared_strings_path << endl;
 				setError(true);
 				zipfile.close();
 				return "";
@@ -1165,76 +1352,44 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 				xml_stream.next();
 			}
 		}
-		for (int i = 1; zipfile.read("xl/worksheets/sheet" + int_to_str(i) + ".xml", &content); i++)
+		std::set<std::string> visited_sheets;
+		auto processXlsSheet = [&](const std::string& sheet_path, const std::string& sheet_xml) -> bool
 		{
+			std::string sheet_base_dir;
+			const std::string sheet_rels_path = makeRelsPathForPart(sheet_path, sheet_base_dir);
 			string sheet_rels;
 			clearImageRelationships();
 			std::vector<string> drawing_files;
-			if (zipfile.read("xl/worksheets/_rels/sheet" + int_to_str(i) + ".xml.rels", &sheet_rels))
+			if (readBoundedZipXml(zipfile, sheet_rels_path, sheet_rels))
 			{
-				loadRelationshipsFromXml(sheet_rels, "xl/worksheets/");
-				XmlStream rel_stream(sheet_rels, manageXmlParser(), getXmlOptions());
-				if (rel_stream)
-				{
-					rel_stream.levelDown();
-					while (rel_stream)
-					{
-						if (rel_stream.name() == "Relationship")
-						{
-							string rtype = rel_stream.attribute("Type");
-							string rtarget = rel_stream.attribute("Target");
-							if (rtype.find("/drawing") != string::npos && !rtarget.empty())
-							{
-								string full_target = (rtarget[0] == '/') ? rtarget.substr(1) : ("xl/worksheets/" + rtarget);
-								drawing_files.push_back(normalizeZipPath(full_target));
-							}
-						}
-						rel_stream.next();
-					}
-				}
+				loadRelationshipsFromXml(sheet_rels, sheet_base_dir);
+				collectRelTargetsBySuffix(sheet_rels, sheet_base_dir, "/drawing",
+				                          manageXmlParser(), getXmlOptions(), drawing_files);
 			}
 			string sheet_text;
-			if (!extractText(content, mode, options, &zipfile, sheet_text, getInnerLinks()))
+			if (!extractText(sheet_xml, mode, options, &zipfile, sheet_text, getInnerLinks()))
 			{
 				getLogStream() << "parser error" << endl;
 				setError(true);
-				zipfile.close();
-				return "";
+				return false;
 			}
 			for (size_t d = 0; d < drawing_files.size(); ++d)
 			{
 				string drawing_content;
 				if (zipfile.read(drawing_files[d], &drawing_content))
 				{
-					size_t last_slash = drawing_files[d].find_last_of('/');
-					string d_base = (last_slash == string::npos) ? "" : drawing_files[d].substr(0, last_slash + 1);
-					string d_name = (last_slash == string::npos) ? drawing_files[d] : drawing_files[d].substr(last_slash + 1);
-					string d_rels_path = d_base + "_rels/" + d_name + ".rels";
+					std::string d_base;
+					const std::string d_rels_path = makeRelsPathForPart(drawing_files[d], d_base);
 					string d_rels_content;
 					clearImageRelationships();
-					if (zipfile.read(d_rels_path, &d_rels_content))
+					if (readBoundedZipXml(zipfile, d_rels_path, d_rels_content))
 					{
 						loadRelationshipsFromXml(d_rels_content, d_base);
-						XmlStream d_rel_stream(d_rels_content, manageXmlParser(), getXmlOptions());
-						if (d_rel_stream)
-						{
-							d_rel_stream.levelDown();
-							while (d_rel_stream)
-							{
-								if (d_rel_stream.name() == "Relationship")
-								{
-									string rtype = d_rel_stream.attribute("Type");
-									string rtarget = d_rel_stream.attribute("Target");
-									if (rtype.find("/diagramData") != string::npos && !rtarget.empty())
-									{
-										string diag_path = normalizeZipPath(
-											(rtarget[0] == '/') ? rtarget.substr(1) : (d_base + rtarget));
-										extractDiagramData(diag_path, sheet_text);
-									}
-								}
-								d_rel_stream.next();
-							}
-						}
+						std::vector<std::string> diag_targets;
+						collectRelTargetsBySuffix(d_rels_content, d_base, "/diagramData",
+						                          manageXmlParser(), getXmlOptions(), diag_targets);
+						for (size_t di = 0; di < diag_targets.size(); ++di)
+							extractDiagramData(diag_targets[di], sheet_text);
 					}
 					string drawing_text;
 					XmlStream::ensureXmlParserInitialized(manageXmlParser());
@@ -1253,17 +1408,36 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 				}
 			}
 			text += sheet_text;
+			return true;
+		};
+		for (int i = 1; zipfile.read("xl/worksheets/sheet" + int_to_str(i) + ".xml", &content); i++)
+		{
+			const std::string sp = "xl/worksheets/sheet" + int_to_str(i) + ".xml";
+			visited_sheets.insert(sp);
+			if (!processXlsSheet(sp, content))
+			{
+				zipfile.close();
+				return "";
+			}
+		}
+		for (size_t i = 0; i < worksheet_rel_paths.size(); ++i)
+		{
+			if (!visited_sheets.insert(worksheet_rel_paths[i]).second)
+				continue;
+			if (zipfile.read(worksheet_rel_paths[i], &content) && !processXlsSheet(worksheet_rel_paths[i], content))
+			{
+				zipfile.close();
+				return "";
+			}
 		}
 	}
 	else
 	{
 		clearImageRelationships();
-		size_t last_slash = main_file_name.find_last_of('/');
-		string base_dir = (last_slash == string::npos) ? "" : main_file_name.substr(0, last_slash + 1);
-		string rels_file = (last_slash == string::npos) ? ("_rels/" + main_file_name + ".rels")
-		                                                : (base_dir + "_rels/" + main_file_name.substr(last_slash + 1) + ".rels");
+		std::string base_dir;
+		const std::string rels_file = makeRelsPathForPart(main_file_name, base_dir);
 		string rels_content;
-		if (zipfile.read(rels_file, &rels_content))
+		if (readBoundedZipXml(zipfile, rels_file, rels_content))
 		{
 			loadRelationshipsFromXml(rels_content, base_dir);
 		}
@@ -1472,12 +1646,44 @@ Metadata ODFOOXMLParser::metaData()
 	if (meta.pageCount() == -1)
 	{
 		// If we are processing PPT use slide count as page count
+		std::string pres_main;
 		if (zipfile.exists("ppt/presentation.xml"))
 		{
-			int page_count = 0;
-			for (int i = 1; zipfile.exists("ppt/slides/slide" + int_to_str(i) + ".xml"); i++)
-				page_count++;
-			meta.setPageCount(page_count);
+			pres_main = "ppt/presentation.xml";
+		}
+		else if (!zipfile.exists("content.xml"))
+		{
+			std::ostringstream scratch_log;
+			const std::string detected_main =
+				locate_main_file(zipfile, scratch_log, manageXmlParser(), getXmlOptions());
+			if (!detected_main.empty() && classifyMainPart(zipfile, detected_main) == MAIN_PPTX)
+				pres_main = detected_main;
+		}
+		if (!pres_main.empty())
+		{
+			std::set<std::string> slide_set;
+			for (int i = 1; i < 2500; i++)
+			{
+				const std::string sp = "ppt/slides/slide" + int_to_str(i) + ".xml";
+				if (!zipfile.exists(sp))
+					break;
+				slide_set.insert(sp);
+			}
+			std::string pres_base_dir;
+			const std::string pres_rels_path = makeRelsPathForPart(pres_main, pres_base_dir);
+			std::string pres_rels;
+			if (readBoundedZipXml(zipfile, pres_rels_path, pres_rels))
+			{
+				std::vector<std::string> rel_slides;
+				collectRelTargetsBySuffix(pres_rels, pres_base_dir, "/slide",
+				                          manageXmlParser(), getXmlOptions(), rel_slides);
+				for (size_t i = 0; i < rel_slides.size(); ++i)
+				{
+					if (!rel_slides[i].empty() && zipfile.exists(rel_slides[i]))
+						slide_set.insert(rel_slides[i]);
+				}
+			}
+			meta.setPageCount(static_cast<int>(slide_set.size()));
 		}
 		else if (zipfile.exists("content.xml"))
 		{
