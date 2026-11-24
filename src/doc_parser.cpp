@@ -493,7 +493,8 @@ static bool skipEqSwitchHeader(const UString& params, int start, int* out_paren_
 {
 	int len = params.length();
 	int j = start;
-	if (j < len && !isEqSwitchBoundary(params[j].unicode()))
+	if (j < len && !isEqSwitchBoundary(params[j].unicode()) &&
+	    !(params[j].unicode() >= '0' && params[j].unicode() <= '9'))
 		return false;
 	bool expect_switch_name = false;
 	while (j < len)
@@ -515,7 +516,7 @@ static bool skipEqSwitchHeader(const UString& params, int start, int* out_paren_
 			++j;
 			continue;
 		}
-		if (c == ' ' || c == '\t')
+		if (c == ' ' || c == '\t' || (c >= '0' && c <= '9') || c == '-' || c == '+')
 		{
 			expect_switch_name = false;
 			++j;

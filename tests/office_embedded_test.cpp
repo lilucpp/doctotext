@@ -2323,7 +2323,8 @@ static int test_step12_rtf_objdata_charts_numbers()
 		    doctotext::extract_doc_eq_field_text("\\over(a,b)") != "\\over(a,b)" ||
 		    doctotext::extract_doc_eq_field_text("\\o(\\s\\up 10(a),x\\)y\\,z)") != "x)y,z" ||
 		    doctotext::extract_doc_eq_field_text("\\o(a,\\o(\\s\\up 10(ruby),b))") != "ab" ||
-		    doctotext::extract_doc_eq_field_text("\\o(a,\\f(1,2))").find("\\f(") != std::string::npos)
+		    doctotext::extract_doc_eq_field_text("\\o(a,\\f(1,2))") != "a1 2" ||
+		    doctotext::extract_doc_eq_field_text("\\f(\\s\\up 10(a),b)") != "a b")
 		{
 			std::cerr << "FAIL: Step13 DOC EQ field extraction mismatch\n";
 			return 1;
@@ -2400,7 +2401,7 @@ static int test_step12_rtf_objdata_charts_numbers()
 		}
 	}
 
-	std::cout << "PASS: Step 12 RTF \\* & objdata, OOXML chart XML, and Numbers table names\n";
+	std::cout << "PASS: Step 12 & 13 RTF/OOXML/iWork/XLS-TXO/DOC-EQ/PPT-EOF regression checks\n";
 	return 0;
 }
 
