@@ -34,6 +34,7 @@
 
 #include "misc.h"
 
+#include <cstdint>
 #include "link.h"
 #include <iostream>
 #include <stdio.h>
@@ -316,50 +317,75 @@ std::string date_to_string(const tm& date)
 UString utf8_to_ustring(const std::string& src)
 {
 	UString res;
-	const char* str = src.data();
+	const unsigned char* str = reinterpret_cast<const unsigned char*>(src.data());
 	size_t str_size = src.length();
-	unsigned int ch;
-	unsigned char tmp;
 	size_t index = 0;
-	res = "";
 	while (index < str_size)
 	{
-		tmp = str[index++];
-		if (tmp < 0x80)
-			res += UString(tmp);
-		else
+		unsigned char b0 = str[index];
+		if (b0 < 0x80)
 		{
-			ch = tmp & 0x1F;
-			int len_char = 1;
-			while (index < str_size)
+			res += UString(static_cast<UChar>(b0));
+			++index;
+			continue;
+		}
+		size_t seq_len = 0;
+		uint32_t cp = 0;
+		if ((b0 & 0xE0) == 0xC0 && b0 >= 0xC2)
+		{
+			seq_len = 2;
+			cp = b0 & 0x1Fu;
+		}
+		else if ((b0 & 0xF0) == 0xE0)
+		{
+			seq_len = 3;
+			cp = b0 & 0x0Fu;
+		}
+		else if ((b0 & 0xF8) == 0xF0 && b0 <= 0xF4)
+		{
+			seq_len = 4;
+			cp = b0 & 0x07u;
+		}
+		bool valid = (seq_len >= 2 && index + seq_len <= str_size);
+		if (valid)
+		{
+			for (size_t j = 1; j < seq_len; ++j)
 			{
-				tmp = str[index++];
-				if ((tmp & 0xC0) == 0x80)
+				unsigned char bx = str[index + j];
+				if ((bx & 0xC0) != 0x80)
 				{
-					ch = ch << 6;
-					ch = ch | (tmp & 0x3F);
-					++len_char;
-				}
-				else
-				{
-					if (len_char < 4)
-					{
-						res += UString((UChar)((unsigned short)ch));
-					}
-					else
-					{
-						//beetwen 10000H and 10FFFFH
-						unsigned short first = 0xD800, second = 0xDC00;
-						ch = ch & 0x001FFFFF;
-						ch -= 0x10000;
-						res += UString((UChar)(first | ((ch & 0x000FFC00) >> 10)));
-						res += UString(((UChar)(second | (ch & 0x000003FF))));
-					}
-					--index;
+					valid = false;
 					break;
 				}
+				cp = (cp << 6) | (bx & 0x3Fu);
 			}
 		}
+		if (valid)
+		{
+			if ((seq_len == 2 && cp < 0x80u) ||
+			    (seq_len == 3 && (cp < 0x800u || (cp >= 0xD800u && cp <= 0xDFFFu))) ||
+			    (seq_len == 4 && (cp < 0x10000u || cp > 0x10FFFFu)))
+			{
+				valid = false;
+			}
+		}
+		if (!valid)
+		{
+			res += UString(static_cast<UChar>(b0));
+			++index;
+			continue;
+		}
+		if (cp <= 0xFFFFu)
+		{
+			res += UString(static_cast<UChar>(cp));
+		}
+		else
+		{
+			cp -= 0x10000u;
+			res += UString(static_cast<UChar>(0xD800u | ((cp >> 10) & 0x3FFu)));
+			res += UString(static_cast<UChar>(0xDC00u | (cp & 0x3FFu)));
+		}
+		index += seq_len;
 	}
 	return res;
 }

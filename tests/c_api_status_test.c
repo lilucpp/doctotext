@@ -156,7 +156,8 @@ int main(void)
 			"encrypted/testEXCEL_protected_passtika.xlsx",
 			"encrypted/testPPT_protected_passtika.ppt",
 			"encrypted/testPPT_protected_passtika.pptx",
-			"encrypted/testODTEncrypted.odt"
+			"encrypted/testODTEncrypted.odt",
+			"encrypted/testPagesPwdProtected.pages"
 		};
 		size_t n_fixtures = sizeof(encrypted_fixtures) / sizeof(encrypted_fixtures[0]);
 		size_t i;

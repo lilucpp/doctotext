@@ -243,6 +243,7 @@ static std::string ParseDuration(std::string& format, long value)
 struct IWorkParser::Implementation
 {
 	bool m_error;
+	bool m_encrypted;
 	std::string m_file_name;
 	bool m_verbose_logging;
 	std::string m_xml_file;
@@ -947,14 +948,14 @@ struct IWorkParser::Implementation
 				m_in_textual_element = true;
 				if (m_iwork_type == pages)
 					m_current_table->m_text_pointer = m_current_text_pointer;
-				else
+				else if (m_current_table->m_text_pointer)
 					*(m_current_table->m_text_pointer) += "\n";
 				m_current_text_pointer = &m_current_table->m_current_cell.m_value;
 				m_in_table = true;
 			}
-			else
+			else if (m_current_element.m_kind == XmlReader::closing_element)
 			{
-				if (m_iwork_type == pages)
+				if (m_iwork_type == pages && m_current_table)
 					m_current_text_pointer = m_current_table->m_text_pointer;
 				else
 					m_current_text_pointer = &m_text_body;
@@ -965,16 +966,30 @@ struct IWorkParser::Implementation
 			}
 		}
 
+		static bool isDefaultHiddenTableName(const std::string& name)
+		{
+			if (name.empty() || name == "Unnamed Table")
+				return true;
+			if (name.compare(0, 6, "Table ") != 0 || name.size() <= 6)
+				return false;
+			for (size_t i = 6; i < name.size(); ++i)
+			{
+				if (name[i] < '0' || name[i] > '9')
+					return false;
+			}
+			return true;
+		}
+
 		void ParseSfTabularModel()
 		{
-			if (m_in_table)
-			{
-				if (m_current_element.HasAttribute("sf:name") && m_current_element.HasAttribute("sf:name-is-visible"))
-				{
-					if (m_current_element.m_attributes["sf:name-is-visible"] == "true")
-						*(m_current_table->m_text_pointer) += (m_current_element.m_attributes["sf:name"] + "\n");
-				}
-			}
+			if (!m_in_table || !m_current_table || !m_current_table->m_text_pointer ||
+			    !m_current_element.HasAttribute("sf:name"))
+				return;
+			const std::string& name = m_current_element.m_attributes["sf:name"];
+			bool is_visible = m_current_element.HasAttribute("sf:name-is-visible") &&
+			                  m_current_element.m_attributes["sf:name-is-visible"] == "true";
+			if (is_visible || !isDefaultHiddenTableName(name))
+				*(m_current_table->m_text_pointer) += (name + "\n");
 		}
 
 		void ParseSfPosition()
@@ -2089,12 +2104,65 @@ struct IWorkParser::Implementation
 		text = std::string(dest_text);
 		delete[] dest_text;
 	}
+
+	enum ArchiveLayout
+	{
+		LAYOUT_INVALID = 0,
+		LAYOUT_LEGACY_XML,
+		LAYOUT_MODERN_IWA,
+		LAYOUT_ENCRYPTED
+	};
+
+	void configureUnzip(DocToTextUnzip& unzip) const
+	{
+		if (m_buffer)
+			unzip.setBuffer(m_buffer, m_buffer_size);
+		else
+			unzip.setArchiveFile(m_file_name);
+	}
+
+	ArchiveLayout resolveArchiveLayout(DocToTextUnzip& unzip)
+	{
+		m_xml_file.clear();
+		if (unzip.exists("index.xml"))
+			m_xml_file = "index.xml";
+		if (unzip.exists("index.apxl"))
+			m_xml_file = "index.apxl";
+		if (unzip.exists("presentation.apxl"))
+			m_xml_file = "presentation.apxl";
+		if (m_xml_file.empty())
+		{
+			if (doctotext::iwa::isModernIWorkArchive(unzip))
+			{
+				if (unzip.hasEncryptedEntries())
+				{
+					m_encrypted = true;
+					return LAYOUT_ENCRYPTED;
+				}
+				return LAYOUT_MODERN_IWA;
+			}
+			if (unzip.exists("Metadata/BuildVersionHistory.plist") && unzip.hasEncryptedEntries())
+			{
+				m_encrypted = true;
+				return LAYOUT_ENCRYPTED;
+			}
+			return LAYOUT_INVALID;
+		}
+		if (unzip.isEncryptedEntry(m_xml_file) ||
+		    (unzip.exists("buildVersionHistory.plist") && unzip.isEncryptedEntry("buildVersionHistory.plist")))
+		{
+			m_encrypted = true;
+			return LAYOUT_ENCRYPTED;
+		}
+		return LAYOUT_LEGACY_XML;
+	}
 };
 
 IWorkParser::IWorkParser(const std::string& file_name)
 {
 	impl = new Implementation();
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	impl->m_file_name = file_name;
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -2106,6 +2174,7 @@ IWorkParser::IWorkParser(const char* buffer, size_t size)
 {
 	impl = new Implementation();
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	impl->m_file_name = "Memory buffer";
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -2131,6 +2200,7 @@ void IWorkParser::setLogStream(std::ostream& log_stream)
 bool IWorkParser::isIWork()
 {
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	if (!impl->m_buffer)
 	{
 		FILE* f = fopen(impl->m_file_name.c_str(), "rb");
@@ -2151,30 +2221,21 @@ bool IWorkParser::isIWork()
 		return false;
 	}
 	DocToTextUnzip unzip;
-	if (impl->m_buffer)
-		unzip.setBuffer(impl->m_buffer, impl->m_buffer_size);
-	else
-		unzip.setArchiveFile(impl->m_file_name);
+	impl->configureUnzip(unzip);
 	bool res_open = unzip.open();
 	if (res_open == false)
 	{
 		*impl->m_log_stream << "Cannot unzip file.\n";
 		return false;
 	}
-	impl->m_xml_file.clear();
-	if (unzip.exists("index.xml"))
-		impl->m_xml_file = "index.xml";
-	if (unzip.exists("index.apxl"))
-		impl->m_xml_file = "index.apxl";
-	if (unzip.exists("presentation.apxl"))
-		impl->m_xml_file = "presentation.apxl";
-	if (impl->m_xml_file.empty())
+	Implementation::ArchiveLayout layout = impl->resolveArchiveLayout(unzip);
+	if (layout == Implementation::LAYOUT_MODERN_IWA || layout == Implementation::LAYOUT_ENCRYPTED)
 	{
-		if (doctotext::iwa::isModernIWorkArchive(unzip))
-		{
-			unzip.close();
-			return true;
-		}
+		unzip.close();
+		return true;
+	}
+	if (layout == Implementation::LAYOUT_INVALID)
+	{
 		unzip.close();
 		*impl->m_log_stream << "None of the following files (index.xml, index.apxl, presentation.apxl) could not be found.\n";
 		return false;
@@ -2199,11 +2260,10 @@ void IWorkParser::getLinks(std::vector<Link>& links)
 Metadata IWorkParser::metaData()
 {
 	Metadata metadata;
+	impl->m_error = false;
+	impl->m_encrypted = false;
 	DocToTextUnzip unzip;
-	if (impl->m_buffer)
-		unzip.setBuffer(impl->m_buffer, impl->m_buffer_size);
-	else
-		unzip.setArchiveFile(impl->m_file_name);
+	impl->configureUnzip(unzip);
 	bool res_open = unzip.open();
 	if (res_open == false)
 	{
@@ -2211,21 +2271,21 @@ Metadata IWorkParser::metaData()
 		impl->m_error = true;
 		return metadata;
 	}
-	impl->m_error = false;
-	impl->m_xml_file.clear();
-	if (unzip.exists("index.xml"))
-		impl->m_xml_file = "index.xml";
-	if (unzip.exists("index.apxl"))
-		impl->m_xml_file = "index.apxl";
-	if (unzip.exists("presentation.apxl"))
-		impl->m_xml_file = "presentation.apxl";
-	if (impl->m_xml_file.empty())
+	Implementation::ArchiveLayout layout = impl->resolveArchiveLayout(unzip);
+	if (layout == Implementation::LAYOUT_MODERN_IWA)
 	{
-		if (doctotext::iwa::isModernIWorkArchive(unzip))
-		{
-			unzip.close();
-			return metadata;
-		}
+		unzip.close();
+		return metadata;
+	}
+	if (layout == Implementation::LAYOUT_ENCRYPTED)
+	{
+		*impl->m_log_stream << "iWork file is encrypted and requires a password.\n";
+		impl->m_error = true;
+		unzip.close();
+		return metadata;
+	}
+	if (layout == Implementation::LAYOUT_INVALID)
+	{
 		*impl->m_log_stream << "File cannot be processed, because none of the following files (index.xml, index.apxl, presentation.apxl) could not be found.\n";
 		impl->m_error = true;
 		unzip.close();
@@ -2240,11 +2300,9 @@ std::string IWorkParser::plainText(const FormattingStyle& formatting)
 {
 	std::string text;
 	DocToTextUnzip unzip;
-	if (impl->m_buffer)
-		unzip.setBuffer(impl->m_buffer, impl->m_buffer_size);
-	else
-		unzip.setArchiveFile(impl->m_file_name);
+	impl->configureUnzip(unzip);
 	impl->m_error = false;
+	impl->m_encrypted = false;
 	bool res_open = unzip.open();
 	if (res_open == false)
 	{
@@ -2252,22 +2310,23 @@ std::string IWorkParser::plainText(const FormattingStyle& formatting)
 		impl->m_error = true;
 		return text;
 	}
-	impl->m_xml_file.clear();
-	if (unzip.exists("index.xml"))
-		impl->m_xml_file = "index.xml";
-	if (unzip.exists("index.apxl"))
-		impl->m_xml_file = "index.apxl";
-	if (unzip.exists("presentation.apxl"))
-		impl->m_xml_file = "presentation.apxl";
-	if (impl->m_xml_file.empty())
+	Implementation::ArchiveLayout layout = impl->resolveArchiveLayout(unzip);
+	if (layout == Implementation::LAYOUT_MODERN_IWA)
 	{
-		if (doctotext::iwa::isModernIWorkArchive(unzip))
-		{
-			doctotext::iwa::extractModernIWorkText(unzip, impl->m_verbose_logging, *impl->m_log_stream, text, impl->m_error);
-			unzip.close();
-			return text;
-		}
-		*impl->m_log_stream << "File cannot be processed, because none of the following files (index.xml, index.apxl, presentacion.apxl) could not be found.\n";
+		doctotext::iwa::extractModernIWorkText(unzip, impl->m_verbose_logging, *impl->m_log_stream, text, impl->m_error);
+		unzip.close();
+		return text;
+	}
+	if (layout == Implementation::LAYOUT_ENCRYPTED)
+	{
+		*impl->m_log_stream << "iWork file is encrypted and requires a password.\n";
+		impl->m_error = true;
+		unzip.close();
+		return text;
+	}
+	if (layout == Implementation::LAYOUT_INVALID)
+	{
+		*impl->m_log_stream << "File cannot be processed, because none of the following files (index.xml, index.apxl, presentation.apxl) could not be found.\n";
 		impl->m_error = true;
 		unzip.close();
 		return text;
@@ -2280,4 +2339,9 @@ std::string IWorkParser::plainText(const FormattingStyle& formatting)
 bool IWorkParser::error()
 {
 	return impl->m_error;
+}
+
+bool IWorkParser::encrypted()
+{
+	return impl->m_encrypted;
 }

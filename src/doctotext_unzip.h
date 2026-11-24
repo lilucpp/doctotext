@@ -33,6 +33,10 @@ class DocToTextUnzip
 		bool loadDirectory();
 		/// Populates `files` with all entry paths inside the opened zip archive.
 		bool getFileList(std::vector<std::string>& files);
+		/// Returns true if the given archive entry uses ZIP/iWork encryption flags or headers.
+		bool isEncryptedEntry(const std::string& file_name) const;
+		/// Returns true if any entry in the opened archive appears encrypted.
+		bool hasEncryptedEntries() const;
 };
 
 #endif

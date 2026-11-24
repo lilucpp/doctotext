@@ -449,6 +449,137 @@ namespace
 		if (!out_footer_text.empty() && out_footer_text[out_footer_text.size() - 1] != '\n')
 			out_footer_text.push_back('\n');
 	}
+
+	void collectXmlTextNodes(xmlNodePtr node, std::string& out)
+	{
+		for (xmlNodePtr cur = node; cur != NULL; cur = cur->next)
+		{
+			if ((cur->type == XML_TEXT_NODE || cur->type == XML_CDATA_SECTION_NODE) && cur->content)
+				out += reinterpret_cast<const char*>(cur->content);
+			else if (cur->type == XML_ELEMENT_NODE && cur->children)
+				collectXmlTextNodes(cur->children, out);
+		}
+	}
+
+	void collectOoxmlChartNodes(xmlNodePtr node, std::string& out_lines, std::string& cur_cache_row)
+	{
+		auto flushCacheRow = [&]()
+		{
+			if (!cur_cache_row.empty())
+			{
+				if (!out_lines.empty() && out_lines[out_lines.size() - 1] != '\n')
+					out_lines.push_back('\n');
+				out_lines += cur_cache_row;
+				out_lines.push_back('\n');
+				cur_cache_row.clear();
+			}
+		};
+
+		for (xmlNodePtr cur = node; cur != NULL; cur = cur->next)
+		{
+			if (cur->type != XML_ELEMENT_NODE || !cur->name)
+				continue;
+
+			if (xmlStrcmp(cur->name, BAD_CAST "Fallback") == 0)
+				continue;
+
+			if (xmlStrcmp(cur->name, BAD_CAST "p") == 0)
+			{
+				std::string para;
+				// Extract DrawingML <a:t> text inside <a:p>
+				for (xmlNodePtr ch = cur->children; ch != NULL; ch = ch->next)
+				{
+					if (ch->type != XML_ELEMENT_NODE || !ch->name)
+						continue;
+					if (xmlStrcmp(ch->name, BAD_CAST "r") == 0 || xmlStrcmp(ch->name, BAD_CAST "fld") == 0)
+					{
+						for (xmlNodePtr rch = ch->children; rch != NULL; rch = rch->next)
+						{
+							if (rch->type == XML_ELEMENT_NODE && rch->name && xmlStrcmp(rch->name, BAD_CAST "t") == 0)
+								collectXmlTextNodes(rch->children, para);
+						}
+					}
+					else if (xmlStrcmp(ch->name, BAD_CAST "br") == 0)
+					{
+						para.push_back('\n');
+					}
+				}
+				if (hasNonSpaceText(para))
+				{
+					flushCacheRow();
+					if (!out_lines.empty() && out_lines[out_lines.size() - 1] != '\n')
+						out_lines.push_back('\n');
+					out_lines += para;
+					if (out_lines[out_lines.size() - 1] != '\n')
+						out_lines.push_back('\n');
+				}
+				continue;
+			}
+
+			if (xmlStrcmp(cur->name, BAD_CAST "strCache") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "numCache") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "multiLvlStrCache") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "strLit") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "numLit") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "lvl") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "ser") == 0 ||
+			    xmlStrcmp(cur->name, BAD_CAST "tx") == 0)
+			{
+				flushCacheRow();
+				collectOoxmlChartNodes(cur->children, out_lines, cur_cache_row);
+				flushCacheRow();
+				continue;
+			}
+
+			if (xmlStrcmp(cur->name, BAD_CAST "v") == 0 || xmlStrcmp(cur->name, BAD_CAST "t") == 0)
+			{
+				std::string val;
+				collectXmlTextNodes(cur->children, val);
+				if (hasNonSpaceText(val))
+				{
+					if (!cur_cache_row.empty())
+						cur_cache_row.push_back('\t');
+					cur_cache_row += val;
+				}
+				continue;
+			}
+
+			if (cur->children)
+				collectOoxmlChartNodes(cur->children, out_lines, cur_cache_row);
+		}
+	}
+
+	void extractOoxmlChartText(const std::string& chart_xml,
+	                           bool manage_xml_parser,
+	                           int xml_options,
+	                           std::string& out_chart_text)
+	{
+		out_chart_text.clear();
+		if (chart_xml.empty() || chart_xml.size() > static_cast<size_t>(INT_MAX))
+			return;
+		XmlStream::ensureXmlParserInitialized(manage_xml_parser);
+		xmlDocPtr doc = xmlReadMemory(chart_xml.c_str(),
+		                              static_cast<int>(chart_xml.size()),
+		                              "chart.xml",
+		                              NULL,
+		                              xml_options | XML_PARSE_NONET | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+		if (!doc)
+			return;
+		xmlNodePtr root = xmlDocGetRootElement(doc);
+		if (root)
+		{
+			std::string cur_cache_row;
+			collectOoxmlChartNodes(root, out_chart_text, cur_cache_row);
+			if (!cur_cache_row.empty())
+			{
+				if (!out_chart_text.empty() && out_chart_text[out_chart_text.size() - 1] != '\n')
+					out_chart_text.push_back('\n');
+				out_chart_text += cur_cache_row;
+				out_chart_text.push_back('\n');
+			}
+		}
+		xmlFreeDoc(doc);
+	}
 }
 
 class ODFOOXMLParser::CommandHandlersSet
@@ -1164,23 +1295,47 @@ string ODFOOXMLParser::plainText(XmlParseMode mode, FormattingStyle& options)
 			}
 		}
 	}
-	// Extract SmartArt diagram data XML not already visited via drawing relationships (DOCX/PPTX/fallback XLSX)
+	// Extract SmartArt diagram data XML and OOXML chart XML parts (DOCX/PPTX/XLSX)
 	if (main_file_name != "content.xml")
 	{
-		std::vector<std::string> diag_files;
-		if (zipfile.getFileList(diag_files))
+		std::vector<std::string> part_files;
+		if (zipfile.getFileList(part_files))
 		{
-			std::sort(diag_files.begin(), diag_files.end());
-			for (size_t i = 0; i < diag_files.size(); ++i)
+			std::sort(part_files.begin(), part_files.end());
+			for (size_t i = 0; i < part_files.size(); ++i)
 			{
-				const std::string& p = diag_files[i];
+				const std::string& p = part_files[i];
 				bool is_diag_data =
 					(p.compare(0, 16, "xl/diagrams/data") == 0 ||
 					 p.compare(0, 18, "word/diagrams/data") == 0 ||
 					 p.compare(0, 17, "ppt/diagrams/data") == 0) &&
 					p.size() >= 4 && p.compare(p.size() - 4, 4, ".xml") == 0;
 				if (is_diag_data)
+				{
 					extractDiagramData(p, text);
+					continue;
+				}
+				bool is_chart_xml =
+					(p.compare(0, 15, "xl/charts/chart") == 0 ||
+					 p.compare(0, 17, "word/charts/chart") == 0 ||
+					 p.compare(0, 16, "ppt/charts/chart") == 0) &&
+					p.size() >= 4 && p.compare(p.size() - 4, 4, ".xml") == 0;
+				if (is_chart_xml)
+				{
+					unsigned long chart_entry_size = 0;
+					if (zipfile.getFileSize(p, chart_entry_size) && chart_entry_size > doctotext::kMaxEmbedBytes)
+						continue;
+					std::string chart_xml;
+					int chart_read_limit = static_cast<int>(doctotext::kMaxEmbedBytes + 1);
+					if (zipfile.read(p, &chart_xml, chart_read_limit) &&
+					    !chart_xml.empty() &&
+					    chart_xml.size() <= doctotext::kMaxEmbedBytes)
+					{
+						std::string chart_text;
+						extractOoxmlChartText(chart_xml, manageXmlParser(), getXmlOptions(), chart_text);
+						appendBlockText(text, chart_text);
+					}
+				}
 			}
 		}
 	}

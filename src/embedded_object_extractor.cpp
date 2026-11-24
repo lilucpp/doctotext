@@ -24,6 +24,12 @@ namespace
 		return s_active;
 	}
 
+	uint16_t readU16LE(const unsigned char* p)
+	{
+		return static_cast<uint16_t>(p[0]) |
+		       (static_cast<uint16_t>(p[1]) << 8);
+	}
+
 	uint32_t readU32LE(const unsigned char* p)
 	{
 		return (uint32_t)p[0] |
@@ -847,6 +853,191 @@ void extractZipEmbeddings(DocToTextUnzip& zipfile,
 			ctx,
 			out_text);
 	}
+}
+
+namespace
+{
+	bool readLenPrefixedAnsi(const unsigned char* data, size_t size, size_t& pos, std::string& out)
+	{
+		if (size - pos < 4)
+			return false;
+		uint32_t len = readU32LE(data + pos);
+		pos += 4;
+		if (len > size - pos)
+			return false;
+		out.assign(reinterpret_cast<const char*>(data + pos), len);
+		while (!out.empty() && out[out.size() - 1] == '\0')
+			out.erase(out.size() - 1);
+		pos += len;
+		return true;
+	}
+
+	void appendUtf8CodePoint(uint32_t cp, std::string& out)
+	{
+		if (cp <= 0x7Fu)
+		{
+			out.push_back(static_cast<char>(cp));
+		}
+		else if (cp <= 0x7FFu)
+		{
+			out.push_back(static_cast<char>(0xC0u | (cp >> 6)));
+			out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+		}
+		else if (cp >= 0xD800u && cp <= 0xDFFFu)
+		{
+			// Skip unpaired UTF-16 surrogates
+		}
+		else if (cp <= 0xFFFFu)
+		{
+			out.push_back(static_cast<char>(0xE0u | (cp >> 12)));
+			out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
+			out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+		}
+		else if (cp <= 0x10FFFFu)
+		{
+			out.push_back(static_cast<char>(0xF0u | (cp >> 18)));
+			out.push_back(static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu)));
+			out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
+			out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
+		}
+	}
+
+	void decodeUtf16LeName(const unsigned char* p, uint32_t code_units, std::string& out)
+	{
+		out.clear();
+		for (uint32_t i = 0; i < code_units; ++i)
+		{
+			uint16_t ch = readU16LE(p + static_cast<size_t>(i) * 2);
+			if (ch == 0)
+				break;
+			if (ch >= 0xD800u && ch <= 0xDBFFu && i + 1 < code_units)
+			{
+				uint16_t lo = readU16LE(p + static_cast<size_t>(i + 1) * 2);
+				if (lo >= 0xDC00u && lo <= 0xDFFFu)
+				{
+					uint32_t cp = 0x10000u +
+					              ((static_cast<uint32_t>(ch - 0xD800u) << 10) |
+					               static_cast<uint32_t>(lo - 0xDC00u));
+					appendUtf8CodePoint(cp, out);
+					++i;
+					continue;
+				}
+			}
+			appendUtf8CodePoint(ch, out);
+		}
+	}
+
+	bool parseOle1Package(const unsigned char* pkg,
+	                      size_t pkg_size,
+	                      size_t max_bytes,
+	                      std::string& out_name,
+	                      const unsigned char*& out_payload,
+	                      size_t& out_payload_size)
+	{
+		out_name.clear();
+		out_payload = NULL;
+		out_payload_size = 0;
+		if (!pkg || pkg_size < 16 || pkg_size > max_bytes)
+			return false;
+		size_t pos = 2; // 2B type
+		std::string display_name;
+		std::string icon_path;
+		std::string ansi_file_path;
+		if (!readCStr(pkg, pkg_size, pos, display_name))
+			return false;
+		if (!readCStr(pkg, pkg_size, pos, icon_path))
+			return false;
+		if (pkg_size - pos < 8)
+			return false;
+		pos += 2; // iconIndex
+		uint16_t pkg_type = readU16LE(pkg + pos);
+		pos += 2;
+		if (pkg_type != 3) // 1 = link, 3 = embedded object
+			return false;
+		pos += 4; // filePathLen
+		if (!readCStr(pkg, pkg_size, pos, ansi_file_path))
+			return false;
+		if (pkg_size - pos < 4)
+			return false;
+		uint32_t data_size = readU32LE(pkg + pos);
+		pos += 4;
+		if (data_size == 0 || data_size > max_bytes || data_size > pkg_size - pos)
+			return false;
+		out_payload = pkg + pos;
+		out_payload_size = data_size;
+		pos += data_size;
+
+		std::string unicode_path;
+		if (pkg_size - pos >= 4)
+		{
+			uint32_t unicode_chars = readU32LE(pkg + pos);
+			pos += 4;
+			if (unicode_chars > 0 && unicode_chars <= 4096 &&
+			    static_cast<size_t>(unicode_chars) * 2 <= pkg_size - pos)
+			{
+				decodeUtf16LeName(pkg + pos, unicode_chars, unicode_path);
+			}
+		}
+		std::string chosen = !unicode_path.empty()
+			? unicode_path
+			: (!display_name.empty() ? display_name : ansi_file_path);
+		out_name = baseFileName(chosen);
+		return true;
+	}
+}
+
+bool extractOle1ObjData(const unsigned char* data,
+                        size_t size,
+                        EmbeddedExtractionContext& ctx,
+                        std::string& out_text)
+{
+	out_text.clear();
+	if (!ctx.formatting.parse_embedded_files || !data || size < 20 || size > ctx.max_bytes)
+		return false;
+	if (ctx.depth >= ctx.max_depth || ctx.extracted_count >= ctx.max_count)
+		return false;
+
+	size_t pos = 4; // OLE 1.0 version
+	uint32_t format_id = readU32LE(data + pos);
+	pos += 4;
+	if (format_id != 2) // 2 = embedded, 1 = linked
+		return false;
+
+	std::string class_name;
+	std::string topic_name;
+	std::string item_name;
+	if (!readLenPrefixedAnsi(data, size, pos, class_name))
+		return false;
+	if (!readLenPrefixedAnsi(data, size, pos, topic_name))
+		return false;
+	if (!readLenPrefixedAnsi(data, size, pos, item_name))
+		return false;
+
+	if (size - pos < 4)
+		return false;
+	uint32_t data_size = readU32LE(data + pos);
+	pos += 4;
+	if (data_size == 0 || data_size > ctx.max_bytes || data_size > size - pos)
+		return false;
+
+	const unsigned char* payload = data + pos;
+	if (data_size >= 8 && std::memcmp(payload, "\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8) == 0)
+	{
+		ThreadSafeOLEStorage storage(reinterpret_cast<const char*>(payload), data_size);
+		if (storage.isValid())
+			return extractFromOLEStorage(storage, class_name, ctx, out_text);
+		return false;
+	}
+	if (asciiEqualsIgnoreCase(class_name, "Package"))
+	{
+		std::string hint_name;
+		const unsigned char* pkg_payload = NULL;
+		size_t pkg_payload_size = 0;
+		if (!parseOle1Package(payload, data_size, ctx.max_bytes, hint_name, pkg_payload, pkg_payload_size))
+			return false;
+		return extractFromEmbeddedBuffer(pkg_payload, pkg_payload_size, hint_name, ctx, out_text);
+	}
+	return extractFromEmbeddedBuffer(payload, data_size, class_name, ctx, out_text);
 }
 
 }

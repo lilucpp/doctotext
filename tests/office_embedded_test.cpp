@@ -1,6 +1,8 @@
 #include "../build/doctotext_c_api.h"
 #include "../build/formatting_style.h"
+#include "../build/metadata.h"
 #include "../build/plain_text_extractor.h"
+#include "../src/doctotext_unzip.h"
 #include "../src/pdf_parser.h"
 #include "../src/xls_parser.h"
 #include "../src/xlsb_parser.h"
@@ -1884,6 +1886,393 @@ static int test_step11_odf_negative_and_modern_iwork_guards()
 	return 0;
 }
 
+static std::string to_hex_str(const std::string& raw)
+{
+	static const char kHex[] = "0123456789abcdef";
+	std::string out;
+	out.reserve(raw.size() * 2);
+	for (size_t i = 0; i < raw.size(); ++i)
+	{
+		unsigned char b = static_cast<unsigned char>(raw[i]);
+		out.push_back(kHex[(b >> 4) & 0xF]);
+		out.push_back(kHex[b & 0xF]);
+	}
+	return out;
+}
+
+static void push_u32_le_str(std::string& dst, uint32_t v)
+{
+	dst.push_back(static_cast<char>(v & 0xFF));
+	dst.push_back(static_cast<char>((v >> 8) & 0xFF));
+	dst.push_back(static_cast<char>((v >> 16) & 0xFF));
+	dst.push_back(static_cast<char>((v >> 24) & 0xFF));
+}
+
+static std::string make_ole1_objdata_prefix(uint32_t format_id,
+                                            const std::string& class_name,
+                                            const std::string& payload)
+{
+	std::string raw;
+	push_u32_le_str(raw, 0x00000501u); // version 1.5
+	push_u32_le_str(raw, format_id);
+	std::string cls_nul = class_name + '\0';
+	push_u32_le_str(raw, static_cast<uint32_t>(cls_nul.size()));
+	raw += cls_nul;
+	push_u32_le_str(raw, 0); // topicLen
+	push_u32_le_str(raw, 0); // itemLen
+	push_u32_le_str(raw, static_cast<uint32_t>(payload.size()));
+	raw += payload;
+	return raw;
+}
+
+static int test_step12_rtf_objdata_charts_numbers()
+{
+	doctotext::PlainTextExtractor ex;
+	std::string out;
+
+	// 1. RTF mid-group \* must not swallow following text, while group-start {\*\...} still skips
+	const std::string rtf_star =
+		"{\\rtf1\\ansi\\deff0"
+		"{\\fonttbl{\\f0 Times;}}"
+		"\\pard{\\loch\\f0\\*\\cs7\\cf0 The quick brown fox jumps over the lazy dog}"
+		"{\\*\\ignoredDest SHOULD_NOT_APPEAR}\\par}";
+	if (!ex.processFile(rtf_star.data(), rtf_star.size(), out) ||
+	    out.find("The quick brown fox jumps over the lazy dog") == std::string::npos ||
+	    out.find("SHOULD_NOT_APPEAR") != std::string::npos)
+	{
+		std::cerr << "FAIL: Step12 RTF mid-group \\* handling mismatch: " << out << "\n";
+		return 1;
+	}
+
+	// 2. RTF {\*\objdata ...} with Package + OLE2 + link (FormatID=1 skip) + parse_embedded_files toggle
+	std::string pkg_payload;
+	const std::string inner_txt = "RTF_PKG_UTF8_\xE6\x99\xAE\xE6\x9E\x97\xE6\x96\xAF\xE9\xA1\xBF_OK";
+	pkg_payload.push_back('\x02'); pkg_payload.push_back('\x00');
+	pkg_payload += std::string("note.txt") + '\0';
+	pkg_payload += '\0'; // iconPath
+	pkg_payload.push_back('\x00'); pkg_payload.push_back('\x00'); // iconIndex
+	pkg_payload.push_back('\x03'); pkg_payload.push_back('\x00'); // type = 3 embedded
+	push_u32_le_str(pkg_payload, 8);
+	pkg_payload += std::string("note.txt") + '\0';
+	push_u32_le_str(pkg_payload, static_cast<uint32_t>(inner_txt.size()));
+	pkg_payload += inner_txt;
+
+	OleSpecNode ole_xls_root;
+	ole_xls_root.name = "Root Entry";
+	ole_xls_root.is_storage = true;
+	ole_xls_root.children.push_back({"Workbook", false, make_minimal_biff8_workbook("RTF_OLE2_XLS_OK"), {}});
+	std::string ole_xls_buf = build_ole2_from_tree(ole_xls_root);
+
+	std::string link_raw = make_ole1_objdata_prefix(1u, "Word.Document.8", "LINKED_SKIP_TEXT");
+	std::string pkg_raw = make_ole1_objdata_prefix(2u, "Package", pkg_payload);
+	std::string ole_raw = make_ole1_objdata_prefix(2u, "Excel.Sheet.8", ole_xls_buf);
+
+	// 2b. Package with UTF-16LE surrogate-pair Unicode path and \binN bytes containing braces
+	std::string pkg_u16_payload;
+	const std::string inner_u16_txt = "RTF_PKG_U16_SURROGATE_OK";
+	pkg_u16_payload.push_back('\x02'); pkg_u16_payload.push_back('\x00');
+	pkg_u16_payload += std::string("fallback.dat") + '\0';
+	pkg_u16_payload += '\0';
+	pkg_u16_payload.push_back('\x00'); pkg_u16_payload.push_back('\x00');
+	pkg_u16_payload.push_back('\x03'); pkg_u16_payload.push_back('\x00');
+	push_u32_le_str(pkg_u16_payload, 1);
+	pkg_u16_payload += '\0';
+	push_u32_le_str(pkg_u16_payload, static_cast<uint32_t>(inner_u16_txt.size()));
+	pkg_u16_payload += inner_u16_txt;
+	// Unicode filename: "C:\\sub\\" + U+1F4C4 (D83D DCC4) + ".txt" = 13 UTF-16LE code units
+	push_u32_le_str(pkg_u16_payload, 13u);
+	const uint16_t u16_name[] = {
+		'C', ':', '\\', 's', 'u', 'b', '\\', 0xD83Du, 0xDCC4u, '.', 't', 'x', 't'
+	};
+	for (size_t i = 0; i < sizeof(u16_name) / sizeof(u16_name[0]); ++i)
+	{
+		pkg_u16_payload.push_back(static_cast<char>(u16_name[i] & 0xFF));
+		pkg_u16_payload.push_back(static_cast<char>((u16_name[i] >> 8) & 0xFF));
+	}
+	std::string pkg_u16_raw = make_ole1_objdata_prefix(2u, "Package", pkg_u16_payload);
+
+	std::string rtf_obj =
+		"{\\rtf1\\ansi\\deff0"
+		"{\\b\\bin3 }{}}AFTER_BIN_OK "
+		"{\\*\\dest\\bin2 {}}AFTER_SKIP_OK "
+		"{\\object\\objautlink{\\*\\objdata " + to_hex_str(link_raw) + "}}"
+		"{\\object\\objemb{\\*\\objdata " + to_hex_str(pkg_raw) + "}}"
+		"{\\object\\objemb{\\*\\objdata " + to_hex_str(pkg_u16_raw) + "}}"
+		"{\\object\\objemb{\\*\\objdata " + to_hex_str(ole_raw) + "}}"
+		"\\par}";
+	if (!ex.processFile(rtf_obj.data(), rtf_obj.size(), out) ||
+	    out.find("AFTER_BIN_OK") == std::string::npos ||
+	    out.find("AFTER_SKIP_OK") == std::string::npos ||
+	    out.find("RTF_PKG_UTF8_\xE6\x99\xAE\xE6\x9E\x97\xE6\x96\xAF\xE9\xA1\xBF_OK") == std::string::npos ||
+	    out.find("RTF_PKG_U16_SURROGATE_OK") == std::string::npos ||
+	    out.find("RTF_OLE2_XLS_OK") == std::string::npos ||
+	    out.find("LINKED_SKIP_TEXT") != std::string::npos)
+	{
+		std::cerr << "FAIL: Step12 RTF objdata extraction mismatch: " << out << "\n";
+		return 1;
+	}
+
+	ex.setParseEmbeddedFiles(false);
+	std::string out_off;
+	if (!ex.processFile(rtf_obj.data(), rtf_obj.size(), out_off) ||
+	    out_off.find("RTF_PKG_UTF8") != std::string::npos ||
+	    out_off.find("RTF_OLE2_XLS_OK") != std::string::npos)
+	{
+		std::cerr << "FAIL: Step12 RTF parse_embedded=false did not skip objdata: " << out_off << "\n";
+		ex.setParseEmbeddedFiles(true);
+		return 1;
+	}
+	ex.setParseEmbeddedFiles(true);
+
+	// 3. OOXML chart XML extraction in DOCX and PPTX (incl. mc:Fallback skip & literal series boundaries)
+	{
+		const std::string chart_xml =
+			"<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" "
+			"xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+			"xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\">"
+			"<c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>CHART_TITLE_OK</a:t></a:r></a:p></c:rich></c:tx></c:title>"
+			"<mc:AlternateContent>"
+			"<mc:Choice Requires=\"c14\"><c:tx><c:rich><a:p><a:r><a:t>ALT_CHOICE_OK</a:t></a:r></a:p></c:rich></c:tx></mc:Choice>"
+			"<mc:Fallback><c:tx><c:rich><a:p><a:r><a:t>ALT_FALLBACK_SKIP</a:t></a:r></a:p></c:rich></c:tx></mc:Fallback>"
+			"</mc:AlternateContent>"
+			"<c:plotArea><c:pieChart><c:ser>"
+			"<c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:pt idx=\"0\"><c:v>SERIES_LABEL_OK</c:v></c:pt></c:strCache></c:strRef></c:tx>"
+			"<c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f><c:strCache><c:pt idx=\"0\"><c:v>January</c:v></c:pt><c:pt idx=\"1\"><c:v>February</c:v></c:pt></c:strCache></c:strRef></c:cat>"
+			"</c:ser><c:ser><c:tx><c:v>SERIES_LIT_1</c:v></c:tx></c:ser><c:ser><c:tx><c:v>SERIES_LIT_2</c:v></c:tx></c:ser>"
+			"</c:pieChart></c:plotArea></c:chart></c:chartSpace>";
+
+		std::vector<std::pair<std::string, std::string> > docx_entries = {
+			{"word/document.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p/></w:body></w:document>"},
+			{"word/charts/chart1.xml", chart_xml}
+		};
+		std::string docx_buf = build_zip_from_entries(docx_entries);
+		if (!ex.processFile(docx_buf.data(), docx_buf.size(), out) ||
+		    out.find("CHART_TITLE_OK") == std::string::npos ||
+		    out.find("ALT_CHOICE_OK") == std::string::npos ||
+		    out.find("ALT_FALLBACK_SKIP") != std::string::npos ||
+		    out.find("SERIES_LABEL_OK") == std::string::npos ||
+		    out.find("SERIES_LIT_1\nSERIES_LIT_2") == std::string::npos ||
+		    out.find("January\tFebruary") == std::string::npos ||
+		    out.find("Sheet1!$A$2:$A$3") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step12 DOCX chart extraction mismatch: " << out << "\n";
+			return 1;
+		}
+
+		std::vector<std::pair<std::string, std::string> > pptx_entries = {
+			{"ppt/presentation.xml",
+			 "<p:presentation xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" "
+			 "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+			 "<p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>"},
+			{"ppt/_rels/presentation.xml.rels",
+			 "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+			 "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide1.xml\"/>"
+			 "</Relationships>"},
+			{"ppt/slides/slide1.xml", "<p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree/></p:cSld></p:sld>"},
+			{"ppt/charts/chart1.xml", chart_xml}
+		};
+		std::string pptx_buf = build_zip_from_entries(pptx_entries);
+		if (!ex.processFile(pptx_buf.data(), pptx_buf.size(), out) ||
+		    out.find("CHART_TITLE_OK") == std::string::npos ||
+		    out.find("January\tFebruary") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step12 PPTX chart extraction mismatch: " << out << "\n";
+			return 1;
+		}
+	}
+
+	// 4. Legacy Numbers custom table name (even when sf:name-is-visible="false")
+	{
+		const std::string idx_xml =
+			"<?xml version=\"1.0\"?>"
+			"<ls:document xmlns:ls=\"http://developer.apple.com/namespaces/ls\" "
+			"xmlns:sf=\"http://developer.apple.com/namespaces/sf\" "
+			"xmlns:sfa=\"http://developer.apple.com/namespaces/sfa\">"
+			"<ls:workspace-array><ls:workspace ls:workspace-name=\"Sheet 1\">"
+			"<ls:page-info><sf:tabular-info>"
+			"<sf:tabular-model sf:name=\"This is the main table\" sf:name-is-visible=\"false\"/>"
+			"</sf:tabular-info></ls:page-info>"
+			"</ls:workspace></ls:workspace-array></ls:document>";
+		std::vector<std::pair<std::string, std::string> > num_entries = {
+			{"index.xml", idx_xml}
+		};
+		std::string num_buf = build_zip_from_entries(num_entries);
+		if (!ex.processFile(num_buf.data(), num_buf.size(), out) ||
+		    out.find("This is the main table") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step12 Numbers custom table name extraction mismatch: " << out << "\n";
+			return 1;
+		}
+	}
+
+	// 5. Adversarial regression guards (Step 13):
+	//    - DocToTextUnzip closed/unopened encryption probes
+	//    - IWorkParser metadata encryption propagation & modern ZIP-encrypted IWA
+	//    - RTF parseNumber 75-digit overflow guard, odd/ignored-group objdata, OLE2 CONTENTS PDF, utf8_to_ustring trailing/invalid UTF-8
+	//    - XLSX chart1.xml + strLit/numLit row boundaries
+	{
+		// 5a. DocToTextUnzip unopened & closed safety
+		DocToTextUnzip empty_unzip;
+		if (empty_unzip.isEncryptedEntry("index.xml") || empty_unzip.hasEncryptedEntries())
+		{
+			std::cerr << "FAIL: Step13 unopened DocToTextUnzip returned encrypted\n";
+			return 1;
+		}
+		std::vector<std::pair<std::string, std::string> > plain_zip_entries = {{"a.txt", "hello"}};
+		std::string plain_zip = build_zip_from_entries(plain_zip_entries);
+		DocToTextUnzip closed_unzip(plain_zip.data(), plain_zip.size());
+		if (!closed_unzip.open())
+		{
+			std::cerr << "FAIL: Step13 closed_unzip.open failed\n";
+			return 1;
+		}
+		closed_unzip.close();
+		if (closed_unzip.isEncryptedEntry("a.txt") || closed_unzip.hasEncryptedEntries())
+		{
+			std::cerr << "FAIL: Step13 closed DocToTextUnzip returned encrypted\n";
+			return 1;
+		}
+
+		// 5b. PlainTextExtractor::extractMetadata on encrypted .pages
+		doctotext::Metadata pages_meta;
+		doctotext::PlainTextExtractor meta_ex;
+		bool meta_ok = meta_ex.extractMetadata("encrypted/testPagesPwdProtected.pages", pages_meta);
+		if (meta_ok || !meta_ex.isEncrypted())
+		{
+			std::cerr << "FAIL: Step13 extractMetadata on encrypted .pages did not set isEncrypted\n";
+			return 1;
+		}
+
+		// 5c. Modern iWork ZIP with Index/Document.iwa marked encrypted (PKZIP bit 0 in local & central headers)
+		std::vector<std::pair<std::string, std::string> > mod_entries = {
+			{"Metadata/BuildVersionHistory.plist", "<plist/>"},
+			{"Index/Document.iwa", "ENCRYPTED_IWA_BYTES"}
+		};
+		std::string mod_iwork = build_zip_from_entries(mod_entries);
+		// Patch general purpose bit flag (bit 0) on Index/Document.iwa in local & central directory headers
+		for (size_t pos = 0; pos + 30 <= mod_iwork.size(); ++pos)
+		{
+			if (std::memcmp(&mod_iwork[pos], "PK\x03\x04", 4) == 0)
+			{
+				uint16_t nlen = static_cast<uint16_t>(static_cast<unsigned char>(mod_iwork[pos + 26])) |
+				                (static_cast<uint16_t>(static_cast<unsigned char>(mod_iwork[pos + 27])) << 8);
+				if (pos + 30 + nlen <= mod_iwork.size() &&
+				    mod_iwork.compare(pos + 30, nlen, "Index/Document.iwa") == 0)
+				{
+					mod_iwork[pos + 6] |= 0x01;
+				}
+			}
+			else if (pos + 46 <= mod_iwork.size() && std::memcmp(&mod_iwork[pos], "PK\x01\x02", 4) == 0)
+			{
+				uint16_t nlen = static_cast<uint16_t>(static_cast<unsigned char>(mod_iwork[pos + 28])) |
+				                (static_cast<uint16_t>(static_cast<unsigned char>(mod_iwork[pos + 29])) << 8);
+				if (pos + 46 + nlen <= mod_iwork.size() &&
+				    mod_iwork.compare(pos + 46, nlen, "Index/Document.iwa") == 0)
+				{
+					mod_iwork[pos + 8] |= 0x01;
+				}
+			}
+		}
+		doctotext::PlainTextExtractor mod_ex;
+		std::string mod_out;
+		if (mod_ex.processFile(mod_iwork.data(), mod_iwork.size(), mod_out) || !mod_ex.isEncrypted())
+		{
+			std::cerr << "FAIL: Step13 modern encrypted IWA did not report isEncrypted\n";
+			return 1;
+		}
+
+		// 5d. Overlong/invalid 4-byte UTF-8 and trailing multi-byte UTF-8 inside RTF Package
+		std::string tail_u8_pkg;
+		const std::string tail_u8_txt = "TAIL_UTF8_\xE6\x99\xAE\xE6\x9E\x97\xE6\x96\x87";
+		tail_u8_pkg.push_back('\x02'); tail_u8_pkg.push_back('\x00');
+		tail_u8_pkg += std::string("tail.txt") + '\0';
+		tail_u8_pkg += '\0';
+		tail_u8_pkg.push_back('\x00'); tail_u8_pkg.push_back('\x00');
+		tail_u8_pkg.push_back('\x03'); tail_u8_pkg.push_back('\x00');
+		push_u32_le_str(tail_u8_pkg, 8);
+		tail_u8_pkg += std::string("tail.txt") + '\0';
+		push_u32_le_str(tail_u8_pkg, static_cast<uint32_t>(tail_u8_txt.size()));
+		tail_u8_pkg += tail_u8_txt;
+		std::string tail_u8_raw = make_ole1_objdata_prefix(2u, "Package", tail_u8_pkg);
+
+		std::string bad_u8_pkg;
+		const std::string bad_u8_txt = "PREFIX_A\xF0\x80\x80\x80SUFFIX_Z";
+		bad_u8_pkg.push_back('\x02'); bad_u8_pkg.push_back('\x00');
+		bad_u8_pkg += std::string("bad.txt") + '\0';
+		bad_u8_pkg += '\0';
+		bad_u8_pkg.push_back('\x00'); bad_u8_pkg.push_back('\x00');
+		bad_u8_pkg.push_back('\x03'); bad_u8_pkg.push_back('\x00');
+		push_u32_le_str(bad_u8_pkg, 7);
+		bad_u8_pkg += std::string("bad.txt") + '\0';
+		push_u32_le_str(bad_u8_pkg, static_cast<uint32_t>(bad_u8_txt.size()));
+		bad_u8_pkg += bad_u8_txt;
+		std::string bad_u8_raw = make_ole1_objdata_prefix(2u, "Package", bad_u8_pkg);
+
+		std::string bad_u8_rtf =
+			"{\\rtf1\\ansi\\deff0"
+			"{\\object\\objemb{\\*\\objdata " + to_hex_str(tail_u8_raw) + "}}"
+			"{\\object\\objemb{\\*\\objdata " + to_hex_str(bad_u8_raw) + "}}"
+			"\\par}";
+		std::string bad_u8_out;
+		if (!ex.processFile(bad_u8_rtf.data(), bad_u8_rtf.size(), bad_u8_out) ||
+		    bad_u8_out.find("TAIL_UTF8_\xE6\x99\xAE\xE6\x9E\x97\xE6\x96\x87") == std::string::npos ||
+		    bad_u8_out.find("PREFIX_A") == std::string::npos ||
+		    bad_u8_out.find("SUFFIX_Z") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 UTF-8 RTF Package guard failed: " << bad_u8_out << "\n";
+			return 1;
+		}
+
+		// 5e. RTF 75-digit numeric param, odd hex, nested inside outer skipped group, and OLE2 CONTENTS PDF
+		OleSpecNode ole_pdf_root;
+		ole_pdf_root.name = "Root Entry";
+		ole_pdf_root.is_storage = true;
+		ole_pdf_root.children.push_back({"CONTENTS", false, make_pdf_with_attachments("RTF_OLE2_PDF_OK", std::vector<std::pair<std::string, std::string> >()), {}});
+		std::string ole_pdf_buf = build_ole2_from_tree(ole_pdf_root);
+		std::string ole_pdf_raw = make_ole1_objdata_prefix(2u, "AcroExch.Document", ole_pdf_buf);
+		std::string outer_skip_raw = make_ole1_objdata_prefix(2u, "Package", pkg_payload);
+		std::string overlong_bin = "\\bin" + std::string(75, '9') + " ";
+		std::string adv_rtf =
+			"{\\rtf1\\ansi\\deff0"
+			"{\\b" + overlong_bin + "SAFE_AFTER_LONG_ARG }"
+			"{\\*\\themedata{\\*\\objdata " + to_hex_str(outer_skip_raw) + "}}"
+			"{\\object\\objemb{\\*\\objdata 010}}"
+			"{\\object\\objemb{\\*\\objdata " + to_hex_str(ole_pdf_raw) + "}}"
+			"\\par}";
+		if (!ex.processFile(adv_rtf.data(), adv_rtf.size(), out) ||
+		    out.find("SAFE_AFTER_LONG_ARG") == std::string::npos ||
+		    out.find("RTF_OLE2_PDF_OK") == std::string::npos ||
+		    out.find("RTF_PKG_UTF8") != std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 adversarial RTF mismatch: " << out << "\n";
+			return 1;
+		}
+
+		// 5f. XLSX chart with strLit and numLit row splitting
+		const std::string xlsx_chart =
+			"<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\">"
+			"<c:chart><c:plotArea><c:barChart><c:ser>"
+			"<c:cat><c:strLit><c:ptCount val=\"2\"/><c:pt idx=\"0\"><c:v>LIT_A</c:v></c:pt><c:pt idx=\"1\"><c:v>LIT_B</c:v></c:pt></c:strLit></c:cat>"
+			"<c:val><c:numLit><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>99</c:v></c:pt></c:numLit></c:val>"
+			"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>";
+		std::vector<std::pair<std::string, std::string> > xlsx_entries = {
+			{"xl/workbook.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheets><sheet name=\"S1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"},
+			{"xl/worksheets/sheet1.xml", "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData/></worksheet>"},
+			{"xl/charts/chart1.xml", xlsx_chart}
+		};
+		std::string xlsx_buf = build_zip_from_entries(xlsx_entries);
+		if (!ex.processFile(xlsx_buf.data(), xlsx_buf.size(), out) ||
+		    out.find("LIT_A\tLIT_B\n99") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13 XLSX chart/strLit/numLit mismatch: " << out << "\n";
+			return 1;
+		}
+	}
+
+	std::cout << "PASS: Step 12 RTF \\* & objdata, OOXML chart XML, and Numbers table names\n";
+	return 0;
+}
+
 int main()
 {
 	if (test_step1_unified_switch_pdf() != 0)
@@ -1907,6 +2296,8 @@ int main()
 	if (test_step10_rtf_cp65001_and_unmatched_braces() != 0)
 		return 1;
 	if (test_step11_odf_negative_and_modern_iwork_guards() != 0)
+		return 1;
+	if (test_step12_rtf_objdata_charts_numbers() != 0)
 		return 1;
 	std::cout << "office_embedded_test PASSED.\n";
 	return 0;

@@ -34,6 +34,8 @@
 
 #include "doctotext_unzip.h"
 
+#include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <stdio.h>
@@ -139,6 +141,7 @@ struct DocToTextUnzip::Implementation
 DocToTextUnzip::DocToTextUnzip()
 {
 	Impl = new Implementation();
+	Impl->ArchiveFile = NULL;
 	Impl->m_log_stream = &std::cerr;
 	Impl->m_opened_for_chunks = false;
 	Impl->m_from_memory_buffer = false;
@@ -149,6 +152,7 @@ DocToTextUnzip::DocToTextUnzip()
 DocToTextUnzip::DocToTextUnzip(const std::string& archive_file_name)
 {
 	Impl = new Implementation();
+	Impl->ArchiveFile = NULL;
 	Impl->ArchiveFileName = archive_file_name;
 	Impl->m_log_stream = &std::cerr;
 	Impl->m_opened_for_chunks = false;
@@ -160,6 +164,7 @@ DocToTextUnzip::DocToTextUnzip(const std::string& archive_file_name)
 DocToTextUnzip::DocToTextUnzip(const char *buffer, size_t size)
 {
 	Impl = new Implementation();
+	Impl->ArchiveFile = NULL;
 	Impl->ArchiveFileName = "Memory buffer";
 	Impl->m_log_stream = &std::cerr;
 	Impl->m_opened_for_chunks = false;
@@ -230,7 +235,13 @@ bool DocToTextUnzip::open()
 
 void DocToTextUnzip::close()
 {
-	unzClose(Impl->ArchiveFile);
+	if (Impl->ArchiveFile)
+	{
+		unzClose(Impl->ArchiveFile);
+		Impl->ArchiveFile = NULL;
+	}
+	Impl->m_directory.clear();
+	Impl->m_opened_for_chunks = false;
 }
 
 bool DocToTextUnzip::exists(const std::string& file_name) const
@@ -451,6 +462,102 @@ bool DocToTextUnzip::loadDirectory()
 			return false;
 	}
 	return true;
+}
+
+static bool isCurrentZipEntryEncrypted(unzFile archive_file)
+{
+	unz_file_info file_info;
+	if (unzGetCurrentFileInfo(archive_file, &file_info, NULL, 0, NULL, 0, NULL, 0) != UNZ_OK)
+		return false;
+	// Standard PKZIP encryption flag (bit 0) or WinZip AES compression method (99)
+	if ((file_info.flag & 0x1u) != 0 || file_info.compression_method == 99)
+		return true;
+	// Legacy iWork ('09) password-protected archives use Apple custom compression methods 25451/25452 (0x636b/0x636c)
+	if (file_info.compression_method == 25451 || file_info.compression_method == 25452)
+		return true;
+	if (file_info.size_file_extra > 0 && file_info.size_file_extra <= 65536)
+	{
+		std::vector<unsigned char> extra(file_info.size_file_extra);
+		if (unzGetCurrentFileInfo(archive_file, &file_info, NULL, 0, extra.data(), file_info.size_file_extra, NULL, 0) == UNZ_OK)
+		{
+			size_t pos = 0;
+			while (pos + 4 <= extra.size())
+			{
+				uint16_t header_id = static_cast<uint16_t>(extra[pos]) |
+				                     (static_cast<uint16_t>(extra[pos + 1]) << 8);
+				uint16_t data_size = static_cast<uint16_t>(extra[pos + 2]) |
+				                     (static_cast<uint16_t>(extra[pos + 3]) << 8);
+				pos += 4;
+				if (data_size > extra.size() - pos)
+					break;
+				if (header_id == 0x636du && data_size >= 4 && std::memcmp(&extra[pos], "iwpv", 4) == 0)
+					return true;
+				pos += data_size;
+			}
+		}
+	}
+	return false;
+}
+
+namespace
+{
+	struct ZipCursorGuard
+	{
+		unzFile archive;
+		unz_file_pos saved_pos;
+		bool has_saved;
+		explicit ZipCursorGuard(unzFile f) : archive(f), has_saved(false)
+		{
+			if (archive)
+				has_saved = (unzGetFilePos(archive, &saved_pos) == UNZ_OK);
+		}
+		~ZipCursorGuard()
+		{
+			if (archive && has_saved)
+				unzGoToFilePos(archive, &saved_pos);
+		}
+	};
+}
+
+bool DocToTextUnzip::isEncryptedEntry(const std::string& file_name) const
+{
+	if (!Impl->ArchiveFile || Impl->m_opened_for_chunks)
+		return false;
+	ZipCursorGuard cursor_guard(Impl->ArchiveFile);
+	int res;
+	if (Impl->m_directory.size() > 0)
+	{
+		std::map<std::string, unz_file_pos>::const_iterator i = Impl->m_directory.find(file_name);
+		if (i == Impl->m_directory.end())
+			return false;
+		unz_file_pos pos = i->second;
+		res = unzGoToFilePos(Impl->ArchiveFile, &pos);
+	}
+	else
+		res = unzLocateFile(Impl->ArchiveFile, file_name.c_str(), CASESENSITIVITY);
+	if (res != UNZ_OK)
+		return false;
+	return isCurrentZipEntryEncrypted(Impl->ArchiveFile);
+}
+
+bool DocToTextUnzip::hasEncryptedEntries() const
+{
+	if (!Impl->ArchiveFile || Impl->m_opened_for_chunks)
+		return false;
+	ZipCursorGuard cursor_guard(Impl->ArchiveFile);
+	if (unzGoToFirstFile(Impl->ArchiveFile) != UNZ_OK)
+		return false;
+	for (;;)
+	{
+		if (isCurrentZipEntryEncrypted(Impl->ArchiveFile))
+			return true;
+		int res = unzGoToNextFile(Impl->ArchiveFile);
+		if (res == UNZ_END_OF_LIST_OF_FILE)
+			break;
+		if (res != UNZ_OK)
+			return false;
+	}
+	return false;
 }
 
 bool DocToTextUnzip::getFileList(std::vector<std::string>& files)

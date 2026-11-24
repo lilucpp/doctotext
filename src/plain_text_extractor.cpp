@@ -333,8 +333,10 @@ struct PlainTextExtractor::Implementation
 			rtf.setVerboseLogging(true);
 		if (m_log_stream != &std::cerr)
 			rtf.setLogStream(*m_log_stream);
+		if (m_image_callback)
+			rtf.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using RTF parser.\n";
-		text = rtf.plainText();
+		text = rtf.plainText(m_formatting_style);
 		m_links.clear();
 		rtf.getLinks(m_links);
 		return rtf.error();
@@ -431,6 +433,8 @@ struct PlainTextExtractor::Implementation
 			iwork.setLogStream(*m_log_stream);
 		*m_log_stream << "Using iWork parser.\n";
 		text = iwork.plainText(m_formatting_style);
+		if (iwork.encrypted())
+			m_is_encrypted = true;
 		m_links.clear();
 		iwork.getLinks(m_links);
 		return iwork.error();
@@ -617,6 +621,8 @@ struct PlainTextExtractor::Implementation
 			iwork.setLogStream(*m_log_stream);
 		*m_log_stream << "Using IWork parser.\n";
 		metadata = iwork.metaData();
+		if (iwork.encrypted())
+			m_is_encrypted = true;
 		return iwork.error();
 	}
 

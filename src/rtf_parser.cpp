@@ -34,8 +34,11 @@
 
 #include "rtf_parser.h"
 
+#include <cctype>
 #include <cstdint>
 #include "data_stream.h"
+#include "embedded_object_extractor.h"
+#include "formatting_style.h"
 #include <iostream>
 #include <map>
 #include <memory>
@@ -47,6 +50,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <vector>
 #include <wv2/textconverter.h>
 #include <wv2/ustring.h>
 using namespace wvWare;
@@ -58,6 +62,8 @@ struct RTFParser::Implementation
 	bool m_verbose_logging;
 	std::ostream* m_log_stream;
 	DataStream* m_data_stream;
+	doctotext::ImageParserCallback m_image_callback;
+	void* m_image_user_data;
 };
 
 RTFParser::RTFParser(const std::string& file_name)
@@ -68,6 +74,8 @@ RTFParser::RTFParser(const std::string& file_name)
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
 	impl->m_data_stream = new FileStream(file_name);
+	impl->m_image_callback = NULL;
+	impl->m_image_user_data = NULL;
 }
 
 RTFParser::RTFParser(const char* buffer, size_t size)
@@ -78,6 +86,8 @@ RTFParser::RTFParser(const char* buffer, size_t size)
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
 	impl->m_data_stream = new BufferStream(buffer, size);
+	impl->m_image_callback = NULL;
+	impl->m_image_user_data = NULL;
 }
 
 RTFParser::~RTFParser()
@@ -94,6 +104,12 @@ void RTFParser::setVerboseLogging(bool verbose)
 void RTFParser::setLogStream(std::ostream& log_stream)
 {
 	impl->m_log_stream = &log_stream;
+}
+
+void RTFParser::setImageParserCallback(doctotext::ImageParserCallback callback, void* user_data)
+{
+	impl->m_image_callback = callback;
+	impl->m_image_user_data = user_data;
 }
 
 bool RTFParser::isRTF()
@@ -130,15 +146,21 @@ static long parseNumber(DataStream& data_stream)
 {
 	int ch;
 	int count = 0;
+	bool overflowed = false;
 	char buf[RTFARGSMAXLEN + 1];
-	
+
 	while (isdigit(ch = data_stream.getc()) || ch == '-')
 	{
-		if(data_stream.eof())
+		if (data_stream.eof())
 			return -1;
-		buf[count++] = (char)ch;
+		if (count < RTFARGSMAXLEN)
+			buf[count++] = static_cast<char>(ch);
+		else
+			overflowed = true;
 	}
 	data_stream.unGetc(ch);
+	if (overflowed || count == 0)
+		return 0;
 	buf[count] = '\0';
 	return strtol(buf, (char **)NULL, 10);
 }
@@ -210,7 +232,9 @@ enum RTFCommand
 	RTF_FLDRSLT,
 	RTF_ANNOTATION,
 	RTF_ATNDATE,
-	RTF_ATNAUTHOR
+	RTF_ATNAUTHOR,
+	RTF_OBJDATA,
+	RTF_BIN
 };
 
 struct RTFStringCommand
@@ -259,7 +283,9 @@ RTFStringCommand rtf_commands[] =
 	{ "fcharset", RTF_FONT_CHARSET },
 	{ "annotation", RTF_ANNOTATION },
 	{ "atndate", RTF_ATNDATE },
-	{ "atnauthor", RTF_ATNAUTHOR }
+	{ "atnauthor", RTF_ATNAUTHOR },
+	{ "objdata", RTF_OBJDATA },
+	{ "bin", RTF_BIN }
 };
 
 struct RTFGroup
@@ -280,7 +306,42 @@ struct RTFParserState
 	bool doc_is_utf8;
 	bool is_utf8;
 	std::string pending_utf8;
+	bool at_group_start;
+	int objdata_depth;
+	bool objdata_limit_exceeded;
+	size_t max_objdata_hex_chars;
+	size_t total_objdata_hex_chars;
+	size_t max_total_objdata_hex_chars;
+	int objdata_attempts;
+	int max_objdata_attempts;
+	std::string objdata_hex;
 };
+
+static int hexNibbleValue(unsigned char c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+	if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+	return -1;
+}
+
+static bool decodeRtfHex(const std::string& hex, std::vector<unsigned char>& out)
+{
+	out.clear();
+	if (hex.size() < 2)
+		return false;
+	out.reserve(hex.size() / 2);
+	size_t usable = hex.size() & ~static_cast<size_t>(1);
+	for (size_t i = 0; i < usable; i += 2)
+	{
+		int hi = hexNibbleValue(static_cast<unsigned char>(hex[i]));
+		int lo = hexNibbleValue(static_cast<unsigned char>(hex[i + 1]));
+		if (hi < 0 || lo < 0)
+			return false;
+		out.push_back(static_cast<unsigned char>((hi << 4) | lo));
+	}
+	return !out.empty();
+}
 
 static void appendTargetText(RTFParserState& state, UString& text, const UString& fragment)
 {
@@ -500,14 +561,28 @@ static std::string format_comment(const std::string& author, const std::string& 
 }
 
 static void execCommand(DataStream& data_stream, UString& text, int& skip, RTFParserState& state, RTFCommand cmd, long int arg,
-	std::unique_ptr<TextConverter>& converter, bool verbose, std::ostream& log_stream, UString& doc_text)
+	std::unique_ptr<TextConverter>& converter, bool verbose, std::ostream& log_stream, UString& doc_text,
+	const doctotext::EmbeddedExtractionContext& embed_ctx)
 {
 	if (cmd != RTF_CHAR)
 		flushPendingUtf8(state, doc_text);
+	bool was_at_group_start = state.at_group_start;
+	state.at_group_start = false;
+	if (cmd == RTF_BIN)
+	{
+		for (long int i = 0; i < arg; ++i)
+		{
+			if (data_stream.getc() == EOF)
+				break;
+		}
+		return;
+	}
+	if (state.objdata_depth >= 0)
+		return;
 	switch (cmd)
 	{
 		case RTF_SPEC_CHAR:
-			if (arg == '*' && skip == 0)
+			if (arg == '*' && was_at_group_start && skip == 0)
 				skip = state.groups.size() - 1;
 			else if (arg == '\r' || arg == '\n') // the same as \para command
 				text += UString("\n");
@@ -677,10 +752,38 @@ static void execCommand(DataStream& data_stream, UString& text, int& skip, RTFPa
 				data_stream.unGetc(ch);
 			break;
 		}
+		case RTF_OBJDATA:
+		{
+			int cur_depth = static_cast<int>(state.groups.size()) - 1;
+			if (embed_ctx.formatting.parse_embedded_files &&
+			    embed_ctx.depth < embed_ctx.max_depth &&
+			    embed_ctx.extracted_count < embed_ctx.max_count &&
+			    state.objdata_attempts < state.max_objdata_attempts &&
+			    state.total_objdata_hex_chars < state.max_total_objdata_hex_chars &&
+			    (skip == 0 || skip == cur_depth) &&
+			    state.objdata_depth < 0)
+			{
+				state.objdata_depth = cur_depth;
+				state.objdata_limit_exceeded = false;
+				state.objdata_hex.clear();
+				if (skip == 0)
+					skip = cur_depth;
+			}
+			else if (skip == 0)
+			{
+				skip = cur_depth;
+			}
+			break;
+		}
 	}
 }
 
 std::string RTFParser::plainText()
+{
+	return plainText(FormattingStyle());
+}
+
+std::string RTFParser::plainText(const FormattingStyle& formatting)
 {
 	impl->m_error = false;
 	UString text;
@@ -703,6 +806,16 @@ std::string RTFParser::plainText()
 		explicit DataStreamGuard(DataStream* s) : ds(s) {}
 		~DataStreamGuard() { if (ds) ds->close(); }
 	} stream_guard(impl->m_data_stream);
+
+	doctotext::EmbeddedExtractionContext root_ctx;
+	root_ctx.formatting = formatting;
+	root_ctx.verbose_logging = impl->m_verbose_logging;
+	root_ctx.log_stream = impl->m_log_stream;
+	root_ctx.image_callback = impl->m_image_callback;
+	root_ctx.image_user_data = impl->m_image_user_data;
+	doctotext::EmbeddedExtractionContext::ScopedContext tls_scope(root_ctx);
+	doctotext::EmbeddedExtractionContext& embed_ctx = tls_scope.context();
+
 	int ch;
 	RTFParserState state;
 	state.groups.push(RTFGroup());
@@ -711,6 +824,14 @@ std::string RTFParser::plainText()
 	state.last_font_ref_num = 0;
 	state.doc_is_utf8 = false;
 	state.is_utf8 = false;
+	state.at_group_start = false;
+	state.objdata_depth = -1;
+	state.objdata_limit_exceeded = false;
+	state.max_objdata_hex_chars = embed_ctx.max_bytes * 2 + 4096;
+	state.total_objdata_hex_chars = 0;
+	state.max_total_objdata_hex_chars = embed_ctx.max_bytes * 4;
+	state.objdata_attempts = 0;
+	state.max_objdata_attempts = embed_ctx.max_count * 2;
 	int skip = 0;
 	while ((ch = impl->m_data_stream->getc()) != EOF)
 	{
@@ -721,9 +842,12 @@ std::string RTFParser::plainText()
 				RTFCommand cmd;
 				long int arg;
 				if (!parseCommand(*impl->m_data_stream, cmd, arg, impl->m_verbose_logging, *impl->m_log_stream))
+				{
+					state.at_group_start = false;
 					break;
+				}
 				UString fragment_text;
-				execCommand(*impl->m_data_stream, fragment_text, skip, state, cmd, arg, converter, impl->m_verbose_logging, *impl->m_log_stream, text);
+				execCommand(*impl->m_data_stream, fragment_text, skip, state, cmd, arg, converter, impl->m_verbose_logging, *impl->m_log_stream, text, embed_ctx);
 				appendTargetText(state, text, fragment_text);
 				break;
 			}
@@ -732,14 +856,40 @@ std::string RTFParser::plainText()
 				flushPendingUtf8(state, text);
 				state.groups.push(state.groups.top());
 				state.groups.top().in_annotation = false;
+				state.at_group_start = true;
 				break;
 			case '}':
 			{
 				flushPendingUtf8(state, text);
+				state.at_group_start = false;
 				if (state.groups.size() <= 1)
 				{
 					skip = 0;
+					state.objdata_depth = -1;
+					state.objdata_hex.clear();
 					break;
+				}
+				if (state.objdata_depth >= 0 &&
+				    static_cast<int>(state.groups.size()) - 1 == state.objdata_depth)
+				{
+					if (!state.objdata_limit_exceeded && !state.objdata_hex.empty())
+					{
+						++state.objdata_attempts;
+						std::vector<unsigned char> raw_obj;
+						if (decodeRtfHex(state.objdata_hex, raw_obj))
+						{
+							std::string obj_text;
+							if (doctotext::extractOle1ObjData(raw_obj.data(), raw_obj.size(), embed_ctx, obj_text) && !obj_text.empty())
+							{
+								if (!state.groups.top().in_annotation && !text.isEmpty() && text[text.length() - 1] != '\n')
+									text += UString("\n");
+								appendTargetText(state, text, utf8_to_ustring(obj_text));
+							}
+						}
+					}
+					std::string().swap(state.objdata_hex);
+					state.objdata_depth = -1;
+					state.objdata_limit_exceeded = false;
 				}
 				bool in_annotation = state.groups.top().in_annotation;
 				state.groups.pop();
@@ -751,6 +901,28 @@ std::string RTFParser::plainText()
 			}
 
 			default:
+				if (state.objdata_depth >= 0 &&
+				    static_cast<int>(state.groups.size()) - 1 == state.objdata_depth)
+				{
+					state.at_group_start = false;
+					if (!state.objdata_limit_exceeded && std::isxdigit(static_cast<unsigned char>(ch)))
+					{
+						if (state.objdata_hex.size() < state.max_objdata_hex_chars &&
+						    state.total_objdata_hex_chars < state.max_total_objdata_hex_chars)
+						{
+							state.objdata_hex.push_back(static_cast<char>(ch));
+							++state.total_objdata_hex_chars;
+						}
+						else
+						{
+							state.objdata_limit_exceeded = true;
+							std::string().swap(state.objdata_hex);
+						}
+					}
+					break;
+				}
+				if (ch != '\n' && ch != '\r')
+					state.at_group_start = false;
 				if (skip == 0 && (ch != '\n' || state.groups.top().in_annotation) && ch != '\r')
 				{
 					if (state.is_utf8)

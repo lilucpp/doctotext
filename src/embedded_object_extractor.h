@@ -128,6 +128,12 @@ namespace doctotext
 	                          bool is_ooxml,
 	                          EmbeddedExtractionContext& ctx,
 	                          std::string& out_text);
+
+	/// Parses an OLE 1.0 object payload (e.g. from RTF `{\*\objdata ...}`) and extracts text.
+	bool extractOle1ObjData(const unsigned char* data,
+	                        size_t size,
+	                        EmbeddedExtractionContext& ctx,
+	                        std::string& out_text);
 }
 
 #endif
