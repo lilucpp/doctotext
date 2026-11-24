@@ -37,6 +37,7 @@
 #include <algorithm>
 #include "data_stream.h"
 #include <fstream>
+#include <limits>
 #include "entities.h"
 #include "htmlcxx/html/Node.h"
 #include "htmlcxx/html/ParserSax.h"
@@ -821,6 +822,129 @@ void HTMLParser::setLogStream(std::ostream& log_stream)
 	impl->m_log_stream = &log_stream;
 }
 
+namespace
+{
+	bool isAsciiWhitespace(char ch)
+	{
+		return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\f' || ch == '\v';
+	}
+
+	bool isHtmlTagBoundary(char ch)
+	{
+		return ch == '>' || ch == '/' || isAsciiWhitespace(ch);
+	}
+
+	bool asciiStartsWithIgnoreCase(const std::string& content, size_t pos, const char* prefix, size_t prefix_len)
+	{
+		if (pos + prefix_len > content.size())
+			return false;
+		for (size_t i = 0; i < prefix_len; ++i)
+		{
+			unsigned char a = static_cast<unsigned char>(content[pos + i]);
+			unsigned char b = static_cast<unsigned char>(prefix[i]);
+			if (a >= 'A' && a <= 'Z')
+				a = static_cast<unsigned char>(a + ('a' - 'A'));
+			if (b >= 'A' && b <= 'Z')
+				b = static_cast<unsigned char>(b + ('a' - 'A'));
+			if (a != b)
+				return false;
+		}
+		return true;
+	}
+
+	bool containsCaseInsensitiveHtmlOrDoctype(const std::string& content)
+	{
+		for (size_t i = 0; i < content.size(); ++i)
+		{
+			if (content[i] != '<')
+				continue;
+			if (i + 5 < content.size() &&
+			    asciiStartsWithIgnoreCase(content, i + 1, "html", 4) &&
+			    isHtmlTagBoundary(content[i + 5]))
+			{
+				return true;
+			}
+			if (i + 9 < content.size() &&
+			    asciiStartsWithIgnoreCase(content, i + 1, "!doctype", 8) &&
+			    isAsciiWhitespace(content[i + 9]))
+			{
+				size_t j = i + 10;
+				while (j < content.size() && isAsciiWhitespace(content[j]))
+					++j;
+				if (j + 4 < content.size() &&
+				    asciiStartsWithIgnoreCase(content, j, "html", 4) &&
+				    isHtmlTagBoundary(content[j + 4]))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	bool hasAnchoredHeadlessHtmlOpeningTag(const std::string& content, size_t* out_tag_pos)
+	{
+		static const char* const kHtmlLeadingTags[] = {
+			"head", "body", "meta", "title", "style", "script",
+			"p", "div", "table", "span", "section", "article",
+			"h1", "h2", "h3", "h4", "h5", "h6",
+			"ul", "ol", "dl", "blockquote", "pre", "center", "font"
+		};
+		size_t pos = 0;
+		if (content.size() >= 3 &&
+		    static_cast<unsigned char>(content[0]) == 0xEF &&
+		    static_cast<unsigned char>(content[1]) == 0xBB &&
+		    static_cast<unsigned char>(content[2]) == 0xBF)
+		{
+			pos = 3;
+		}
+		for (int comment_count = 0; comment_count < 32; ++comment_count)
+		{
+			while (pos < content.size() && isAsciiWhitespace(content[pos]))
+				++pos;
+			if (!asciiStartsWithIgnoreCase(content, pos, "<!--", 4))
+				break;
+			size_t end_comment = content.find("-->", pos + 4);
+			if (end_comment == std::string::npos)
+				return false;
+			pos = end_comment + 3;
+		}
+		while (pos < content.size() && isAsciiWhitespace(content[pos]))
+			++pos;
+		if (pos >= content.size() || content[pos] != '<')
+			return false;
+
+		bool matched = false;
+		for (size_t i = 0; i < sizeof(kHtmlLeadingTags) / sizeof(kHtmlLeadingTags[0]); ++i)
+		{
+			const char* tag = kHtmlLeadingTags[i];
+			const size_t tag_len = std::string::traits_type::length(tag);
+			if (pos + 1 + tag_len < content.size() &&
+			    asciiStartsWithIgnoreCase(content, pos + 1, tag, tag_len) &&
+			    isHtmlTagBoundary(content[pos + 1 + tag_len]))
+			{
+				matched = true;
+				break;
+			}
+		}
+		if (!matched)
+			return false;
+
+		const size_t open_gt = content.find('>', pos + 1);
+		if (open_gt == std::string::npos || open_gt - pos > 4096)
+			return false;
+		if (out_tag_pos)
+			*out_tag_pos = pos;
+		return true;
+	}
+
+	bool hasHtmlClosingMarker(const std::string& content, size_t start_pos)
+	{
+		return content.find("</", start_pos) != std::string::npos ||
+		       content.find("/>", start_pos) != std::string::npos;
+	}
+}
+
 bool HTMLParser::isHTML()
 {
 	impl->m_error = false;
@@ -830,17 +954,63 @@ bool HTMLParser::isHTML()
 		impl->m_error = true;
 		return false;
 	}
-	size_t size = impl->m_data_stream->size();
-	std::string content(size, 0);
-	if (!impl->m_data_stream->read(&content[0], sizeof(unsigned char), size))
+	const size_t kMaxProbeBytes = 65536;
+	const size_t size = impl->m_data_stream->size();
+	const size_t probe_size = std::min(size, kMaxProbeBytes);
+	if (probe_size == 0)
+	{
+		impl->m_data_stream->close();
+		return false;
+	}
+	std::string content(probe_size, '\0');
+	if (!impl->m_data_stream->read(&content[0], sizeof(unsigned char), probe_size))
 	{
 		impl->m_data_stream->close();
 		*impl->m_log_stream << "Error reading file " << impl->m_file_name << ".\n";
 		impl->m_error = true;
 		return false;
 	}
+	if (content.find('\0') != std::string::npos)
+	{
+		impl->m_data_stream->close();
+		return false;
+	}
+	if (containsCaseInsensitiveHtmlOrDoctype(content))
+	{
+		impl->m_data_stream->close();
+		return true;
+	}
+	size_t tag_pos = 0;
+	if (!hasAnchoredHeadlessHtmlOpeningTag(content, &tag_pos))
+	{
+		impl->m_data_stream->close();
+		return false;
+	}
+	if (hasHtmlClosingMarker(content, tag_pos + 1))
+	{
+		impl->m_data_stream->close();
+		return true;
+	}
+	// Large single-paragraph fragment (e.g. >64 KB before </p>): inspect tail slice without loading entire file.
+	if (size > probe_size)
+	{
+		const size_t tail_len = std::min<size_t>(size - probe_size, 4096);
+		const size_t tail_offset = size - tail_len;
+		if (tail_offset <= static_cast<size_t>(std::numeric_limits<int>::max()) &&
+		    impl->m_data_stream->seek(static_cast<int>(tail_offset), SEEK_SET))
+		{
+			std::string tail(tail_len, '\0');
+			if (impl->m_data_stream->read(&tail[0], sizeof(unsigned char), tail_len) &&
+			    tail.find('\0') == std::string::npos &&
+			    hasHtmlClosingMarker(tail, 0))
+			{
+				impl->m_data_stream->close();
+				return true;
+			}
+		}
+	}
 	impl->m_data_stream->close();
-	return content.find("<html") != std::string::npos || content.find("<HTML") != std::string::npos;
+	return false;
 }
 
 void HTMLParser::getLinks(std::vector<Link>& links)

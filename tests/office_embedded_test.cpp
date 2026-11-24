@@ -2458,6 +2458,65 @@ static int test_step12_rtf_objdata_charts_numbers()
 		}
 	}
 
+	{
+		// 13b. Headless HTML fragment disguised as OOXML/DOC (e.g. <p>&nbsp;...</p> without <html>)
+		const std::string bare_p = "<p>\xe3\x80\x80\xe3\x80\x80&nbsp;&nbsp;\xe7\xbb\xbf\xe8\x89\xb2\xe5\x86\x9c\xe6\x88\xbf</p><p>Line2</p>";
+		std::string bare_p_out;
+		if (!ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, bare_p.data(), bare_p.size(), bare_p_out) ||
+		    bare_p_out.find("\xe7\xbb\xbf\xe8\x89\xb2\xe5\x86\x9c\xe6\x88\xbf") == std::string::npos ||
+		    bare_p_out.find("&nbsp;") != std::string::npos ||
+		    bare_p_out.find("Line2") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b headless <p> OOXML fallback failed: " << bare_p_out << "\n";
+			return 1;
+		}
+
+		const std::string bom_div = "\xEF\xBB\xBF \r\n<!-- lead comment --><div class=\"main\"><table><tr><td>BomDivOk&nbsp;1</td></tr></table></div>";
+		std::string bom_div_out;
+		if (!ex.processFile(doctotext::PlainTextExtractor::PARSER_DOC, true, bom_div.data(), bom_div.size(), bom_div_out) ||
+		    bom_div_out.find("BomDivOk 1") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b BOM+comment <div> DOC fallback failed: " << bom_div_out << "\n";
+			return 1;
+		}
+
+		const std::string mixed_doctype = "<!DoCtYpE   HtMl><p>Doctype&nbsp;Ok</p>";
+		std::string mixed_doctype_out;
+		if (!ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, mixed_doctype.data(), mixed_doctype.size(), mixed_doctype_out) ||
+		    mixed_doctype_out.find("Doctype Ok") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b mixed-case DOCTYPE fallback failed: " << mixed_doctype_out << "\n";
+			return 1;
+		}
+
+		const std::string large_p = "<p>" + std::string(70000, 'A') + "TailToken</p>";
+		std::string large_p_out;
+		if (!ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, large_p.data(), large_p.size(), large_p_out) ||
+		    large_p_out.find("TailToken") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b >64KB single-<p> tail closing check failed\n";
+			return 1;
+		}
+
+		// Negative guards for HTMLParser::isHTML()
+		const std::vector<std::string> non_html_cases = {
+			"<?xml version=\"1.0\"?><p>XmlNotHtml</p>",
+			"<person>XmlTagNotHtml</person>",
+			std::string("<p>Lucene\0\0Binary</p>", 21),
+			"<p>Unclosed fragment without closing slash"
+		};
+		for (size_t i = 0; i < non_html_cases.size(); ++i)
+		{
+			doctotext::PlainTextExtractor::ParserType detected = doctotext::PlainTextExtractor::PARSER_AUTO;
+			if (ex.parserTypeByFileContent(non_html_cases[i].data(), non_html_cases[i].size(), detected) &&
+			    detected == doctotext::PlainTextExtractor::PARSER_HTML)
+			{
+				std::cerr << "FAIL: Step13b non-HTML negative case " << i << " misclassified as PARSER_HTML\n";
+				return 1;
+			}
+		}
+	}
+
 	std::cout << "PASS: Step 12 & 13 RTF/OOXML/iWork/XLS-TXO/DOC-EQ/PPT-EOF regression checks\n";
 	return 0;
 }
