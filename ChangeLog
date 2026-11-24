@@ -2,7 +2,10 @@ Version 5.1.5:
 	* PDF parser: extract /EmbeddedFiles (including B-Tree /Kids) and FileAttachment embedded documents.
 	* PDF parser: support Form XObject font scoping, /Differences glyph mapping, /Annots annotations, AcroForm/XFA forms, JBIG2Decode and CCITTFaxDecode G3/G4 images.
 	* PDF layout: baseline-clustered formula reading order, multi-column splitting, footer deduplication, and --compact-whitespace / doctotext_formatting_style_set_compact_whitespace.
-	* Security & C API: support empty-user-password PDF decryption, encrypted Office/ODF detection, and doctotext_process_file_ex / doctotext_process_file_from_buffer_ex with DOCTOTEXT_STATUS_OK / DOCTOTEXT_STATUS_ERROR / DOCTOTEXT_STATUS_ENCRYPTED.
+	* Unified embedded extraction: recursive extraction of embedded Office, ODF, RTF (\objdata), and PDF attachments/OLE objects with depth=4, zip-bomb, and count bounds (--parse-embedded / --no-parse-embedded).
+	* Office (DOC/XLS/PPT/OOXML/ODF): support MS-OFFCRYPTO VelvetSweatshop decryption, ECMA-376 alternate _rels/.rels main parts, OOXML SmartArt diagrams, Excel TXO textboxes & legacy BIFF4/BIFF5 & MSODRAWINGGROUP EMF PDFs, DOC EQ phonetic fields, PPT RT_ExOleObjStg & non-placeholder master/layout text, ODP master footers, and thread-safe libxml2 initialization.
+	* Apple iWork & RTF & HTML: add modern iWork 13/18 IWA (Snappy/Protobuf) parsing; RTF ansicpg65001 UTF-8 decoding and unmatched brace resilience; HTML bounded probing and anchored headless fragment detection (<p>, <div>, BOM/comments).
+	* Security & C API: support empty-user-password PDF decryption, encrypted Office/ODF detection, and doctotext_process_file_ex / doctotext_process_file_from_buffer_ex with DOCTOTEXT_STATUS_OK / DOCTOTEXT_STATUS_ERROR / DOCTOTEXT_STATUS_ENCRYPTED, plus DOCTOTEXT_VERSION macros.
 	* Examples & QA tools: add portable side-by-side Document Inspector web workbench under examples/viewer/ and examples/run_viewer.sh.
 
 Version 4.0:

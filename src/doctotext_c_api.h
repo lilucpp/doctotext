@@ -6,6 +6,11 @@ extern "C"
 {
 #endif
 
+#define DOCTOTEXT_VERSION_MAJOR 5
+#define DOCTOTEXT_VERSION_MINOR 1
+#define DOCTOTEXT_VERSION_PATCH 5
+#define DOCTOTEXT_VERSION "5.1.5"
+
 #ifndef DOCTOTEXT_CALL
 	#if defined(_WIN32) && !defined(_WIN64)
 		#define DOCTOTEXT_CALL __cdecl

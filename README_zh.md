@@ -25,18 +25,20 @@ DocToText 是一个轻量、高性能的 C/C++ 文档正文、元数据及批注
 
 ## 为什么选择本分支？（与上游版本对比）
 
-DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 进行了基础现代化 (2020–2022)。本分支（**v5.1.5+ 由 [lilucpp](https://github.com/lilucpp) 持续维护**）将其全面升级为面向大模型 RAG 知识库检索、超大规模语料清洗与生产级文档搜索的现代高性能抽取引擎：
+DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 进行了基础现代化 (2020–2022)。本分支（**v5.1.5 由 [lilucpp](https://github.com/lilucpp) 持续维护**）将其全面升级为面向大模型 RAG 知识库检索、超大规模语料清洗与生产级文档搜索的现代高性能抽取引擎：
 
-| 功能特性 / 演进指标 | 原版 (SILVERCODERS 0.2.x) | lithiumFlower 分支 | **本项目 (lilucpp v5.1.5+)** |
+| 功能特性 / 演进指标 | 原版 (SILVERCODERS 0.2.x) | lithiumFlower 分支 | **本项目 (lilucpp v5.1.5)** |
 | :--- | :---: | :---: | :---: |
 | **PDF 内嵌图片与扫描件 OCR** | ❌ 不支持 (`TODO: Do`) | ❌ 不支持 | **✅ 完整支持（JPEG / Flate / PNG / BMP / JBIG2 / CCITT G3/G4）** |
 | **PDF 排版阅读顺序与多栏/公式处理** | ❌ 无 | ❌ 无 | **✅ CTM 2D 几何排序、公式基线聚类、双栏/多栏分栏与页脚去重** |
 | **PDF 嵌入附件、批注与表单** | ❌ 无 | ❌ 无 | **✅ 支持 `/EmbeddedFiles`、`/Annots`、Form XObject 及 AcroForm/XFA** |
+| **跨格式统一递归嵌入提取** | ⚠️ 仅基础 DOC/XLS | ⚠️ 仅基础 DOC/XLS | **✅ 递归解析 DOC/DOCX/XLS/XLSX/PPT/PPTX/ODF/RTF/PDF 内嵌对象（含深度与炸弹防护）** |
+| **Office 与 iWork 深度格式支持** | ❌ 部分支持 | ❌ 部分支持 | **✅ BIFF4/5、TXO、DOC `EQ`、SmartArt、ECMA-376 `_rels/.rels`、iWork 13/18 `.iwa`** |
 | **双层（可搜索）PDF 智能去重** | ❌ 无 | ❌ 无 | **✅ 自动检测底图并跳过冗余 OCR** |
 | **纯扫描 PDF 兜底识别** | ❌ 返回空白 | ❌ 返回空白 | **✅ 自动扫描提取所有 Image XObject** |
-| **加密文档探测与 C API 状态码** | ⚠️ 仅报错 | ⚠️ 仅报错 | **✅ 空密码 PDF 自动解密 + `DOCTOTEXT_STATUS_ENCRYPTED` (PDF/Office/ODF)** |
+| **加密文档探测与 C API 状态码** | ⚠️ 仅报错 | ⚠️ 仅报错 | **✅ VelvetSweatshop OOXML + 空密码 PDF 自动解密 + `DOCTOTEXT_STATUS_ENCRYPTED`** |
 | **独立图片格式识别** | ❌ 不支持 | ❌ 不支持 | **✅ 支持 PNG / JPG / WebP / BMP / TIFF / GIF** |
-| **文件类型深度嗅探 (Magic Bytes)** | ❌ 仅依赖后缀 | ❌ 扩展名偏好 | **✅ 纳秒级短路深度嗅探 + 压缩包嗅探 (ZIP/7Z/TAR/RAR)** |
+| **文件深度嗅探与裸 HTML 片段** | ❌ 仅后缀 / `<html>` | ❌ 扩展名偏好 | **✅ 纳秒级魔数嗅探、压缩包嗅探及首部锚定 `<p>`/`<div>` 裸 HTML 片段识别** |
 | **字符编码智能探测 C API** | ❌ 仅内部调用 | ❌ 仅内部调用 | **✅ 导出公测 C API (`libcharsetdetect`)** |
 | **跨编译器 C ABI 稳定性 (MSVC/GCC)** | ⚠️ 易 ABI 崩溃 | ⚠️ C++ 符号粉碎 | **✅ 纯 C ABI 首选 (`__cdecl`)，自包含动态库零冲突** |
 | **绿色便携化部署 ($ORIGIN)** | ❌ 需系统级安装 | ❌ 需配置环境 | **✅ 绿色便携，同级/内嵌依赖开箱即用** |
@@ -54,9 +56,9 @@ DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 
 | **Microsoft Office 经典二进制** | `doc`, `xls`, `xlsb`, `ppt` | 原生 OLE2 / BIFF | 支持 | 支持 |
 | **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | 原生 XML / Unzip | 支持 | 支持 |
 | **OpenDocument (ODF)** | `odt`, `ods`, `odp`, `odg`, `fodt`, `fods`, `fodp` | 原生 XML / ZIP / Flat | 支持 | 支持 |
-| **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | 原生 Package 解析 | - | 仅文本 |
+| **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | 原生 XML 与 `.iwa` (Snappy/Protobuf) | - | 仅文本（支持 09 与 13/18+） |
 | **便携式文档格式 (PDF)** | `pdf` (排版文字与扫描件) | 原生 PDFParser | 支持（几何原位注入与扫描兜底） | 支持 |
-| **网页与富文本** | `html`, `htm`, `rtf` | HTML / RTF Parser | - | 超链接 |
+| **网页与富文本** | `html`, `htm`, `rtf` | HTML / RTF Parser | 支持内嵌 RTF OLE | 支持裸 HTML 片段与超链接 |
 | **电子邮件格式 (Email)** | `eml` (RFC 822) | Mimetic MIME Parser | - | 邮件头与附件 |
 
 ### 独立图像格式（统一走 OCR 回调）

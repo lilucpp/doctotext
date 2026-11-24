@@ -25,18 +25,20 @@ DocToText is a compact, high-performance C/C++ library and command-line utility 
 
 ## Why This Fork? (Comparison with Upstream)
 
-Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlower (2020–2022), DocToText was a capable document converter. This maintained fork (**v5.1.5+ by [lilucpp](https://github.com/lilucpp)**) elevates it into a modern, production-grade text extraction engine tailored for high-throughput data processing, RAG (Retrieval-Augmented Generation), and search indexing:
+Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlower (2020–2022), DocToText was a capable document converter. This maintained fork (**v5.1.5 by [lilucpp](https://github.com/lilucpp)**) elevates it into a modern, production-grade text extraction engine tailored for high-throughput data processing, RAG (Retrieval-Augmented Generation), and search indexing:
 
-| Capability / Feature | Original (SILVERCODERS 0.2.x) | lithiumFlower Fork | **This Fork (lilucpp v5.1.5+)** |
+| Capability / Feature | Original (SILVERCODERS 0.2.x) | lithiumFlower Fork | **This Fork (lilucpp v5.1.5)** |
 | :--- | :---: | :---: | :---: |
 | **PDF In-Place Embedded Image Extraction** | ❌ Unsupported (`TODO: Do`) | ❌ Unsupported | **✅ Supported (JPEG, Flate, PNG, BMP, JBIG2, CCITT G3/G4)** |
 | **PDF 2D Reading-Order & Multi-Column Layout** | ❌ None | ❌ None | **✅ CTM 2D geometric sorting, formula baseline clustering & column splitting** |
 | **PDF Embedded Files, Annotations & Forms** | ❌ None | ❌ None | **✅ Extracts `/EmbeddedFiles`, `/Annots`, Form XObjects & AcroForm/XFA** |
+| **Unified Embedded Document Extraction** | ⚠️ Basic DOC/XLS only | ⚠️ Basic DOC/XLS | **✅ Recursive DOC/DOCX/XLS/XLSX/PPT/PPTX/ODF/RTF/PDF (depth & zip-bomb guards)** |
+| **Office Edge Formats (Legacy/Modern)** | ❌ Partial | ❌ Partial | **✅ BIFF4/5, TXO, DOC `EQ`, SmartArt, ECMA-376 `_rels/.rels`, iWork 13/18 `.iwa`** |
 | **Dual-Layer (Searchable) PDF Deduplication** | ❌ None | ❌ None | **✅ Auto-detects & skips redundant background OCR** |
 | **Pure Scanned PDF Fallback** | ❌ Returns empty text | ❌ Returns empty text | **✅ Auto-dispatches all Image XObjects** |
-| **Encrypted File Handling & Status C API** | ⚠️ Generic failure | ⚠️ Generic failure | **✅ Empty-password PDF decrypt + `DOCTOTEXT_STATUS_ENCRYPTED` (PDF/Office/ODF)** |
+| **Encrypted File Handling & Status C API** | ⚠️ Generic failure | ⚠️ Generic failure | **✅ VelvetSweatshop OOXML + empty-password PDF decrypt + `DOCTOTEXT_STATUS_ENCRYPTED`** |
 | **Standalone Images Parsing** | ❌ Unsupported | ❌ Unsupported | **✅ PNG, JPG, WebP, BMP, TIFF, GIF via OCR** |
-| **Binary Format Sniffing (Magic Bytes)** | ❌ File extension only | ❌ Extension biased | **✅ Deep sniffing (~1.2 µs) + Archive types (ZIP/7Z/TAR/RAR)** |
+| **Binary Format Sniffing & Headless HTML** | ❌ Extension / `<html>` only | ❌ Extension biased | **✅ Deep sniffing (~1.2 µs), Archive types & anchored `<p>`/`<div>` HTML fragments** |
 | **Character Set Auto-Detection C API** | ❌ Internal only | ❌ Internal only | **✅ Public C API (`libcharsetdetect`)** |
 | **Cross-Compiler C ABI Stability** | ⚠️ STL / ABI breakage (MSVC) | ⚠️ Unstable FFI | **✅ Production-grade C ABI (`__cdecl`), self-contained shared lib** |
 | **Zero-Config Portable Deployment** | ❌ System install required | ❌ System paths | **✅ Relocatable (`$ORIGIN` & adjacent DLL search)** |
@@ -54,9 +56,9 @@ Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlow
 | **Microsoft Office (Legacy)** | `doc`, `xls`, `xlsb`, `ppt` | Native OLE2 / BIFF | Yes | Yes |
 | **Office Open XML (OOXML)** | `docx`, `xlsx`, `pptx` | Native XML / Unzip | Yes | Yes |
 | **OpenDocument (ODF)** | `odt`, `ods`, `odp`, `odg`, `fodt`, `fods`, `fodp` | Native XML / ZIP / Flat | Yes | Yes |
-| **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | Native Package Parser | - | Text only |
+| **Apple iWork** | `pages`, `numbers`, `key`, `keynote` | Native XML & `.iwa` (Snappy/Protobuf) | - | Text only (09 & 13/18+) |
 | **Portable Document Format** | `pdf` (Typeset text & Scans) | Native PDFParser | Yes (2D In-Place & Scan Fallback) | Yes |
-| **Web & Rich Text** | `html`, `htm`, `rtf` | HTML / RTF Parser | - | Hyperlinks |
+| **Web & Rich Text** | `html`, `htm`, `rtf` | HTML / RTF Parser | Embedded RTF OLE | Headless HTML fragments, Hyperlinks |
 | **Email Message** | `eml` (RFC 822) | Mimetic MIME Parser | - | Headers & Parts |
 
 ### Standalone Images (via OCR Callback)
