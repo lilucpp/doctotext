@@ -37,7 +37,6 @@
 #include <algorithm>
 #include "data_stream.h"
 #include <fstream>
-#include <limits>
 #include "entities.h"
 #include "htmlcxx/html/Node.h"
 #include "htmlcxx/html/ParserSax.h"
@@ -576,7 +575,10 @@ class DocToTextSaxParser : public ParserSax
 					if (m_curr_link_url[0] == '#' || m_curr_link_url.find("javascript") == 0)
 						m_curr_link_url = "";
 					else
+					{
+						ensureCharsetDetected();
 						convertToUtf8(m_curr_link_url);
+					}
 					m_curr_link_text = "";
 					m_curr_text_block = &m_curr_link_text;
 				}
@@ -1033,6 +1035,20 @@ namespace
 		}
 		return false;
 	}
+
+	// Returns the offset of a trailing "<!--" that has no matching "-->" inside content, or npos.
+	size_t findUnterminatedCommentStart(const std::string& content)
+	{
+		size_t pos = 0;
+		while ((pos = content.find("<!--", pos)) != std::string::npos)
+		{
+			const size_t end = content.find("-->", pos + 4);
+			if (end == std::string::npos)
+				return pos;
+			pos = end + 3;
+		}
+		return std::string::npos;
+	}
 }
 
 bool HTMLParser::isHTML()
@@ -1081,29 +1097,48 @@ bool HTMLParser::isHTML()
 		impl->m_data_stream->close();
 		return true;
 	}
-	// Large single-paragraph fragment (e.g. >64 KB before </p>): inspect overlapping tail slice without loading entire file.
+	// Large fragment: the closing marker may lie anywhere after the head probe. Scan the rest of the stream
+	// sequentially in bounded chunks (no seek, constant memory). A small overlap keeps markers that straddle chunk
+	// boundaries visible, and an unterminated "<!--" is carried over so comment content is never mis-scanned.
 	if (size > probe_size)
 	{
-		const size_t kTailWindow = 4096;
-		const size_t tail_len = std::min(size, kTailWindow);
-		const size_t tail_offset = size - tail_len;
-		if (tail_offset <= static_cast<size_t>(std::numeric_limits<int>::max()) &&
-		    impl->m_data_stream->seek(static_cast<int>(tail_offset), SEEK_SET))
+		const size_t kChunkSize = 65536;
+		const size_t kOverlap = 4096;
+		const size_t kMaxCommentCarry = 1024 * 1024;
+		auto compute_carry = [&](const std::string& window) -> std::string
 		{
-			std::string tail(tail_len, '\0');
-			if (!impl->m_data_stream->read(&tail[0], sizeof(unsigned char), tail_len))
+			const size_t comment_start = findUnterminatedCommentStart(window);
+			if (comment_start != std::string::npos && window.size() - comment_start <= kMaxCommentCarry)
+				return window.substr(comment_start);
+			return window.size() > kOverlap ? window.substr(window.size() - kOverlap) : window;
+		};
+		std::string carry = compute_carry(content);
+		size_t remaining = size - probe_size;
+		std::string chunk;
+		while (remaining > 0)
+		{
+			const size_t to_read = std::min(remaining, kChunkSize);
+			chunk.assign(to_read, '\0');
+			if (!impl->m_data_stream->read(&chunk[0], sizeof(unsigned char), to_read))
 			{
 				impl->m_data_stream->close();
 				*impl->m_log_stream << "Error reading file " << impl->m_file_name << ".\n";
 				impl->m_error = true;
 				return false;
 			}
-			if (tail.find('\0') == std::string::npos &&
-			    hasHtmlClosingMarker(tail, 0))
+			remaining -= to_read;
+			if (chunk.find('\0') != std::string::npos)
+			{
+				impl->m_data_stream->close();
+				return false;
+			}
+			std::string window = carry + chunk;
+			if (hasHtmlClosingMarker(window, 0))
 			{
 				impl->m_data_stream->close();
 				return true;
 			}
+			carry = compute_carry(window);
 		}
 	}
 	impl->m_data_stream->close();

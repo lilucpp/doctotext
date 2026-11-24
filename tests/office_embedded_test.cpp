@@ -2520,15 +2520,35 @@ static int test_step12_rtf_objdata_charts_numbers()
 			return 1;
 		}
 
-		// Non-UTF-8 (GB18030/GBK) headless <p> fragment without <body> or <meta charset>
+		// >69,632-byte document where closing </p> sits in the middle [65536, size-4096) gap followed by >4KB prose
+		const std::string mid_gap_p = "<p>" + std::string(70000, 'C') + "MidGapToken</p>" + std::string(6000, ' ');
+		std::string mid_gap_out;
+		if (!ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, mid_gap_p.data(), mid_gap_p.size(), mid_gap_out) ||
+		    mid_gap_out.find("MidGapToken") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b mid-gap closing </p> check failed\n";
+			return 1;
+		}
+
+		// Non-UTF-8 (GB18030/GBK) headless <p> and <a href> fragments without <body> or <meta charset>
 		const std::string gbk_p =
+			"<a href=\"http://example.com/\xd7\xa1\xb7\xbf\xb3\xc7\xcf\xe7\xbd\xa8\xc9\xe8\xb2\xbf\">"
+			"\xd7\xa1\xb7\xbf\xb3\xc7\xcf\xe7\xbd\xa8\xc9\xe8\xb2\xbf</a>"
 			"<p>\xd7\xa1\xb7\xbf\xb3\xc7\xcf\xe7\xbd\xa8\xc9\xe8\xb2\xbf\xb9\xd8\xd3\xda\xbf\xaa\xd5\xb9\xc2\xcc\xc9\xab\xc5\xa9\xb7\xbf\xbd\xa8\xc9\xe8\xb5\xc4\xcd\xa8\xd6\xaa\xa3\xac\xb4\xd9\xbd\xf8\xc5\xa9\xb4\xe5\xc2\xcc\xc9\xab\xbd\xa8\xd6\xfe\xb7\xa2\xd5\xb9\xa1\xa3&nbsp;</p>";
 		std::string gbk_out;
 		if (!ex.processFile(doctotext::PlainTextExtractor::PARSER_ODF_OOXML, true, gbk_p.data(), gbk_p.size(), gbk_out) ||
 		    gbk_out.find("\xe4\xbd\x8f\xe6\x88\xbf\xe5\x9f\x8e\xe4\xb9\xa1\xe5\xbb\xba\xe8\xae\xbe\xe9\x83\xa8") == std::string::npos ||
 		    gbk_out.find("&nbsp;") != std::string::npos)
 		{
-			std::cerr << "FAIL: Step13b headless GBK <p> charset detection failed: " << gbk_out << "\n";
+			std::cerr << "FAIL: Step13b headless GBK <p>/<a href> charset detection failed: " << gbk_out << "\n";
+			return 1;
+		}
+		std::vector<doctotext::Link> gbk_links;
+		ex.getParsedLinks(gbk_links);
+		if (gbk_links.empty() ||
+		    std::string(gbk_links[0].getLinkUrl()).find("\xe4\xbd\x8f\xe6\x88\xbf\xe5\x9f\x8e\xe4\xb9\xa1\xe5\xbb\xba\xe8\xae\xbe\xe9\x83\xa8") == std::string::npos)
+		{
+			std::cerr << "FAIL: Step13b headless GBK <a href> URL conversion failed\n";
 			return 1;
 		}
 
@@ -2543,6 +2563,8 @@ static int test_step12_rtf_objdata_charts_numbers()
 		}
 
 		// Negative guards for HTMLParser::isHTML()
+		const std::string cross_comment_only =
+			"<p>CommentCross" + std::string(65500, 'D') + "<!-- comment crossing 65536 </p> -->";
 		const std::vector<std::string> non_html_cases = {
 			"<?xml version=\"1.0\"?><p>XmlNotHtml</p>",
 			"<?xml version=\"1.0\"?><!-- <html> --><office:document>NotHtml</office:document>",
@@ -2554,7 +2576,8 @@ static int test_step12_rtf_objdata_charts_numbers()
 			"<p>Unclosed fragment without closing slash",
 			"<p>ratio </ 5",
 			"<pre>cmd 2>&1 /dev/null />",
-			"<p>only comment<!-- </p> -->"
+			"<p>only comment<!-- </p> -->",
+			cross_comment_only
 		};
 		for (size_t i = 0; i < non_html_cases.size(); ++i)
 		{

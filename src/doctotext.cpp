@@ -79,6 +79,9 @@ static void help()
 	printf("--odfxml\ttry to parse as ODFXML (Open Document Flat XML) document first.\n");
 	printf("--txt\ttry to parse as plain text document first.\n");
 	printf("--image\ttry to parse as image document first.\n");
+	printf("--table-style=[one-row|one-col|table-look]\tselect how tables are rendered (default: table-look).\n");
+	printf("--url-style=[text-only|extended|underscored]\tselect how hyperlinks are rendered (default: underscored).\n");
+	printf("--list-style-prefix=[PREFIX]\tprefix used for list items (default: \" * \").\n");
 	printf("--fix-xml\ttry to fix corrupted xml files (ODF, OOXML)\n");
 	printf("--strip-xml\tstrip xml tags instead of parsing them (ODF, OOXML)\n");
 	printf("--unzip-cmd=[COMMAND]\tuse COMMAND to unzip files from archives (ODF, OOXML)\n"
@@ -124,7 +127,6 @@ int main(int argc, char* argv[])
 	}
 
 	std::string arg;
-	std::string cmd;
 
 	bool extract_metadata = false;
 
@@ -139,92 +141,96 @@ int main(int argc, char* argv[])
 	bool verbose = false;
 	ofstream* log_stream = NULL;
 
+	// The last argument is always the input FILE; everything before it is an option.
+	const char* input_file = argv[argc - 1];
+	if (strncmp(input_file, "--", 2) == 0)
+	{
+		cerr << "Error: missing FILE argument (got option \"" << input_file << "\" instead).\n\n";
+		help();
+		return EXIT_FAILURE;
+	}
+
 	for (int i = 1; i + 1 < argc; ++i)
 	{
 		arg = argv[i];
 
-		if (arg.find("--meta", 0) != -1)
+		if (arg == "--meta")
 			extract_metadata = true;
-		if (arg.find("--rtf", 0) != -1)
+		else if (arg == "--rtf")
 			parser_type = PlainTextExtractor::PARSER_RTF;
-		if (arg.find("--odfxml", 0) != -1)
+		else if (arg == "--odfxml")
 			parser_type = PlainTextExtractor::PARSER_ODFXML;
-		if (arg.find("--odf", 0) != -1 || arg.find("ooxml", 0) != -1)
+		else if (arg == "--odf" || arg == "--ooxml")
 			parser_type = PlainTextExtractor::PARSER_ODF_OOXML;
-		if (arg.find("--xls", 0) != -1)
+		else if (arg == "--xls")
 			parser_type = PlainTextExtractor::PARSER_XLS;
-		if (arg.find("--xlsb", 0) != -1)
+		else if (arg == "--xlsb")
 			parser_type = PlainTextExtractor::PARSER_XLSB;
-		if (arg.find("--iwork", 0) != -1)
+		else if (arg == "--iwork")
 			parser_type = PlainTextExtractor::PARSER_IWORK;
-		if (arg.find("--ppt", 0) != -1)
+		else if (arg == "--ppt")
 			parser_type = PlainTextExtractor::PARSER_PPT;
-		if (arg.find("--doc", 0) != -1)
+		else if (arg == "--doc")
 			parser_type = PlainTextExtractor::PARSER_DOC;
-		if (arg.find("--html", 0) != -1)
+		else if (arg == "--html")
 			parser_type = PlainTextExtractor::PARSER_HTML;
-		if (arg.find("--pdf", 0) != -1)
+		else if (arg == "--pdf")
 			parser_type = PlainTextExtractor::PARSER_PDF;
-		if (arg.find("--eml", 0) != -1)
+		else if (arg == "--eml")
 			parser_type = PlainTextExtractor::PARSER_EML;
-		if (arg.find("--txt", 0) != -1)
+		else if (arg == "--txt")
 			parser_type = PlainTextExtractor::PARSER_TXT;
-		if (arg.find("--image", 0) != -1)
+		else if (arg == "--image")
 			parser_type = PlainTextExtractor::PARSER_IMAGE;
-
-		if(arg.find("table-style=", 0) != -1)
+		else if (arg.compare(0, 14, "--table-style=") == 0)
 		{
-			if(arg.find("one-row", arg.find("table-style=", 0) + 11) != -1)
-			{
+			const std::string value = arg.substr(14);
+			if (value == "one-row")
 				options.table_style = TABLE_STYLE_ONE_ROW;
-			}
-			if(arg.find("one-col", arg.find("table-style=", 0) + 11) != -1)
-			{
+			else if (value == "one-col")
 				options.table_style = TABLE_STYLE_ONE_COL;
-			}
-			if(arg.find("table-look", arg.find("table-style=", 0) + 11) != -1)
-			{
+			else if (value == "table-look")
 				options.table_style = TABLE_STYLE_TABLE_LOOK;
-			}
+			else
+				cerr << "Warning: unknown table-style \"" << value << "\" ignored.\n";
 		}
-		if(arg.find("url-style=", 0) != -1)
+		else if (arg.compare(0, 12, "--url-style=") == 0)
 		{
-			if(arg.find("text-only", arg.find("url-style=", 0) + 10) != -1)
-			{
+			const std::string value = arg.substr(12);
+			if (value == "text-only")
 				options.url_style = URL_STYLE_TEXT_ONLY;
-			}
-			if(arg.find("extended", arg.find("url-style=", 0) + 10) != -1)
-			{
+			else if (value == "extended")
 				options.url_style = URL_STYLE_EXTENDED;
-			}
-			if(arg.find("underscored", arg.find("url-style=", 0) + 10) != -1)
-			{
+			else if (value == "underscored")
 				options.url_style = URL_STYLE_UNDERSCORED;
-			}
+			else
+				cerr << "Warning: unknown url-style \"" << value << "\" ignored.\n";
 		}
-		if(arg.find("list-style-prefix=", 0) != -1)
-		{
-			options.list_style.setPrefix(arg.substr(arg.find("list-style-prefix=", 0) + 18));
-		}
-		if (arg.find("fix-xml", 0) != std::string::npos)
+		else if (arg.compare(0, 20, "--list-style-prefix=") == 0)
+			options.list_style.setPrefix(arg.substr(20));
+		else if (arg == "--fix-xml")
 			mode = FIX_XML;
-		if (arg.find("strip-xml", 0) != std::string::npos)
+		else if (arg == "--strip-xml")
 			mode = STRIP_XML;
-		if (arg.find("unzip-cmd=", 0) != -1)
-		{
-			DocToTextUnzip::setUnzipCommand(arg.substr(arg.find("unzip-cmd=", 0) + 10));
-		}
-		if (arg.find("verbose", 0) != std::string::npos)
+		else if (arg.compare(0, 12, "--unzip-cmd=") == 0)
+			DocToTextUnzip::setUnzipCommand(arg.substr(12));
+		else if (arg == "--verbose")
 			verbose = true;
-		if (arg.find("compact-whitespace", 0) != std::string::npos)
+		else if (arg == "--compact-whitespace")
 			options.compact_whitespace = true;
-		if (arg == "--parse-embedded")
+		else if (arg == "--parse-embedded")
 			options.parse_embedded_files = true;
-		if (arg == "--no-parse-embedded")
+		else if (arg == "--no-parse-embedded")
 			options.parse_embedded_files = false;
-		if (arg.find("log-file=", 0) != std::string::npos)
-			log_stream = new ofstream(arg.substr(arg.find("log-file=", 0) + 9).c_str());
+		else if (arg.compare(0, 11, "--log-file=") == 0)
+		{
+			delete log_stream;
+			log_stream = new ofstream(arg.substr(11).c_str());
+		}
+		else
+			cerr << "Warning: unknown option \"" << arg << "\" ignored.\n";
 	}
+
 
 	PlainTextExtractor extractor(parser_type);
 	if (verbose)
@@ -240,6 +246,7 @@ int main(int argc, char* argv[])
 		if (!extractor.extractMetadata(argv[argc - 1], meta))
 		{
 			(log_stream != NULL ? *log_stream : cerr) << "Error processing file " << argv[argc - 1] << ".\n";
+			delete log_stream;
 			return EXIT_FAILURE;
 		}
 		cout << "Author: " << meta.author() << (meta.authorType() == Metadata::ESTIMATED ? " (estimated)" : "")
@@ -256,6 +263,7 @@ int main(int argc, char* argv[])
 		if (!extractor.processFile(argv[argc - 1], text))
 		{
 			(log_stream != NULL ? *log_stream : cerr) << "Error processing file " << argv[argc - 1] << ".\n";
+			delete log_stream;
 			return EXIT_FAILURE;
 		}
 		printf("%s\n", text.c_str());
