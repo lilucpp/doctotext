@@ -1099,49 +1099,6 @@ void DOCParser::setLogStream(std::ostream& log_stream)
 	impl->m_log_stream = &log_stream;
 }
 
-bool DOCParser::isDOC()
-{
-	impl->m_error = false;
-	impl->m_encrypted = false;
-	FILE* f = NULL;
-	if (!impl->m_buffer)
-		f = fopen(impl->m_file_name.c_str(), "r");
-	if (f == NULL && !impl->m_buffer)
-	{
-		*impl->m_log_stream << "Error opening file " << impl->m_file_name << ".\n";
-		impl->m_error = true;
-		return false;
-	}
-	if (f)
-		fclose(f);
-	ThreadSafeOLEStorage* storage = NULL;
-	//storage will be deleted inside parser from wv2 library
-	if (impl->m_buffer)
-		storage = new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size);
-	else
-		storage = new ThreadSafeOLEStorage(impl->m_file_name);
-	if (storage->isValid() && is_encrypted_doc_ole(*storage))
-	{
-		impl->m_encrypted = true;
-		delete storage;
-		return true;
-	}
-	impl->modifyCerr();
-	SharedPtr<Parser> parser = ParserFactory::createParser(storage);
-	impl->restoreCerr();
-	if (!parser || !parser->isOk())
-	{
-		*impl->m_log_stream << "Creating parser failed.\n";
-		return false;
-	}
-	return true;
-}
-
-void DOCParser::getLinks(std::vector<Link>& links)
-{
-	#warning TODO: Implement this functionality.
-}
-
 namespace
 {
 	class NonOwningOLEStorageView : public wvWare::AbstractOLEStorage
@@ -1165,6 +1122,54 @@ namespace
 		private:
 			void streamDestroyed(wvWare::OLEStream*) {}
 	};
+}
+
+bool DOCParser::isDOC()
+{
+	impl->m_error = false;
+	impl->m_encrypted = false;
+	FILE* f = NULL;
+	if (!impl->m_buffer)
+		f = fopen(impl->m_file_name.c_str(), "r");
+	if (f == NULL && !impl->m_buffer)
+	{
+		*impl->m_log_stream << "Error opening file " << impl->m_file_name << ".\n";
+		impl->m_error = true;
+		return false;
+	}
+	if (f)
+		fclose(f);
+	std::unique_ptr<ThreadSafeOLEStorage> storage;
+	if (impl->m_buffer)
+		storage.reset(new ThreadSafeOLEStorage(impl->m_buffer, impl->m_buffer_size));
+	else
+		storage.reset(new ThreadSafeOLEStorage(impl->m_file_name));
+	if (!storage->isValid())
+	{
+		*impl->m_log_stream << "Creating parser failed.\n";
+		return false;
+	}
+	if (is_encrypted_doc_ole(*storage))
+	{
+		impl->m_encrypted = true;
+		return true;
+	}
+	impl->modifyCerr();
+	// ParserFactory expects heap-allocated AbstractOLEStorage; wrap storage without transferring
+	// FileStream/FILE* ownership so non-DOC/corrupt OLE2 paths never leak OS file handles.
+	SharedPtr<Parser> parser = ParserFactory::createParser(new NonOwningOLEStorageView(*storage));
+	impl->restoreCerr();
+	if (!parser || !parser->isOk())
+	{
+		*impl->m_log_stream << "Creating parser failed.\n";
+		return false;
+	}
+	return true;
+}
+
+void DOCParser::getLinks(std::vector<Link>& links)
+{
+	#warning TODO: Implement this functionality.
 }
 
 std::string DOCParser::plainText(const FormattingStyle& formatting)

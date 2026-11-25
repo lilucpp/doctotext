@@ -790,7 +790,6 @@ AbstractOLEStreamReader *ThreadSafeOLEStorage::createStreamReader(const std::str
 
 bool ThreadSafeOLEStorage::readDirectFromBuffer(unsigned char* buffer, int size, int offset)
 {
-	FILE* f = fopen(impl->m_file_name.c_str(), "rb");
 	if (!impl->m_data_stream->open())
 	{
 		impl->m_error = "Cannot open file " + impl->m_file_name;
