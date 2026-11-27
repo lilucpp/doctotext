@@ -134,6 +134,14 @@ namespace doctotext
 			void setParseEmbeddedFiles(bool parse_embedded);
 
 			/**
+				Enables or disables dispatching images found inside documents (PDF/Office/ODF/RTF and nested objects)
+				to the registered image parser callback.
+				Disabled (false) by default. Standalone image files (PARSER_IMAGE) always use the callback if set.
+				\param parse_images true to invoke the image callback for images inside documents, false to skip them.
+			**/
+			void setParseDocumentImages(bool parse_images);
+
+			/**
 				Enables or disables managing libxml2 parser by the object.
 				If it is enabled (default) PlainTextExtractor object calls xmlInitParser() and xmlCleanupParser()
 				functions automatically. All PlainTextExtractor objects uses a common thread-safe counter for this

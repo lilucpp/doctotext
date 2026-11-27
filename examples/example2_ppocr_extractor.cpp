@@ -5,7 +5,7 @@
  * 【设计说明】
  * 本示例严格参考 /home/peanut/project/soeasy/src/worker/ocr 以及 L2OfficeParser 设计：
  * 1. 使用 DocToText 官方推荐的 C API (doctotext_c_api.h)，与 soeasy 保持完全一致；
- * 2. 默认开启内嵌图片 OCR 回调 (doctotext_extractor_params_set_image_parser_callback)；
+ * 2. 开启内嵌图片 OCR 回调 (doctotext_extractor_params_set_image_parser_callback + doctotext_extractor_params_set_parse_document_images)；
  * 3. 完整的 PP-OCRv6 工业级推理流水线：
  *    - 真正的 DBNet 文本检测：对齐 32 像素、动态缩放、双阈值二值化、轮廓提取、unclip 多边形膨胀；
  *    - 透视变换旋转裁剪 (GetRotateCrop)：精准对齐倾斜文本行；
@@ -595,10 +595,11 @@ int main(int argc, char** argv) {
   // 指定解析器类型 (PDF 优先解析)
   doctotext_extractor_params_set_parser_type(params.get(), DOCTOTEXT_PARSER_PDF);
 
-  // 【核心功能】：默认开启内嵌图片 OCR 回调，注册 C 风格回调函数
-  std::cout << ">>> 【默认开启内嵌图片 OCR 回调】已注册到 DocToText C API..." << std::endl;
+  // 【核心功能】：注册 C 风格图片解析回调，并显式开启文档内图片解析
+  std::cout << ">>> 【开启文档图片 OCR 回调】已注册到 DocToText C API..." << std::endl;
   doctotext_extractor_params_set_image_parser_callback(
       params.get(), &DocToTextImageParserCallbackC, nullptr);
+  doctotext_extractor_params_set_parse_document_images(params.get(), 1);
 
   // 3. 执行抽取
   std::cout << ">>> 正在解析文档: " << file_path << std::endl;

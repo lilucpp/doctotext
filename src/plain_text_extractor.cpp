@@ -70,6 +70,7 @@ struct PlainTextExtractor::Implementation
 	ParserType m_parser_type;
 	FormattingStyle m_formatting_style;
 	bool m_parse_embedded_override;
+	bool m_parse_doc_images_override;
 	XmlParseMode m_xml_parse_mode;
 	bool m_verbose_logging;
 	std::ostream* m_log_stream;
@@ -333,7 +334,7 @@ struct PlainTextExtractor::Implementation
 			rtf.setVerboseLogging(true);
 		if (m_log_stream != &std::cerr)
 			rtf.setLogStream(*m_log_stream);
-		if (m_image_callback)
+		if (m_image_callback && m_formatting_style.parse_document_images)
 			rtf.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using RTF parser.\n";
 		text = rtf.plainText(m_formatting_style);
@@ -350,7 +351,7 @@ struct PlainTextExtractor::Implementation
 			odfooxml.setLogStream(*m_log_stream);
 		if (!m_manage_xml_parser)
 			odfooxml.setManageXmlParser(false);
-		if (m_image_callback)
+		if (m_image_callback && m_formatting_style.parse_document_images)
 			odfooxml.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using ODF/OOXML parser.\n";
 		text = odfooxml.plainText(m_xml_parse_mode, m_formatting_style);
@@ -367,7 +368,7 @@ struct PlainTextExtractor::Implementation
 			xls.setVerboseLogging(true);
 		if (m_log_stream != &std::cerr)
 			xls.setLogStream(*m_log_stream);
-		if (m_image_callback)
+		if (m_image_callback && m_formatting_style.parse_document_images)
 			xls.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using XLS parser.\n";
 		text = xls.plainText(m_formatting_style);
@@ -385,7 +386,7 @@ struct PlainTextExtractor::Implementation
 		if (m_log_stream != &std::cerr)
 			doc.setLogStream(*m_log_stream);
 		*m_log_stream << "Using DOC parser.\n";
-		if (m_image_callback)
+		if (m_image_callback && m_formatting_style.parse_document_images)
 			doc.setImageParserCallback(m_image_callback, m_image_user_data);
 		text = doc.plainText(m_formatting_style);
 		if (doc.encrypted())
@@ -401,7 +402,7 @@ struct PlainTextExtractor::Implementation
 			ppt.setVerboseLogging(true);
 		if (m_log_stream != &std::cerr)
 			ppt.setLogStream(*m_log_stream);
-		if (m_image_callback)
+		if (m_image_callback && m_formatting_style.parse_document_images)
 			ppt.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using PPT parser.\n";
 		text = ppt.plainText(m_formatting_style);
@@ -461,7 +462,7 @@ struct PlainTextExtractor::Implementation
 			pdf.setVerboseLogging(true);
 		if (m_log_stream != &std::cerr)
 			pdf.setLogStream(*m_log_stream);
-		if (m_image_callback)
+		if (m_image_callback && m_formatting_style.parse_document_images)
 			pdf.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using PDF parser.\n";
 		text = pdf.plainText(m_formatting_style);
@@ -528,7 +529,7 @@ struct PlainTextExtractor::Implementation
 			odfxml.setLogStream(*m_log_stream);
 		if (!m_manage_xml_parser)
 			odfxml.setManageXmlParser(false);
-		if (m_image_callback)
+		if (m_image_callback && m_formatting_style.parse_document_images)
 			odfxml.setImageParserCallback(m_image_callback, m_image_user_data);
 		*m_log_stream << "Using ODFXML parser.\n";
 		text = odfxml.plainText(m_xml_parse_mode, m_formatting_style);
@@ -693,6 +694,8 @@ PlainTextExtractor::PlainTextExtractor(ParserType parser_type)
 	impl->m_formatting_style.url_style = URL_STYLE_UNDERSCORED;
 	impl->m_formatting_style.parse_embedded_files = true;
 	impl->m_parse_embedded_override = false;
+	impl->m_formatting_style.parse_document_images = false;
+	impl->m_parse_doc_images_override = false;
 	impl->m_xml_parse_mode = PARSE_XML;
 	impl->m_verbose_logging = false;
 	impl->m_log_stream = &std::cerr;
@@ -720,6 +723,12 @@ void PlainTextExtractor::setParseEmbeddedFiles(bool parse_embedded)
 	impl->m_parse_embedded_override = true;
 }
 
+void PlainTextExtractor::setParseDocumentImages(bool parse_images)
+{
+	impl->m_formatting_style.parse_document_images = parse_images;
+	impl->m_parse_doc_images_override = true;
+}
+
 void PlainTextExtractor::setVerboseLogging(bool verbose)
 {
 	impl->m_verbose_logging = verbose;
@@ -733,9 +742,12 @@ void PlainTextExtractor::setLogStream(std::ostream& log_stream)
 void PlainTextExtractor::setFormattingStyle(const FormattingStyle& style)
 {
 	bool prev_parse_embedded = impl->m_formatting_style.parse_embedded_files;
+	bool prev_parse_doc_images = impl->m_formatting_style.parse_document_images;
 	impl->m_formatting_style = style;
 	if (impl->m_parse_embedded_override)
 		impl->m_formatting_style.parse_embedded_files = prev_parse_embedded;
+	if (impl->m_parse_doc_images_override)
+		impl->m_formatting_style.parse_document_images = prev_parse_doc_images;
 }
 
 void PlainTextExtractor::setXmlParseMode(XmlParseMode mode)

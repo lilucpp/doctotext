@@ -96,6 +96,8 @@ static void help()
 	printf("--compact-whitespace\tcollapse excess whitespace and blank lines.\n");
 	printf("--parse-embedded\tenable parsing embedded files/objects (default).\n");
 	printf("--no-parse-embedded\tdisable parsing embedded files/objects.\n");
+	printf("--parse-doc-images\tenable dispatching images inside documents to image callback.\n");
+	printf("--no-parse-doc-images\tdisable dispatching images inside documents (default).\n");
 	printf("--version, -V\tprint version information and exit.\n");
 	printf("--help, -h\tdisplay this help message and exit.\n");
 }
@@ -222,6 +224,10 @@ int main(int argc, char* argv[])
 			options.parse_embedded_files = true;
 		else if (arg == "--no-parse-embedded")
 			options.parse_embedded_files = false;
+		else if (arg == "--parse-doc-images")
+			options.parse_document_images = true;
+		else if (arg == "--no-parse-doc-images")
+			options.parse_document_images = false;
 		else if (arg.compare(0, 11, "--log-file=") == 0)
 		{
 			delete log_stream;

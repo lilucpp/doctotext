@@ -125,7 +125,10 @@ static int run_file_and_buffer_case(
 		img_ctx.call_count = 0;
 		img_ctx.last_tag[0] = '\0';
 		if (use_image_callback)
+		{
 			doctotext_extractor_params_set_image_parser_callback(params, test_image_callback, &img_ctx);
+			doctotext_extractor_params_set_parse_document_images(params, 1);
+		}
 
 		doctotext_status status = DOCTOTEXT_STATUS_ERROR;
 		DocToTextException* exc = NULL;
@@ -229,7 +232,10 @@ static void* thread_worker(void* arg)
 
 	DocToTextExtractorParams* params = doctotext_create_extractor_params();
 	if (job->use_image_cb)
+	{
 		doctotext_extractor_params_set_image_parser_callback(params, test_image_callback, &img_ctx);
+		doctotext_extractor_params_set_parse_document_images(params, 1);
+	}
 
 	doctotext_status status = DOCTOTEXT_STATUS_ERROR;
 	DocToTextException* exc = NULL;
@@ -535,6 +541,101 @@ int main(void)
 			}
 		}
 		printf("PASS: C API multithreaded TLS isolation (8 pthreads)\n");
+	}
+
+	/* 13. Independent switches: parse_document_images defaults OFF, parse_embedded_files defaults ON, standalone image only needs callback */
+	{
+		const char* doc_cases[] = {
+			"embedded_fixtures/host_docx_multi.docx",
+			"embedded_fixtures/host_pdf_multi.pdf"
+		};
+		for (size_t i = 0; i < sizeof(doc_cases) / sizeof(doc_cases[0]); ++i)
+		{
+			TestImageCtx img_ctx;
+			img_ctx.call_count = 0;
+			img_ctx.last_tag[0] = '\0';
+			DocToTextExtractorParams* params = doctotext_create_extractor_params();
+			doctotext_extractor_params_set_image_parser_callback(params, test_image_callback, &img_ctx);
+			/* parse_document_images left at default (0), parse_embedded_files left at default (1) */
+			doctotext_status status = DOCTOTEXT_STATUS_ERROR;
+			DocToTextException* exc = NULL;
+			DocToTextExtractedData* data = doctotext_process_file_ex(doc_cases[i], params, &status, &exc);
+			doctotext_free_extractor_params(params);
+			if (status != DOCTOTEXT_STATUS_OK || !data || exc != NULL || img_ctx.call_count != 0)
+			{
+				fprintf(stderr, "FAIL [default_doc_images_off %s]: status=%d calls=%d\n",
+				        doc_cases[i], status, img_ctx.call_count);
+				if (data) doctotext_free_extracted_data(data);
+				if (exc) doctotext_free_exception(exc);
+				return 1;
+			}
+			const char* text = doctotext_extracted_data_get_text(data);
+			if (!text || strstr(text, "[OCR_EMBED:") != NULL)
+			{
+				fprintf(stderr, "FAIL [default_doc_images_off %s]: unexpected OCR output\n", doc_cases[i]);
+				doctotext_free_extracted_data(data);
+				return 1;
+			}
+			/* Embedded non-image documents still extracted because parse_embedded_files defaults ON */
+			if (i == 0 && strstr(text, "DOCX_CONTENTS_PDF_OK") == NULL)
+			{
+				fprintf(stderr, "FAIL [default_embedded_files_on]: embedded PDF missing when doc images OFF\n");
+				doctotext_free_extracted_data(data);
+				return 1;
+			}
+			doctotext_free_extracted_data(data);
+		}
+
+		/* Standalone image succeeds when callback is set even with parse_document_images=0 */
+		{
+			const char png_magic[] = { (char)0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00 };
+			TestImageCtx img_ctx;
+			img_ctx.call_count = 0;
+			img_ctx.last_tag[0] = '\0';
+			DocToTextExtractorParams* params = doctotext_create_extractor_params();
+			doctotext_extractor_params_set_image_parser_callback(params, test_image_callback, &img_ctx);
+			doctotext_status status = DOCTOTEXT_STATUS_ERROR;
+			DocToTextException* exc = NULL;
+			DocToTextExtractedData* data = doctotext_process_file_from_buffer_ex(
+				png_magic, sizeof(png_magic), params, &status, &exc);
+			doctotext_free_extractor_params(params);
+			if (status != DOCTOTEXT_STATUS_OK || !data || exc != NULL || img_ctx.call_count != 1)
+			{
+				fprintf(stderr, "FAIL [standalone_image_with_cb]: status=%d calls=%d\n", status, img_ctx.call_count);
+				if (data) doctotext_free_extracted_data(data);
+				if (exc) doctotext_free_exception(exc);
+				return 1;
+			}
+			doctotext_free_extracted_data(data);
+		}
+
+		/* Override preservation: set_parse_document_images(1) before set_formatting_style() */
+		{
+			TestImageCtx img_ctx;
+			img_ctx.call_count = 0;
+			img_ctx.last_tag[0] = '\0';
+			DocToTextExtractorParams* params = doctotext_create_extractor_params();
+			DocToTextFormattingStyle* fmt = doctotext_create_formatting_style();
+			doctotext_extractor_params_set_image_parser_callback(params, test_image_callback, &img_ctx);
+			doctotext_extractor_params_set_parse_document_images(params, 1);
+			doctotext_extractor_params_set_formatting_style(params, fmt);
+			doctotext_status status = DOCTOTEXT_STATUS_ERROR;
+			DocToTextException* exc = NULL;
+			DocToTextExtractedData* data = doctotext_process_file_ex(
+				"embedded_fixtures/host_docx_multi.docx", params, &status, &exc);
+			doctotext_free_formatting_style(fmt);
+			doctotext_free_extractor_params(params);
+			if (status != DOCTOTEXT_STATUS_OK || !data || exc != NULL || img_ctx.call_count == 0)
+			{
+				fprintf(stderr, "FAIL [doc_images_override_before_fmt]: status=%d calls=%d\n",
+				        status, img_ctx.call_count);
+				if (data) doctotext_free_extracted_data(data);
+				if (exc) doctotext_free_exception(exc);
+				return 1;
+			}
+			doctotext_free_extracted_data(data);
+		}
+		printf("PASS: C API independent parse_document_images (default OFF) & standalone image callback\n");
 	}
 
 	printf("c_api_embedded_test PASSED.\n");

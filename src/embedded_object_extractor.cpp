@@ -282,7 +282,7 @@ bool extractFromEmbeddedBuffer(const unsigned char* data,
 		nested_extractor.setVerboseLogging(ctx.verbose_logging);
 		if (ctx.log_stream)
 			nested_extractor.setLogStream(*ctx.log_stream);
-		if (ctx.image_callback)
+		if (ctx.image_callback && ctx.formatting.parse_document_images)
 			nested_extractor.setImageParserCallback(ctx.image_callback, ctx.image_user_data);
 
 		PlainTextExtractor::ParserType ext_type = PlainTextExtractor::PARSER_AUTO;
@@ -309,7 +309,7 @@ bool extractFromEmbeddedBuffer(const unsigned char* data,
 		if (ext_type == PlainTextExtractor::PARSER_IMAGE ||
 		    (sniffed && content_type == PlainTextExtractor::PARSER_IMAGE))
 		{
-			if (!ctx.image_callback)
+			if (!ctx.image_callback || !ctx.formatting.parse_document_images)
 				return false;
 			++ctx.extracted_count;
 			std::string img_text = ctx.image_callback(
@@ -388,7 +388,7 @@ namespace
 			parser.setVerboseLogging(ctx.verbose_logging);
 			if (ctx.log_stream)
 				parser.setLogStream(*ctx.log_stream);
-			if (ctx.image_callback)
+			if (ctx.image_callback && ctx.formatting.parse_document_images)
 				parser.setImageParserCallback(ctx.image_callback, ctx.image_user_data);
 			std::string parsed_text = parser.plainText(storage, ctx.formatting);
 			if (!parser.error())

@@ -67,11 +67,12 @@ DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 
 | :--- | :--- | :--- | :--- |
 | **光栅图像** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | 文件头魔数嗅探（`png`/`jpg`/`jfif`/`webp`/`bmp`/`tiff`/`gif`）与扩展名识别（`pnm`） | 识别为 `DOCTOTEXT_PARSER_IMAGE` 并将原始字节流透传给用户回调 |
 
-> **说明：图片解析如何工作？**
+> **说明：图片解析与开关控制如何工作？**
 >
-> `DocToText` **不内置** OCR 或图像识别能力。无论是独立图片文件（`DOCTOTEXT_PARSER_IMAGE`），还是文档（DOC, DOCX, XLS, XLSX, PPT, PPTX, ODF, PDF）中的内嵌图片：
-> - 调用方需通过 `doctotext_extractor_params_set_image_parser_callback()`（C 接口）或 `PlainTextExtractor::setImageParserCallback()`（C++ 接口）设置图片解析回调，并在回调函数中**自行实现图片解码与 OCR / 视觉理解逻辑**（如接入 PaddleOCR、Tesseract、ONNX Runtime 或大模型视觉 API）。
-> - 若未设置图片解析回调：解析独立图片文件会直接返回错误（`DOCTOTEXT_STATUS_ERROR`）；解析复合文档时，其中的内嵌图片将被跳过（不产生 OCR 文本）。
+> `DocToText` **不内置** OCR 或图像识别能力；独立图片、文档内图片与嵌入文件三者互相独立控制：
+> - **独立图片文件（`DOCTOTEXT_PARSER_IMAGE`）**：只需通过 `doctotext_extractor_params_set_image_parser_callback()`（C 接口）或 `PlainTextExtractor::setImageParserCallback()`（C++ 接口）设置图片回调并**自行实现图片解析/OCR 逻辑**即可；未设置回调时返回错误（`DOCTOTEXT_STATUS_ERROR`）。
+> - **文档内图片（`parse_document_images`，默认 `false`/`0`）**：解析 DOC/DOCX/XLS/XLSX/PPT/PPTX/ODF/PDF（含嵌套对象）时，如需把文档里的插图/扫描页也送入回调，需显式开启 `doctotext_extractor_params_set_parse_document_images(params, 1)`（C 接口）、`setParseDocumentImages(true)`（C++ 接口）或 `--parse-doc-images`（CLI）。
+> - **嵌入文件/对象（`parse_embedded_files`，默认 `true`/`1`）**：通过 `doctotext_extractor_params_set_parse_embedded_files()` / `setParseEmbeddedFiles()` / `--no-parse-embedded` 单独控制。
 
 ### 纯文本、编程源码与数据（显式 `--txt` / `DOCTOTEXT_PARSER_TXT`）
 
@@ -157,14 +158,14 @@ void extract_from_memory(const char* buffer, size_t size)
 
 ### 3. 设置图片解析回调并自行实现识别（C 接口）
 
-通过 `doctotext_extractor_params_set_image_parser_callback()`（C++ 接口为 `PlainTextExtractor::setImageParserCallback()`）注册回调后，即可在回调函数中自行解码与识别图像。DocToText 会在回调返回后立即拷贝返回的 `const char*` 字符串（因此多线程场景下使用 `thread_local` 或调用方托管缓冲区返回即可安全复用）：
+通过 `doctotext_extractor_params_set_image_parser_callback()`（C++ 接口为 `PlainTextExtractor::setImageParserCallback()`）注册回调后，独立图片文件会直接触发该回调；若还需要解析文档（PDF/Word/PPT/Excel/ODF）内的插图，需同时调用 `doctotext_extractor_params_set_parse_document_images(params, 1)` 开启（默认关闭）。DocToText 会在回调返回后立即拷贝返回的 `const char*` 字符串（因此多线程场景下使用 `thread_local` 或调用方托管缓冲区返回即可安全复用）：
 
 ```c
 #include <stdio.h>
 #include <string.h>
 #include <doctotext/doctotext_c_api.h>
 
-// 当解析到独立图像或 PDF/Word/PPT/Excel/ODF 中的内嵌插图时触发
+// 当解析到独立图像或（开启 parse_document_images 时）PDF/Word/PPT/Excel/ODF 中的内嵌插图时触发
 // 请在此回调中自行实现图片解析 / OCR 逻辑，并返回 UTF-8 文本（或返回 "" / NULL）
 const char* my_image_parser_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
 {
@@ -177,6 +178,7 @@ int main()
 {
     DocToTextExtractorParams* params = doctotext_create_extractor_params();
     doctotext_extractor_params_set_image_parser_callback(params, my_image_parser_callback, NULL);
+    doctotext_extractor_params_set_parse_document_images(params, 1);
 
     DocToTextExtractedData* data = doctotext_process_file("embedded_presentation.pptx", params, NULL);
     if (data) {

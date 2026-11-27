@@ -215,6 +215,8 @@ struct DocToTextExtractorParams
 	CImageCallbackWrapperData m_wrapper_data;
 	int m_parse_embedded_files;
 	bool m_parse_embedded_override;
+	int m_parse_document_images;
+	bool m_parse_document_images_override;
 
 	DocToTextExtractorParams()
 	{
@@ -226,6 +228,8 @@ struct DocToTextExtractorParams
 		m_image_user_data = NULL;
 		m_parse_embedded_files = 1;
 		m_parse_embedded_override = false;
+		m_parse_document_images = 0;
+		m_parse_document_images_override = false;
 	}
 };
 
@@ -288,6 +292,8 @@ void DOCTOTEXT_CALL doctotext_extractor_params_set_formatting_style(DocToTextExt
 		extractor_params->m_formatting_style = formatting_style->m_formatting_style;
 		if (!extractor_params->m_parse_embedded_override)
 			extractor_params->m_parse_embedded_files = formatting_style->m_formatting_style.parse_embedded_files ? 1 : 0;
+		if (!extractor_params->m_parse_document_images_override)
+			extractor_params->m_parse_document_images = formatting_style->m_formatting_style.parse_document_images ? 1 : 0;
 	}
 	catch (std::bad_alloc& ba)
 	{
@@ -304,6 +310,12 @@ void DOCTOTEXT_CALL doctotext_extractor_params_set_parse_embedded_files(DocToTex
 {
 	extractor_params->m_parse_embedded_files = (enable != 0) ? 1 : 0;
 	extractor_params->m_parse_embedded_override = true;
+}
+
+void DOCTOTEXT_CALL doctotext_extractor_params_set_parse_document_images(DocToTextExtractorParams* extractor_params, int enable)
+{
+	extractor_params->m_parse_document_images = (enable != 0) ? 1 : 0;
+	extractor_params->m_parse_document_images_override = true;
 }
 
 struct DocToTextException
@@ -742,6 +754,7 @@ static void init_extractor(PlainTextExtractor& extractor, DocToTextExtractorPara
 	extractor.setVerboseLogging(extractor_params->m_verbose);
 	extractor.setFormattingStyle(extractor_params->m_formatting_style);
 	extractor.setParseEmbeddedFiles(extractor_params->m_parse_embedded_files != 0);
+	extractor.setParseDocumentImages(extractor_params->m_parse_document_images != 0);
 	extractor.setManageXmlParser(extractor_params->m_manage_xml_parser);
 	extractor.setXmlParseMode(extractor_params->m_xml_parse_mode);
 	if (extractor_params->m_image_callback)

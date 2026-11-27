@@ -1504,6 +1504,7 @@ static int test_step8_excel_edge_formats()
 		};
 		doctotext::PlainTextExtractor ex_img;
 		ex_img.setImageParserCallback(+img_cb, &img_cb_calls);
+		ex_img.setParseDocumentImages(true);
 		std::string txt_img;
 		if (!ex_img.processFile(xls_buf.data(), xls_buf.size(), txt_img) ||
 		    img_cb_calls != 0 ||

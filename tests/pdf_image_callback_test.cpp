@@ -98,11 +98,12 @@ namespace
 	              int expected_h,
 	              const std::string& required_substr)
 	{
-		// 1. File-path extraction test
+		// 1. File-path extraction test (requires explicit setParseDocumentImages(true))
 		{
 			CallbackState state(expected_w, expected_h);
 			PlainTextExtractor extractor;
 			extractor.setImageParserCallback(verify_bmp_callback, &state);
+			extractor.setParseDocumentImages(true);
 			std::string text;
 			if (!extractor.processFile(file_name, text))
 			{
@@ -135,6 +136,7 @@ namespace
 			CallbackState state(expected_w, expected_h);
 			PlainTextExtractor extractor;
 			extractor.setImageParserCallback(verify_bmp_callback, &state);
+			extractor.setParseDocumentImages(true);
 			std::string text;
 			if (!extractor.processFile(content.c_str(), content.size(), text))
 			{
@@ -162,6 +164,19 @@ namespace
 
 int main()
 {
+	// Verify default parse_document_images=false does not dispatch document images even with callback set
+	{
+		CallbackState state(352, 91);
+		PlainTextExtractor extractor;
+		extractor.setImageParserCallback(verify_bmp_callback, &state);
+		std::string text;
+		if (!extractor.processFile("testPDF_JBIG2.pdf", text) || state.hits != 0)
+		{
+			std::cerr << "FAIL: default parse_document_images=false invoked callback hits=" << state.hits << std::endl;
+			return 1;
+		}
+	}
+
 	if (!run_case("testPDF_JBIG2.pdf", 352, 91, "This is a sample file to test images compressed using JBIG2."))
 		return 1;
 	if (!run_case("testPDF_CCITT_G4.pdf", 400, 100, ""))

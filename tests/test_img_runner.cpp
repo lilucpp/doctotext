@@ -89,6 +89,7 @@ int main(int argc, char* argv[])
 
     PlainTextExtractor extractor;
     extractor.setImageParserCallback(ocr_callback, NULL);
+    extractor.setParseDocumentImages(true);
 
     int total = 0;
     int success = 0;

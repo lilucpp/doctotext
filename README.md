@@ -67,11 +67,12 @@ Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlow
 | :--- | :--- | :--- | :--- |
 | **Raster Images** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | Magic byte sniffing (`png`, `jpg`/`jfif`, `webp`, `bmp`, `tiff`, `gif`) & file extension (`pnm`) | Dispatched as raw bytes to user callback (`DOCTOTEXT_PARSER_IMAGE`) |
 
-> **Important: How Image Parsing Works**
+> **Important: How Image Parsing & Controls Work**
 >
-> `DocToText` does **not** include a built-in OCR or image recognition engine. For both standalone image files (`DOCTOTEXT_PARSER_IMAGE`) and images embedded inside documents (DOC, DOCX, XLS, XLSX, PPT, PPTX, ODF, PDF):
-> - You must register a custom image callback via `doctotext_extractor_params_set_image_parser_callback()` (C API) or `PlainTextExtractor::setImageParserCallback()` (C++ API) and **implement the image parsing/OCR logic yourself** (e.g., PaddleOCR, Tesseract, ONNX Runtime, or Vision APIs).
-> - If no callback is registered, processing a standalone image fails with an error (`DOCTOTEXT_STATUS_ERROR`), and embedded images inside documents are skipped without OCR text.
+> `DocToText` does **not** include a built-in OCR or image recognition engine. Image handling, embedded files, and document images are controlled independently:
+> - **Standalone Image Files (`DOCTOTEXT_PARSER_IMAGE`)**: Register an image callback via `doctotext_extractor_params_set_image_parser_callback()` (C API) or `PlainTextExtractor::setImageParserCallback()` (C++ API) and **implement the image parsing/OCR logic yourself**. If no callback is registered, processing a standalone image returns an error (`DOCTOTEXT_STATUS_ERROR`).
+> - **Images Inside Documents (`parse_document_images`, default `false`/`0`)**: To also dispatch images embedded inside documents (DOC, DOCX, XLS, XLSX, PPT, PPTX, ODF, PDF, or nested objects) to your callback, explicitly enable `doctotext_extractor_params_set_parse_document_images(params, 1)` (C API), `setParseDocumentImages(true)` (C++ API), or `--parse-doc-images` (CLI).
+> - **Embedded Files/Objects (`parse_embedded_files`, default `true`/`1`)**: Controlled separately via `doctotext_extractor_params_set_parse_embedded_files()` / `setParseEmbeddedFiles()` / `--no-parse-embedded`.
 
 ### Plain Text, Source Code & Data (Explicit `--txt` / `DOCTOTEXT_PARSER_TXT`)
 
@@ -157,14 +158,14 @@ void extract_from_memory(const char* buffer, size_t size)
 
 ### 3. User-Implemented Image Parser Callback (C API)
 
-Register a callback with `doctotext_extractor_params_set_image_parser_callback()` (or `PlainTextExtractor::setImageParserCallback()` in C++) to decode/OCR image bytes yourself. DocToText copies the returned `const char*` immediately after the callback returns (so a `thread_local` or caller-managed buffer is safe across multithreaded calls):
+Register a callback with `doctotext_extractor_params_set_image_parser_callback()` (or `PlainTextExtractor::setImageParserCallback()` in C++) to decode/OCR image bytes yourself. Standalone image files use the callback automatically once set; for images inside documents (PDF/DOCX/PPTX/XLSX/ODF), also enable `doctotext_extractor_params_set_parse_document_images(params, 1)` (disabled by default). DocToText copies the returned `const char*` immediately after the callback returns (so a `thread_local` or caller-managed buffer is safe across multithreaded calls):
 
 ```c
 #include <stdio.h>
 #include <string.h>
 #include <doctotext/doctotext_c_api.h>
 
-// Invoked for standalone images or graphics embedded in PDF/DOCX/PPTX/XLSX/ODF.
+// Invoked for standalone images or (when parse_document_images is enabled) graphics in PDF/DOCX/PPTX/XLSX/ODF.
 // Implement your own image parsing / OCR logic here and return UTF-8 text (or "" / NULL).
 const char* my_image_parser_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
 {
@@ -177,6 +178,7 @@ int main()
 {
     DocToTextExtractorParams* params = doctotext_create_extractor_params();
     doctotext_extractor_params_set_image_parser_callback(params, my_image_parser_callback, NULL);
+    doctotext_extractor_params_set_parse_document_images(params, 1);
 
     DocToTextExtractedData* data = doctotext_process_file("embedded_presentation.pptx", params, NULL);
     if (data) {

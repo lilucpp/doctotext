@@ -216,6 +216,14 @@ void DOCTOTEXT_CALL doctotext_extractor_params_set_image_parser_callback(DocToTe
  */
 void DOCTOTEXT_CALL doctotext_extractor_params_set_parse_embedded_files(DocToTextExtractorParams* extractor_params, int enable);
 
+/**
+ * @brief Enables or disables dispatching images found inside documents (PDF, Office, ODF, RTF) to the image parser callback.
+ * Disabled (0) by default. Standalone image files (DOCTOTEXT_PARSER_IMAGE) always invoke the callback when registered.
+ * @param extractor_params - object which holds parameters for data extractor
+ * @param enable - non-zero to parse images embedded in documents, 0 to skip them
+ */
+void DOCTOTEXT_CALL doctotext_extractor_params_set_parse_document_images(DocToTextExtractorParams* extractor_params, int enable);
+
 /*-------------------------------------------------------------------------------------------------------------------------*/
 
 typedef struct DocToTextException DocToTextException;

@@ -298,8 +298,9 @@ int main(int argc, char** argv) {
   try {
     doctotext::PlainTextExtractor extractor;
 
-    // 核心调用：注册嵌入图像 OCR 回调函数
+    // 核心调用：注册图像 OCR 回调函数并开启文档内图片解析
     extractor.setImageParserCallback(&DocToTextCppImageCallback, nullptr);
+    extractor.setParseDocumentImages(true);
 
     std::string extracted_text;
     if (extractor.processFile(doc_path, extracted_text)) {
