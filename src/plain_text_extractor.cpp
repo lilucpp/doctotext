@@ -860,6 +860,14 @@ static bool isArchiveBytes(const char* buffer, size_t size)
 	return false;
 }
 
+static void logArchiveUnsupported(std::ostream& log_stream, bool metadata_mode)
+{
+	if (metadata_mode)
+		log_stream << "Archive format detected (ZIP/TAR/GZ/7Z/RAR/BZ2/XZ). Archive metadata/content extraction is intentionally unsupported at this layer.\n";
+	else
+		log_stream << "Archive format detected (ZIP/TAR/GZ/7Z/RAR/BZ2/XZ). Archive extraction is intentionally unsupported at this layer; unpack archives externally.\n";
+}
+
 template <typename ParserT>
 static std::unique_ptr<ParserT> makeProbeParser(const std::string* file_name, const char* buffer, size_t size)
 {
@@ -1171,13 +1179,14 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 		}
 		case PARSER_ARCHIVE:
 		{
-			*impl->m_log_stream << "Archive format detected (ZIP/TAR/GZ/7Z/RAR/BZ2/XZ). Archive content text extraction is not yet supported.\n";
+			logArchiveUnsupported(*impl->m_log_stream, false);
 			error = true;
 			break;
 		}
 	}
 
-	if (error && fallback && !impl->m_is_encrypted)
+	if (error && fallback && !impl->m_is_encrypted &&
+	    parser_type != PARSER_ARCHIVE && parser_type != PARSER_IMAGE)
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
@@ -1304,13 +1313,14 @@ bool PlainTextExtractor::processFile(ParserType parser_type, bool fallback, cons
 		}
 		case PARSER_ARCHIVE:
 		{
-			*impl->m_log_stream << "Archive format detected (ZIP/TAR/GZ/7Z/RAR/BZ2/XZ). Archive content text extraction is not yet supported.\n";
+			logArchiveUnsupported(*impl->m_log_stream, false);
 			error = true;
 			break;
 		}
 	}
 
-	if (error && fallback && !impl->m_is_encrypted)
+	if (error && fallback && !impl->m_is_encrypted &&
+	    parser_type != PARSER_ARCHIVE && parser_type != PARSER_IMAGE)
 	{
 		*impl->m_log_stream << "It is possible that wrong parser was selected. Trying different parsers.\n";
 		ParserType parser_type;
@@ -1546,6 +1556,11 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 			error = impl->parseODFXMLMetadata(odfxml, metadata);
 			break;
 		}
+		case PARSER_ARCHIVE:
+		{
+			logArchiveUnsupported(*impl->m_log_stream, true);
+			return false;
+		}
 		default:
 			return false;
 	}
@@ -1734,6 +1749,11 @@ bool PlainTextExtractor::extractMetadata(ParserType parser_type, bool fallback, 
 			ODFXMLParser odfxml(buffer, size);
 			error = impl->parseODFXMLMetadata(odfxml, metadata);
 			break;
+		}
+		case PARSER_ARCHIVE:
+		{
+			logArchiveUnsupported(*impl->m_log_stream, true);
+			return false;
 		}
 		default:
 			return false;

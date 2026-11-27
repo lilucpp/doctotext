@@ -76,7 +76,7 @@ namespace doctotext
 				PARSER_EML,
 				PARSER_ODFXML,
 				PARSER_IMAGE,
-				PARSER_ARCHIVE
+				PARSER_ARCHIVE ///< Format sniffing only; archive extraction is intentionally unsupported.
 			};
 
 			/**

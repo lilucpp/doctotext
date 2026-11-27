@@ -12,8 +12,8 @@ DocToText is a compact, high-performance C/C++ library and command-line utility 
 
 ## Architecture & Engineering Highlights
 
-- **Decoupled OCR via Streaming Callbacks**  
-  Rather than bundling heavyweight neural network runtimes, DocToText utilizes an inversion-of-control pattern via `ImageParserCallback`. When embedded graphics (in Word, Excel, PowerPoint, ODF, or PDF) or standalone images are encountered, raw image buffers are dispatched directly to the host application's callback (e.g., Tesseract, ONNX Runtime, PaddleOCR, or vision APIs). The recognized text is seamlessly stitched back into the document stream in-place (including exact 2D geometric reading-order placement for PDF pages via CTM transformation matrices, pure scan fallback, and dual-layer searchable PDF deduplication).
+- **Decoupled Image Parsing via User-Implemented Callback (Inversion of Control)**  
+  DocToText does **not** bundle any built-in OCR or vision engine. Instead, it exposes an image parser callback (`doctotext_extractor_params_set_image_parser_callback()` in the C API / `PlainTextExtractor::setImageParserCallback()` in C++). When standalone images or embedded graphics (in Word, Excel, PowerPoint, ODF, or PDF) are encountered, DocToText dispatches the raw image byte buffer to your callback so you can implement image parsing/OCR yourself (e.g., Tesseract, ONNX Runtime, PaddleOCR, or vision APIs). The text returned by your callback is stitched back into the document stream in-place (including 2D geometric reading-order placement for PDF pages via CTM transformation matrices, pure scan fallback, and dual-layer searchable PDF deduplication).
 - **Unified Extraction Pipeline**  
   Combines specialized native parsers for legacy OLE2 compound files (BIFF, WordDocument streams), OpenXML packaging, ODF XML trees, and PDF content streams with an encoding-agnostic text fallback layer that leverages `libcharsetdetect` for automatic character set detection (UTF-8, GBK / GB18030, UTF-16LE).
 - **C ABI First: Maximum Interoperability**  
@@ -29,15 +29,15 @@ Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlow
 
 | Capability / Feature | Original (SILVERCODERS 0.2.x) | lithiumFlower Fork | **This Fork (lilucpp v5.1.5)** |
 | :--- | :---: | :---: | :---: |
-| **PDF In-Place Embedded Image Extraction** | ❌ Unsupported (`TODO: Do`) | ❌ Unsupported | **✅ Supported (JPEG, Flate, PNG, BMP, JBIG2, CCITT G3/G4)** |
+| **PDF In-Place Embedded Image Extraction** | ❌ Unsupported (`TODO: Do`) | ❌ Unsupported | **✅ Extracts & dispatches via callback (JPEG, Flate, PNG, BMP, JBIG2, CCITT G3/G4)** |
 | **PDF 2D Reading-Order & Multi-Column Layout** | ❌ None | ❌ None | **✅ CTM 2D geometric sorting, formula baseline clustering & column splitting** |
 | **PDF Embedded Files, Annotations & Forms** | ❌ None | ❌ None | **✅ Extracts `/EmbeddedFiles`, `/Annots`, Form XObjects & AcroForm/XFA** |
 | **Unified Embedded Document Extraction** | ⚠️ Basic DOC/XLS only | ⚠️ Basic DOC/XLS | **✅ Recursive DOC/DOCX/XLS/XLSX/PPT/PPTX/ODF/RTF/PDF (depth & zip-bomb guards)** |
 | **Office Edge Formats (Legacy/Modern)** | ❌ Partial | ❌ Partial | **✅ BIFF4/5, TXO, DOC `EQ`, SmartArt, ECMA-376 `_rels/.rels`, iWork 13/18 `.iwa`** |
 | **Dual-Layer (Searchable) PDF Deduplication** | ❌ None | ❌ None | **✅ Auto-detects & skips redundant background OCR** |
-| **Pure Scanned PDF Fallback** | ❌ Returns empty text | ❌ Returns empty text | **✅ Auto-dispatches all Image XObjects** |
+| **Pure Scanned PDF Fallback** | ❌ Returns empty text | ❌ Returns empty text | **✅ Auto-dispatches all Image XObjects to user callback** |
 | **Encrypted File Handling & Status C API** | ⚠️ Generic failure | ⚠️ Generic failure | **✅ VelvetSweatshop OOXML + empty-password PDF decrypt + `DOCTOTEXT_STATUS_ENCRYPTED`** |
-| **Standalone Images Parsing** | ❌ Unsupported | ❌ Unsupported | **✅ PNG, JPG, WebP, BMP, TIFF, GIF via OCR** |
+| **Standalone Images Parsing** | ❌ Unsupported | ❌ Unsupported | **✅ Identifies PNG, JPG, WebP, BMP, TIFF, GIF & dispatches to user callback** |
 | **Binary Format Sniffing & Headless HTML** | ❌ Extension / `<html>` only | ❌ Extension biased | **✅ Deep sniffing (~1.2 µs), Archive types & anchored `<p>`/`<div>` HTML fragments** |
 | **Character Set Auto-Detection C API** | ❌ Internal only | ❌ Internal only | **✅ Public C API (`libcharsetdetect`)** |
 | **Cross-Compiler C ABI Stability** | ⚠️ STL / ABI breakage (MSVC) | ⚠️ Unstable FFI | **✅ Production-grade C ABI (`__cdecl`), self-contained shared lib** |
@@ -61,13 +61,19 @@ Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlow
 | **Web & Rich Text** | `html`, `htm`, `rtf` | HTML / RTF Parser | Embedded RTF OLE | Headless HTML fragments, Hyperlinks |
 | **Email Message** | `eml` (RFC 822) | Mimetic MIME Parser | - | Headers & Parts |
 
-### Standalone Images (via OCR Callback)
+### Standalone Images (Callback-Based — User-Implemented Parsing)
 
-| Category | Supported Formats | Detection Method |
-| :--- | :--- | :--- |
-| **Raster Images** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | Magic byte sniffing (`png`, `jpg`/`jfif`, `webp`, `bmp`, `tiff`, `gif`) & file extension (`pnm`) |
+| Category | Supported Formats | Detection Method | Handling |
+| :--- | :--- | :--- | :--- |
+| **Raster Images** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | Magic byte sniffing (`png`, `jpg`/`jfif`, `webp`, `bmp`, `tiff`, `gif`) & file extension (`pnm`) | Dispatched as raw bytes to user callback (`DOCTOTEXT_PARSER_IMAGE`) |
 
-### Plain Text, Source Code & Data (Explicit `--txt` / `PARSER_TXT`)
+> **Important: How Image Parsing Works**
+>
+> `DocToText` does **not** include a built-in OCR or image recognition engine. For both standalone image files (`DOCTOTEXT_PARSER_IMAGE`) and images embedded inside documents (DOC, DOCX, XLS, XLSX, PPT, PPTX, ODF, PDF):
+> - You must register a custom image callback via `doctotext_extractor_params_set_image_parser_callback()` (C API) or `PlainTextExtractor::setImageParserCallback()` (C++ API) and **implement the image parsing/OCR logic yourself** (e.g., PaddleOCR, Tesseract, ONNX Runtime, or Vision APIs).
+> - If no callback is registered, processing a standalone image fails with an error (`DOCTOTEXT_STATUS_ERROR`), and embedded images inside documents are skipped without OCR text.
+
+### Plain Text, Source Code & Data (Explicit `--txt` / `DOCTOTEXT_PARSER_TXT`)
 
 Provides automatic multi-encoding detection (UTF-8, GBK, GB18030, UTF-16LE):
 * **Stylesheets & Markup**: `css`, `xml`, `xsd`, `xsl`, `csv`
@@ -75,11 +81,20 @@ Provides automatic multi-encoding detection (UTF-8, GBK, GB18030, UTF-16LE):
 * **Code & Scripts**: `c`, `cpp`, `h`, `hpp`, `py`, `java`, `go`, `rs`, `js`, `ts`, `sh`, `bat`, `cmd`, `ps1`, `sql`, `php`, `rb`, `swift`, `kt`, `scala`, `lua`, `r`, `pl`, `asm`, `cmake`, `cs`, `d`, etc.
 * **Text & Documentation**: `txt`, `text`, `md`, `markdown`, `log`
 
-### Archive Formats (Format Sniffing & Type Identification)
+### Archive Formats (Format Sniffing Only — Extraction Delegated to Upper Layer)
 
 | Category | Supported Extensions | Sniffing Method | Status |
 | :--- | :--- | :--- | :--- |
-| **Compressed Archives** | `zip`, `tar`, `gz`, `tgz`, `7z`, `rar`, `bz2`, `xz` | Binary magic bytes (PK, ustar, 1F8B, BZh, 7z, Rar!, etc.) | Format sniffing supported (`PARSER_ARCHIVE`); recursive content extraction planned |
+| **Compressed Archives** | `zip`, `tar`, `gz`, `tgz`, `7z`, `rar`, `bz2`, `tbz2`, `xz`, `txz`, `z` | Binary magic bytes (PK, ustar, 1F8B, BZh, 7z, Rar!, XZ, etc.) | Format sniffing supported (`DOCTOTEXT_PARSER_ARCHIVE`); **recursive content extraction intentionally unsupported** |
+
+> **Architectural Rationale: Why `DocToText` Does Not Unpack Archives**
+>
+> `DocToText` intentionally scopes itself to **single-document & standalone-image extraction** rather than bundling archive traversal (`libarchive`/`7z`/`unrar`):
+> 1. **Fault & Crash Isolation**: Malformed containers, corrupted compression streams, or Zip Bombs can trigger OOM or native crashes; keeping extraction outside `DocToText` prevents container-level bugs from crashing single-document parsers or the host application.
+> 2. **Per-Item Timeout & Memory Governance**: A single archive may wrap thousands of mixed files (plain text alongside heavy scanned PDFs) whose traversal time cannot share a flat single-document timeout.
+> 3. **Recommended Upper-Layer Pattern (Reference: SoEasy Architecture)**:
+>    - **Dedicated Unpacker Process (`libarchive`)**: Recursively streams nested containers (`.zip`/`.7z`/`.tar`/`.rar`/`.gz`/`.bz2`/`.xz`/`.lzma`) purely in memory without writing temp files, skips disabled extensions before decompression, and enforces heartbeat/backpressure control.
+>    - **Isolated Parser Worker Pool (`DocToText` Buffer C API)**: Dispatches each extracted leaf byte buffer via `doctotext_process_file_from_buffer_ex()` (with optional `doctotext_extractor_params_set_image_parser_callback()` OCR) into isolated parser workers. A crash or timeout on leaf `#N` only recycles that worker while the Unpacker continues streaming `#N+1..end`.
 
 ---
 
@@ -140,25 +155,28 @@ void extract_from_memory(const char* buffer, size_t size)
 }
 ```
 
-### 3. In-Place OCR Callback for Images (C API)
+### 3. User-Implemented Image Parser Callback (C API)
+
+Register a callback with `doctotext_extractor_params_set_image_parser_callback()` (or `PlainTextExtractor::setImageParserCallback()` in C++) to decode/OCR image bytes yourself. DocToText copies the returned `const char*` immediately after the callback returns (so a `thread_local` or caller-managed buffer is safe across multithreaded calls):
 
 ```c
 #include <stdio.h>
 #include <string.h>
 #include <doctotext/doctotext_c_api.h>
 
-// Invoked for standalone images or graphics embedded in PDF/DOCX/PPTX/XLSX/ODF
-const char* ocr_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
+// Invoked for standalone images or graphics embedded in PDF/DOCX/PPTX/XLSX/ODF.
+// Implement your own image parsing / OCR logic here and return UTF-8 text (or "" / NULL).
+const char* my_image_parser_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
 {
     printf("[Image Dispatched] %s (%zu bytes)\n", image_name, size);
-    // Forward buffer to local Tesseract, ONNX Runtime, or external OCR service:
+    // Forward buffer to your own Tesseract, ONNX Runtime, PaddleOCR, or Vision API pipeline:
     return "[OCR TEXT: Simulated recognition]";
 }
 
 int main()
 {
     DocToTextExtractorParams* params = doctotext_create_extractor_params();
-    doctotext_extractor_params_set_image_parser_callback(params, ocr_callback, NULL);
+    doctotext_extractor_params_set_image_parser_callback(params, my_image_parser_callback, NULL);
 
     DocToTextExtractedData* data = doctotext_process_file("embedded_presentation.pptx", params, NULL);
     if (data) {

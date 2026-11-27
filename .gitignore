@@ -27,6 +27,7 @@ tests/pdf_image_callback_test.exe
 3rdparty/jbig2dec/*.a
 3rdparty/poppler_ccitt/*.a
 3rdparty/poppler_decrypt/*.a
+3rdparty/snappy/*.a
 tests/log.txt
 3rdparty/htmlcxx/
 3rdparty/libcharsetdetect/

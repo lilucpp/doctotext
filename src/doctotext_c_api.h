@@ -46,10 +46,14 @@ typedef int doctotext_parser_type;
 #define DOCTOTEXT_PARSER_EML 11
 #define DOCTOTEXT_PARSER_ODFXML 12
 #define DOCTOTEXT_PARSER_IMAGE 13
+/**
+ * @brief Archive format identifier (ZIP, TAR, GZ, TGZ, 7Z, RAR, BZ2, XZ, etc.).
+ * Returned by format sniffing APIs only; recursive archive extraction is intentionally unsupported.
+ */
 #define DOCTOTEXT_PARSER_ARCHIVE 14
 
 /**
- * @brief Returns human-readable name for given parser type ID (e.g. "PDF", "OOXML", "ARCHIVE", "IMAGE").
+ * @brief Returns human-readable name for given parser type ID (e.g. "PDF", "ODF_OOXML", "ARCHIVE", "IMAGE").
  */
 const char* DOCTOTEXT_CALL doctotext_parser_type_name(doctotext_parser_type parser_type);
 

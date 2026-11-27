@@ -220,6 +220,109 @@ int main(void)
 			return 1;
 	}
 
+	/* 6. Archive sniffing vs intentional rejection (no fallback) & standalone image without callback */
+	{
+		const char zip_magic[] = { 'P', 'K', 0x03, 0x04, 0x14, 0x00, 0x00, 0x00 };
+		const char sevenz_magic[] = { 0x37, 0x7A, (char)0xBC, (char)0xAF, 0x27, 0x1C, 0x00, 0x04 };
+		const char png_magic[] = { (char)0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00 };
+		doctotext_parser_type ptype = DOCTOTEXT_PARSER_AUTO;
+		DocToTextMetadata* meta = NULL;
+
+		if (!doctotext_parser_type_by_file_content_from_buffer(zip_magic, sizeof(zip_magic), &ptype) ||
+		    ptype != DOCTOTEXT_PARSER_ARCHIVE ||
+		    strcmp(doctotext_parser_type_name(ptype), "ARCHIVE") != 0)
+		{
+			fprintf(stderr, "FAIL [zip_sniff]: expected DOCTOTEXT_PARSER_ARCHIVE, got %d (%s)\n",
+			        ptype, doctotext_parser_type_name(ptype));
+			return 1;
+		}
+
+		ptype = DOCTOTEXT_PARSER_AUTO;
+		if (!doctotext_parser_type_by_file_content_from_buffer(sevenz_magic, sizeof(sevenz_magic), &ptype) ||
+		    ptype != DOCTOTEXT_PARSER_ARCHIVE)
+		{
+			fprintf(stderr, "FAIL [7z_sniff]: expected DOCTOTEXT_PARSER_ARCHIVE, got %d\n", ptype);
+			return 1;
+		}
+
+		exc = NULL;
+		status = DOCTOTEXT_STATUS_OK;
+		data = doctotext_process_file_from_buffer_ex(zip_magic, sizeof(zip_magic), params, &status, &exc);
+		if (!assert_failure_status("archive_buffer_rejected", data, status, DOCTOTEXT_STATUS_ERROR, exc, 0))
+			return 1;
+
+		exc = NULL;
+		meta = doctotext_extract_metadata_from_buffer(zip_magic, sizeof(zip_magic), params, &exc);
+		if (meta != NULL || exc != NULL)
+		{
+			fprintf(stderr, "FAIL [archive_metadata_buffer]: expected NULL\n");
+			if (meta) doctotext_free_metadata(meta);
+			if (exc) doctotext_free_exception(exc);
+			return 1;
+		}
+
+		/* Verify .zip file path rejects cleanly without fallback re-probing */
+		{
+			const char* tmp_zip = "c_api_archive_tmp_test.zip";
+			const char* tmp_log = "c_api_archive_tmp_test.log.out";
+			FILE* zf = fopen(tmp_zip, "wb");
+			if (!zf)
+			{
+				fprintf(stderr, "FAIL [archive_file_create]: could not create %s\n", tmp_zip);
+				return 1;
+			}
+			fwrite(zip_magic, 1, sizeof(zip_magic), zf);
+			fclose(zf);
+
+			doctotext_extractor_params_set_log_file(params, tmp_log);
+			exc = NULL;
+			status = DOCTOTEXT_STATUS_OK;
+			data = doctotext_process_file_ex(tmp_zip, params, &status, &exc);
+			doctotext_extractor_params_set_log_file(params, log_path);
+			remove(tmp_zip);
+
+			if (!assert_failure_status("archive_file_rejected", data, status, DOCTOTEXT_STATUS_ERROR, exc, 0))
+			{
+				remove(tmp_log);
+				return 1;
+			}
+
+			char* log_buf = NULL;
+			size_t log_sz = 0;
+			if (!read_entire_file(tmp_log, &log_buf, &log_sz))
+			{
+				fprintf(stderr, "FAIL [archive_file_log]: could not read %s\n", tmp_log);
+				remove(tmp_log);
+				return 1;
+			}
+			remove(tmp_log);
+			if (strstr(log_buf, "Trying different parsers") != NULL ||
+			    strstr(log_buf, "intentionally unsupported") == NULL)
+			{
+				fprintf(stderr, "FAIL [archive_no_fallback]: unexpected log:\n%s\n", log_buf);
+				free(log_buf);
+				return 1;
+			}
+			free(log_buf);
+		}
+
+		/* Standalone image without callback -> DOCTOTEXT_PARSER_IMAGE sniffed, process fails with ERROR */
+		ptype = DOCTOTEXT_PARSER_AUTO;
+		if (!doctotext_parser_type_by_file_content_from_buffer(png_magic, sizeof(png_magic), &ptype) ||
+		    ptype != DOCTOTEXT_PARSER_IMAGE)
+		{
+			fprintf(stderr, "FAIL [png_sniff]: expected DOCTOTEXT_PARSER_IMAGE, got %d\n", ptype);
+			return 1;
+		}
+		exc = NULL;
+		status = DOCTOTEXT_STATUS_OK;
+		data = doctotext_process_file_from_buffer_ex(png_magic, sizeof(png_magic), params, &status, &exc);
+		if (!assert_failure_status("image_no_callback_rejected", data, status, DOCTOTEXT_STATUS_ERROR, exc, 0))
+			return 1;
+
+		printf("PASS: archive sniffing/rejection (no fallback) & standalone image without callback\n");
+	}
+
 	doctotext_free_formatting_style(fmt);
 	doctotext_free_extractor_params(params);
 	remove(log_path);

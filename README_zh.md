@@ -12,8 +12,8 @@ DocToText 是一个轻量、高性能的 C/C++ 文档正文、元数据及批注
 
 ## 架构与核心工程设计
 
-- **流式解耦的 OCR 回调机制（Inversion-of-Control）**  
-  不强行捆绑庞大的深度学习推理框架，而是通过 `ImageParserCallback` 提供控制反转接口。在解析文档（Word, Excel, PowerPoint, ODF 以及 PDF）遇到内嵌图片或处理独立图像时，原始二进制缓冲流直接派发给宿主程序注册的回调函数（可灵活接入本地 Tesseract、ONNX Runtime、PaddleOCR 或云端视觉模型），并将识别文本就地（In-Place）精确缝合回文档正文字符流中。针对 PDF 支持基于 CTM 变换矩阵的空间几何阅读顺序注入、纯扫描件兜底识别与双层可搜索 PDF 去重。
+- **基于自定义回调的解耦图片解析机制（Inversion-of-Control）**  
+  DocToText **不内置**任何 OCR 或视觉识别引擎，而是通过图片解析回调接口（C API：`doctotext_extractor_params_set_image_parser_callback()`；C++ API：`PlainTextExtractor::setImageParserCallback()`）由调用方**自行实现图片解析逻辑**。在解析独立图片或文档（Word, Excel, PowerPoint, ODF 以及 PDF）中的内嵌图片时，DocToText 将原始图片二进制缓冲流直接透传给宿主程序注册的回调函数（可自行接入 Tesseract、ONNX Runtime、PaddleOCR 或云端视觉模型），并将回调返回的文本就地（In-Place）精确缝合回文档正文字符流中。针对 PDF 支持基于 CTM 变换矩阵的空间几何阅读顺序注入、纯扫描件兜底派发与双层可搜索 PDF 去重。
 - **统一多源解析管道**  
   融合了面向经典二进制 OLE2 复合文档（BIFF 流、WordDocument 流）、OpenXML 打包容器、ODF 树形结构与 PDF 页面排版的原生解析引擎，并配备基于 `libcharsetdetect` 的字符集自适应文本降级层，支持自动识别并转换多编码文本（UTF-8, GBK / GB18030, UTF-16LE）。
 - **C 接口优先：兼顾极致跨平台 ABI 稳定性**  
@@ -29,15 +29,15 @@ DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 
 
 | 功能特性 / 演进指标 | 原版 (SILVERCODERS 0.2.x) | lithiumFlower 分支 | **本项目 (lilucpp v5.1.5)** |
 | :--- | :---: | :---: | :---: |
-| **PDF 内嵌图片与扫描件 OCR** | ❌ 不支持 (`TODO: Do`) | ❌ 不支持 | **✅ 完整支持（JPEG / Flate / PNG / BMP / JBIG2 / CCITT G3/G4）** |
+| **PDF 内嵌图片与扫描件回调** | ❌ 不支持 (`TODO: Do`) | ❌ 不支持 | **✅ 完整提取并派发至图片回调（JPEG / Flate / PNG / BMP / JBIG2 / CCITT G3/G4）** |
 | **PDF 排版阅读顺序与多栏/公式处理** | ❌ 无 | ❌ 无 | **✅ CTM 2D 几何排序、公式基线聚类、双栏/多栏分栏与页脚去重** |
 | **PDF 嵌入附件、批注与表单** | ❌ 无 | ❌ 无 | **✅ 支持 `/EmbeddedFiles`、`/Annots`、Form XObject 及 AcroForm/XFA** |
 | **跨格式统一递归嵌入提取** | ⚠️ 仅基础 DOC/XLS | ⚠️ 仅基础 DOC/XLS | **✅ 递归解析 DOC/DOCX/XLS/XLSX/PPT/PPTX/ODF/RTF/PDF 内嵌对象（含深度与炸弹防护）** |
 | **Office 与 iWork 深度格式支持** | ❌ 部分支持 | ❌ 部分支持 | **✅ BIFF4/5、TXO、DOC `EQ`、SmartArt、ECMA-376 `_rels/.rels`、iWork 13/18 `.iwa`** |
 | **双层（可搜索）PDF 智能去重** | ❌ 无 | ❌ 无 | **✅ 自动检测底图并跳过冗余 OCR** |
-| **纯扫描 PDF 兜底识别** | ❌ 返回空白 | ❌ 返回空白 | **✅ 自动扫描提取所有 Image XObject** |
+| **纯扫描 PDF 兜底识别** | ❌ 返回空白 | ❌ 返回空白 | **✅ 自动扫描并将所有 Image XObject 派发给用户回调** |
 | **加密文档探测与 C API 状态码** | ⚠️ 仅报错 | ⚠️ 仅报错 | **✅ VelvetSweatshop OOXML + 空密码 PDF 自动解密 + `DOCTOTEXT_STATUS_ENCRYPTED`** |
-| **独立图片格式识别** | ❌ 不支持 | ❌ 不支持 | **✅ 支持 PNG / JPG / WebP / BMP / TIFF / GIF** |
+| **独立图片格式解析** | ❌ 不支持 | ❌ 不支持 | **✅ 支持识别 PNG / JPG / WebP / BMP / TIFF / GIF 并透传至自定义图片回调（需自行实现解析）** |
 | **文件深度嗅探与裸 HTML 片段** | ❌ 仅后缀 / `<html>` | ❌ 扩展名偏好 | **✅ 纳秒级魔数嗅探、压缩包嗅探及首部锚定 `<p>`/`<div>` 裸 HTML 片段识别** |
 | **字符编码智能探测 C API** | ❌ 仅内部调用 | ❌ 仅内部调用 | **✅ 导出公测 C API (`libcharsetdetect`)** |
 | **跨编译器 C ABI 稳定性 (MSVC/GCC)** | ⚠️ 易 ABI 崩溃 | ⚠️ C++ 符号粉碎 | **✅ 纯 C ABI 首选 (`__cdecl`)，自包含动态库零冲突** |
@@ -61,13 +61,19 @@ DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 
 | **网页与富文本** | `html`, `htm`, `rtf` | HTML / RTF Parser | 支持内嵌 RTF OLE | 支持裸 HTML 片段与超链接 |
 | **电子邮件格式 (Email)** | `eml` (RFC 822) | Mimetic MIME Parser | - | 邮件头与附件 |
 
-### 独立图像格式（统一走 OCR 回调）
+### 独立图像格式（支持设置图片解析回调，由调用方自行实现解析）
 
-| 类别 | 支持格式 | 识别机制 |
-| :--- | :--- | :--- |
-| **光栅图像** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | 文件头魔数嗅探（`png`/`jpg`/`jfif`/`webp`/`bmp`/`tiff`/`gif`）与扩展名识别（`pnm`） |
+| 类别 | 支持格式 | 识别机制 | 处理方式 |
+| :--- | :--- | :--- | :--- |
+| **光栅图像** | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `tiff`, `tif`, `jfif`, `gif`, `pnm` | 文件头魔数嗅探（`png`/`jpg`/`jfif`/`webp`/`bmp`/`tiff`/`gif`）与扩展名识别（`pnm`） | 识别为 `DOCTOTEXT_PARSER_IMAGE` 并将原始字节流透传给用户回调 |
 
-### 纯文本、编程源码与数据（显式 `--txt` / `PARSER_TXT`）
+> **说明：图片解析如何工作？**
+>
+> `DocToText` **不内置** OCR 或图像识别能力。无论是独立图片文件（`DOCTOTEXT_PARSER_IMAGE`），还是文档（DOC, DOCX, XLS, XLSX, PPT, PPTX, ODF, PDF）中的内嵌图片：
+> - 调用方需通过 `doctotext_extractor_params_set_image_parser_callback()`（C 接口）或 `PlainTextExtractor::setImageParserCallback()`（C++ 接口）设置图片解析回调，并在回调函数中**自行实现图片解码与 OCR / 视觉理解逻辑**（如接入 PaddleOCR、Tesseract、ONNX Runtime 或大模型视觉 API）。
+> - 若未设置图片解析回调：解析独立图片文件会直接返回错误（`DOCTOTEXT_STATUS_ERROR`）；解析复合文档时，其中的内嵌图片将被跳过（不产生 OCR 文本）。
+
+### 纯文本、编程源码与数据（显式 `--txt` / `DOCTOTEXT_PARSER_TXT`）
 
 支持编码自适应探测（UTF-8, GBK, GB18030, UTF-16LE）：
 * **样式表与标记语言**：`css`, `xml`, `xsd`, `xsl`, `csv`
@@ -75,11 +81,20 @@ DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 
 * **编程语言与运维脚本**：`c`, `cpp`, `h`, `hpp`, `py`, `java`, `go`, `rs`, `js`, `ts`, `sh`, `bat`, `cmd`, `ps1`, `sql`, `php`, `rb`, `swift`, `kt`, `scala`, `lua`, `r`, `pl`, `asm`, `cmake`, `cs`, `d` 等
 * **文档与日志**：`txt`, `text`, `md`, `markdown`, `log`
 
-### 压缩与归档文件格式（支持类型嗅探识别）
+### 压缩与归档文件格式（仅支持类型嗅探，正文解压由上层框架负责）
 
 | 类别 | 支持扩展名 | 识别机制 | 支持状态 |
 | :--- | :--- | :--- | :--- |
-| **压缩与打包格式** | `zip`, `tar`, `gz`, `tgz`, `7z`, `rar`, `bz2`, `xz` | 头部魔数短路匹配（PK, ustar, 1F8B, BZh, 7z, Rar! 等） | 已支持类型识别 (`PARSER_ARCHIVE`)；内部递归正文扫描规划中 |
+| **压缩与打包格式** | `zip`, `tar`, `gz`, `tgz`, `7z`, `rar`, `bz2`, `tbz2`, `xz`, `txz`, `z` | 头部魔数短路匹配（PK, ustar, 1F8B, BZh, 7z, Rar!, XZ 等） | 已支持类型识别 (`DOCTOTEXT_PARSER_ARCHIVE`)；**刻意不支持内部解压与正文递归提取** |
+
+> **架构设计说明：为何 `DocToText` 不处理压缩包解压？**
+>
+> `DocToText` 刻意保持**纯正单文档与独立图像抽取库**的轻量定位，不内置多格式归档递归解压（也不耦合 `libarchive` / `unrar` / `7z` 等解压库）：
+> 1. **崩溃与内存防爆隔离**：畸形压缩流、深层嵌套包或 Zip Bomb 极易触发 OOM 或底层崩溃；若混在单文档解析库中执行递归解压，单个坏包会直接连累宿主进程与解析链路。
+> 2. **超时与并发调度粒度不匹配**：单个大归档可能包含上千份轻文档与重扫描 PDF，无法与单文件共用固定超时预算（如 60s 熔断），必须在容器级按流式心跳与背压独立调度。
+> 3. **推荐上层解析架构示例（参考 SoEasy 实践）**：
+>    - **独立 Unpacker 沙箱进程（基于 `libarchive`）**：专门负责多格式/多层嵌套归档纯内存流式解包（不落盘临时文件），解码前先按白名单过滤未启用后缀，通过流式回调背压向上游输出叶子字节流并维持心跳保活。
+>    - **独立 Parser Worker 进程池（调用 `DocToText` 内存 C API）**：上层编排器将收到的叶子内存块通过 `doctotext_process_file_from_buffer_ex()`（配合 `doctotext_extractor_params_set_image_parser_callback()` 图片 OCR 回调）派发给解析池。任意叶子条目崩溃或超时仅隔离重启单个 Parser 进程，同归档后续条目继续不受影响完成解析。
 
 ---
 
@@ -140,7 +155,9 @@ void extract_from_memory(const char* buffer, size_t size)
 }
 ```
 
-### 3. 图像就地 OCR 回调（C 接口）
+### 3. 设置图片解析回调并自行实现识别（C 接口）
+
+通过 `doctotext_extractor_params_set_image_parser_callback()`（C++ 接口为 `PlainTextExtractor::setImageParserCallback()`）注册回调后，即可在回调函数中自行解码与识别图像。DocToText 会在回调返回后立即拷贝返回的 `const char*` 字符串（因此多线程场景下使用 `thread_local` 或调用方托管缓冲区返回即可安全复用）：
 
 ```c
 #include <stdio.h>
@@ -148,17 +165,18 @@ void extract_from_memory(const char* buffer, size_t size)
 #include <doctotext/doctotext_c_api.h>
 
 // 当解析到独立图像或 PDF/Word/PPT/Excel/ODF 中的内嵌插图时触发
-const char* ocr_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
+// 请在此回调中自行实现图片解析 / OCR 逻辑，并返回 UTF-8 文本（或返回 "" / NULL）
+const char* my_image_parser_callback(const char* image_name, const char* buffer, size_t size, void* user_data)
 {
     printf("[触发图片提取] %s (%zu 字节)\n", image_name, size);
-    // 可将 buffer 派发给本地 Tesseract、PaddleOCR 或 ONNX 推理引擎：
+    // 可自行将 buffer 派发给本地 Tesseract、PaddleOCR、ONNX 推理引擎或视觉模型 API：
     return "[OCR 识别文字: 示例]";
 }
 
 int main()
 {
     DocToTextExtractorParams* params = doctotext_create_extractor_params();
-    doctotext_extractor_params_set_image_parser_callback(params, ocr_callback, NULL);
+    doctotext_extractor_params_set_image_parser_callback(params, my_image_parser_callback, NULL);
 
     DocToTextExtractedData* data = doctotext_process_file("embedded_presentation.pptx", params, NULL);
     if (data) {
