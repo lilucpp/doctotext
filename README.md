@@ -25,9 +25,9 @@ DocToText is a compact, high-performance C/C++ library and command-line utility 
 
 ## Why This Fork? (Comparison with Upstream)
 
-Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlower (2020–2022), DocToText was a capable document converter. This maintained fork (**v5.1.5 by [lilucpp](https://github.com/lilucpp)**) elevates it into a modern, production-grade text extraction engine tailored for high-throughput data processing, RAG (Retrieval-Augmented Generation), and search indexing:
+Originally developed by SILVERCODERS (2006–2013) and modernized by lithiumFlower (2020–2022), DocToText was a capable document converter. This maintained fork (**v5.1.6 by [lilucpp](https://github.com/lilucpp)**) elevates it into a modern, production-grade text extraction engine tailored for high-throughput data processing, RAG (Retrieval-Augmented Generation), and search indexing:
 
-| Capability / Feature | Original (SILVERCODERS 0.2.x) | lithiumFlower Fork | **This Fork (lilucpp v5.1.5)** |
+| Capability / Feature | Original (SILVERCODERS 0.2.x) | lithiumFlower Fork | **This Fork (lilucpp v5.1.6)** |
 | :--- | :---: | :---: | :---: |
 | **PDF In-Place Embedded Image Extraction** | ❌ Unsupported (`TODO: Do`) | ❌ Unsupported | **✅ Extracts & dispatches via callback (JPEG, Flate, PNG, BMP, JBIG2, CCITT G3/G4)** |
 | **PDF 2D Reading-Order & Multi-Column Layout** | ❌ None | ❌ None | **✅ CTM 2D geometric sorting, formula baseline clustering & column splitting** |

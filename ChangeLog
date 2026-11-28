@@ -1,3 +1,7 @@
+Version 5.1.6:
+	* C/C++ API & CLI: decouple document image OCR control (`parse_document_images`, default off) from `image_parser_callback` via `doctotext_extractor_params_set_parse_document_images()`, `PlainTextExtractor::setParseDocumentImages()`, and `--parse-doc-images` / `--no-parse-doc-images`, while keeping standalone `PARSER_IMAGE` governed solely by the callback and `parse_embedded_files` enabled by default.
+	* Archive & image handling: clarify archive sniffing-only scope (`DOCTOTEXT_PARSER_ARCHIVE`) and user-implemented image callbacks in docs/headers, update `PARSER_ARCHIVE` diagnostics, handle `PARSER_ARCHIVE` explicitly in `extractMetadata()`, and skip fallback re-probing for `PARSER_ARCHIVE` and `PARSER_IMAGE`.
+
 Version 5.1.5:
 	* PDF parser: extract /EmbeddedFiles (including B-Tree /Kids) and FileAttachment embedded documents.
 	* PDF parser: support Form XObject font scoping, /Differences glyph mapping, /Annots annotations, AcroForm/XFA forms, JBIG2Decode and CCITTFaxDecode G3/G4 images.

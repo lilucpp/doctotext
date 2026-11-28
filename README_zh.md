@@ -25,9 +25,9 @@ DocToText 是一个轻量、高性能的 C/C++ 文档正文、元数据及批注
 
 ## 为什么选择本分支？（与上游版本对比）
 
-DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 进行了基础现代化 (2020–2022)。本分支（**v5.1.5 由 [lilucpp](https://github.com/lilucpp) 持续维护**）将其全面升级为面向大模型 RAG 知识库检索、超大规模语料清洗与生产级文档搜索的现代高性能抽取引擎：
+DocToText 最初由 SILVERCODERS 开源 (2006–2013)，后续由 lithiumFlower 进行了基础现代化 (2020–2022)。本分支（**v5.1.6 由 [lilucpp](https://github.com/lilucpp) 持续维护**）将其全面升级为面向大模型 RAG 知识库检索、超大规模语料清洗与生产级文档搜索的现代高性能抽取引擎：
 
-| 功能特性 / 演进指标 | 原版 (SILVERCODERS 0.2.x) | lithiumFlower 分支 | **本项目 (lilucpp v5.1.5)** |
+| 功能特性 / 演进指标 | 原版 (SILVERCODERS 0.2.x) | lithiumFlower 分支 | **本项目 (lilucpp v5.1.6)** |
 | :--- | :---: | :---: | :---: |
 | **PDF 内嵌图片与扫描件回调** | ❌ 不支持 (`TODO: Do`) | ❌ 不支持 | **✅ 完整提取并派发至图片回调（JPEG / Flate / PNG / BMP / JBIG2 / CCITT G3/G4）** |
 | **PDF 排版阅读顺序与多栏/公式处理** | ❌ 无 | ❌ 无 | **✅ CTM 2D 几何排序、公式基线聚类、双栏/多栏分栏与页脚去重** |
